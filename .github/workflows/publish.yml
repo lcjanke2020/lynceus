@@ -1,0 +1,37 @@
+# Publish cdp-mcp to npm when a GitHub Release is published.
+#
+# Auth: npm "trusted publishing" via GitHub OIDC — NO long-lived token is
+# stored in the repo. npm also attaches a provenance attestation linking the
+# published tarball to this commit + workflow run.
+#
+# One-time setup (after the first manual `npm publish` claims the name):
+#   npmjs.com → the cdp-mcp package → Settings → "Trusted Publisher" →
+#   GitHub Actions → org/repo: lcjanke2020/cdp-mcp, workflow: publish.yml.
+# Until that trusted publisher is configured, this workflow will fail at the
+# publish step (by design) — it only runs when you publish a GitHub Release.
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # required for OIDC trusted publishing + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      # Trusted publishing needs a recent npm (>= 11.5.1).
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm publish --access public --provenance
