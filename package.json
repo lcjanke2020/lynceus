@@ -1,6 +1,6 @@
 {
   "name": "cdp-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Chrome DevTools Protocol MCP server — a TypeScript-aware frontend debugger for AI agents.",
   "license": "MIT",
   "author": "Leonard Janke",
