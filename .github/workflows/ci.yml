@@ -1,0 +1,211 @@
+# CI: unit + L2 contract tests on every push/PR; L3 e2e on Linux ARM64
+# (primary target per docs/test-eval-plan.md) + Linux x64 (matrix:
+# chromium + chrome). Windows is unit-only on day 1 — the Windows e2e
+# nightly is a deliberate follow-on once a self-hosted runner is
+# provisioned (~20-consecutive-green-nightlies-across-diverse-PR-loads
+# bar before promotion to gating).
+#
+# L4 evals run in the optional `eval-quick` job below, gated on the
+# `ANTHROPIC_API_KEY` secret being present so PRs from forks (and repos
+# without the secret configured) degrade gracefully to a skip.
+#
+# Note on Build sample-app: `npm run pretest:e2e` (chained inside
+# `npm run test:e2e`) builds the sample-app, so we do NOT add an
+# explicit Build sample-app step here — that was duplicated work flagged
+# in Opus review on PR #11.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit (typecheck + L1 + L2 + smoke)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run smoke
+
+  e2e-linux-arm64:
+    name: e2e — ubuntu-24.04-arm + chromium (primary)
+    needs: unit
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Install Playwright-bundled Chromium
+        # Why Playwright-bundled instead of `apt-get install chromium-browser`:
+        # Ubuntu 22.04+'s apt package is a snap transitional shim that pulls
+        # in the snap-confined binary, which adds first-run delay and forces
+        # the userDataDir into ~/snap/chromium/current/. Playwright's plain
+        # files-only chromium has none of that. (Plan: L3 → Why NOT apt.)
+        run: npx --yes playwright@latest install --with-deps chromium
+
+      - name: Resolve Chromium binary into env
+        # browser-path.ts will find Playwright's cache automatically, but
+        # pinning the explicit path keeps the resolution deterministic and
+        # gives an actionable failure if the install step regresses. Probes
+        # all three known layouts (chrome-linux, chrome-linux64, chrome-
+        # linux-arm64) — Chrome-for-Testing renamed the x64 folder around
+        # Playwright 1.40 (Codex PR #11 blocker).
+        run: |
+          BIN=$(node -e "const {readdirSync}=require('fs');const {join}=require('path');const root=process.env.HOME+'/.cache/ms-playwright';const dirs=readdirSync(root).filter(d=>/^chromium-\d+$/.test(d)).sort().reverse();for(const d of dirs){const c=[join(root,d,'chrome-linux','chrome'),join(root,d,'chrome-linux64','chrome'),join(root,d,'chrome-linux-arm64','chrome')];for(const p of c){try{require('fs').accessSync(p);console.log(p);process.exit(0)}catch{}}};process.exit(1)")
+          echo "CDP_TEST_BROWSER_PATH=$BIN" >> $GITHUB_ENV
+          echo "CDP_TEST_BROWSER=chromium" >> $GITHUB_ENV
+
+      - run: npm run test:e2e
+
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-arm64-chromium-${{ github.run_id }}
+          path: |
+            .vitest-cache/
+            examples/sample-app/dist/
+
+  e2e-linux-x64:
+    name: e2e — ubuntu-latest + ${{ matrix.browser }}
+    needs: unit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, chrome]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Install Playwright-bundled Chromium
+        if: matrix.browser == 'chromium'
+        run: npx --yes playwright@latest install --with-deps chromium
+
+      - name: Install Chrome stable
+        if: matrix.browser == 'chrome'
+        uses: browser-actions/setup-chrome@latest
+        with:
+          chrome-version: stable
+        id: setup-chrome
+
+      - name: Resolve browser binary into env (chromium)
+        if: matrix.browser == 'chromium'
+        # Same triple-candidate probe as the ARM64 job — Chrome-for-Testing
+        # x64 layout is chrome-linux64/chrome (Codex blocker on PR #11).
+        run: |
+          BIN=$(node -e "const {readdirSync}=require('fs');const {join}=require('path');const root=process.env.HOME+'/.cache/ms-playwright';const dirs=readdirSync(root).filter(d=>/^chromium-\d+$/.test(d)).sort().reverse();for(const d of dirs){const c=[join(root,d,'chrome-linux64','chrome'),join(root,d,'chrome-linux','chrome'),join(root,d,'chrome-linux-arm64','chrome')];for(const p of c){try{require('fs').accessSync(p);console.log(p);process.exit(0)}catch{}}};process.exit(1)")
+          echo "CDP_TEST_BROWSER_PATH=$BIN" >> $GITHUB_ENV
+          echo "CDP_TEST_BROWSER=chromium" >> $GITHUB_ENV
+
+      - name: Resolve browser binary into env (chrome)
+        if: matrix.browser == 'chrome'
+        run: |
+          echo "CDP_TEST_BROWSER_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+          echo "CDP_TEST_BROWSER=chrome" >> $GITHUB_ENV
+
+      - run: npm run test:e2e
+
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-x64-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            .vitest-cache/
+            examples/sample-app/dist/
+
+  eval-quick:
+    name: eval-quick (compute-step × 1 trial, opus 4.7 medium)
+    # No `needs:` — eval-quick spawns its own MCP subprocess + browser and
+    # doesn't reuse e2e artifacts. Running serially after e2e-linux-arm64
+    # added ~15min latency to every PR for no signal (PR #15 review).
+    runs-on: ubuntu-24.04-arm
+    # Skip on forks (no access to secret) and on pushes when the secret
+    # isn't configured. Per-PR cost is bounded by the ~$0.50–2/trial cost
+    # of a single Opus-4.7-medium-thinking run + the harness's $100 budget
+    # cap. (The gate inherits the harness default model, which moved from
+    # Sonnet 4.6 to Opus-4.7-medium in the 2026-05 default-swap PR — see
+    # evals/README.md "Cost & caching" and the rotation-proposal note for
+    # the determinism trade-off.) Optional: PRs with `[full-eval]` in the
+    # title trigger the full suite via a separate workflow step; not
+    # wired yet.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip when ANTHROPIC_API_KEY is absent
+        id: secret_check
+        env:
+          KEY_PRESENT: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$KEY_PRESENT" != "true" ]; then
+            echo "ANTHROPIC_API_KEY is not set on this repo. Skipping eval-quick — set the secret in repo settings to enable."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.secret_check.outputs.skip != 'true'
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+        if: steps.secret_check.outputs.skip != 'true'
+
+      - name: Install Playwright-bundled Chromium
+        if: steps.secret_check.outputs.skip != 'true'
+        run: npx --yes playwright@latest install --with-deps chromium
+
+      - name: Resolve Chromium binary into env
+        if: steps.secret_check.outputs.skip != 'true'
+        run: |
+          BIN=$(node -e "const {readdirSync}=require('fs');const {join}=require('path');const root=process.env.HOME+'/.cache/ms-playwright';const dirs=readdirSync(root).filter(d=>/^chromium-\d+$/.test(d)).sort().reverse();for(const d of dirs){const c=[join(root,d,'chrome-linux','chrome'),join(root,d,'chrome-linux64','chrome'),join(root,d,'chrome-linux-arm64','chrome')];for(const p of c){try{require('fs').accessSync(p);console.log(p);process.exit(0)}catch{}}};process.exit(1)")
+          echo "CDP_TEST_BROWSER_PATH=$BIN" >> $GITHUB_ENV
+
+      - name: Build sample-app
+        if: steps.secret_check.outputs.skip != 'true'
+        run: npm run sample:build
+
+      - name: Run eval:quick
+        if: steps.secret_check.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npm run eval:quick
+
+      - name: Upload eval trace
+        if: always() && steps.secret_check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-quick-trace-${{ github.run_id }}
+          path: evals/runs/
+          retention-days: 14

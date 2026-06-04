@@ -1,0 +1,17 @@
+{
+  "$comment": "Type-check the L4 eval harness (evals/harness, evals/scenarios, evals/cli.ts). The main tsconfig.json scopes to src/ + rootDir:src for the production build; this one widens the rootDir to the repo root so evals can import src/ types when needed. evals/sample-app-variants/ is browser code (uses DOM globals, MessageEvent, self) — each variant gets its own materialized tsconfig with DOM+WebWorker lib via scripts/build-variants.mjs, so it's excluded from this repo-level pass.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["evals/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "examples",
+    "evals/sample-app-variants/**",
+    "evals/runs/**"
+  ]
+}

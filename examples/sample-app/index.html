@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Counter</title>
+    <style>
+      body { font-family: sans-serif; padding: 2rem; max-width: 40rem; margin: 0 auto; }
+      #out, #worker-out { margin-top: 1rem; font-family: monospace; }
+      button { padding: 0.5rem 1rem; cursor: pointer; }
+      input { padding: 0.5rem; font-family: monospace; margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Counter demo</h1>
+    <button id="go">Go</button>
+    <div id="out">count = 0</div>
+    <div id="worker-out">worker: idle</div>
+    <input id="name-input" placeholder="type your name" />
+    <div id="name-echo">name: (empty)</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,393 @@
+import { describe, it, expect } from "vitest";
+import { SourceMapGenerator } from "@jridgewell/source-map";
+import {
+  ScriptStore,
+  mapCdpToOriginal,
+  mapOriginalToGenerated,
+  cdpToPublic,
+  publicToCdp,
+} from "./store.js";
+
+// Build a tiny synthetic source map for tests.
+// Generated JS:
+//   line 1: function add(a, b) { return a + b; }   (TS line 3: return a + b)
+//   line 2: console.log(add(1, 2));                 (TS line 6: console.log call)
+function buildMap(sourceName: string): string {
+  const gen = new SourceMapGenerator({ file: "out.js" });
+  gen.addMapping({
+    generated: { line: 1, column: 22 },
+    original: { line: 3, column: 2 },
+    source: sourceName,
+    name: "add",
+  });
+  gen.addMapping({
+    generated: { line: 2, column: 0 },
+    original: { line: 6, column: 0 },
+    source: sourceName,
+  });
+  return gen.toString();
+}
+
+describe("CDP <-> public line numbering", () => {
+  it("CDP 0-based ↔ public 1-based", () => {
+    expect(cdpToPublic({ lineNumber: 0, columnNumber: 5 })).toEqual({ line: 1, column: 5 });
+    expect(publicToCdp({ line: 1, column: 5 })).toEqual({ lineNumber: 0, columnNumber: 5 });
+  });
+});
+
+describe("ScriptStore + bidirectional translation", () => {
+  it("maps CDP frame -> original TS coord", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h1",
+    });
+    store.attachMap("s1", undefined, buildMap("src/foo.ts"));
+    // CDP location is 0-based; mapping says JS line 1 col 22 → TS line 3 col 2.
+    const result = mapCdpToOriginal(store, { scriptId: "s1", lineNumber: 0, columnNumber: 22 }, undefined);
+    expect(result).toEqual({ file: "src/foo.ts", line: 3, column: 2 });
+  });
+
+  it("maps TS coord -> all generated coords across scripts", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/a.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h1",
+    });
+    store.upsert({
+      scriptId: "s2",
+      url: "http://localhost/b.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h2",
+    });
+    store.attachMap("s1", undefined, buildMap("src/foo.ts"));
+    store.attachMap("s2", undefined, buildMap("src/bar.ts"));
+
+    const fooLocs = mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
+    expect(fooLocs).toHaveLength(1);
+    expect(fooLocs[0]).toMatchObject({
+      scriptId: "s1",
+      scriptUrl: "http://localhost/a.js",
+      lineNumber: 0, // public 1 → CDP 0
+      columnNumber: 22,
+    });
+
+    // bar.ts only matches s2.
+    const barLocs = mapOriginalToGenerated(store, "src/bar.ts", 6);
+    expect(barLocs).toHaveLength(1);
+    expect(barLocs[0]?.scriptId).toBe("s2");
+  });
+
+  it("finds scripts by source-path suffix match (webpack:/// prefix)", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/app.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h1",
+    });
+    // The map's source carries the messy prefix bundlers love.
+    store.attachMap("s1", undefined, buildMap("webpack:///./src/foo.ts"));
+
+    // User passes a clean suffix.
+    const locs = mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
+    expect(locs).toHaveLength(1);
+    expect(locs[0]?.scriptId).toBe("s1");
+
+    // Reverse direction normalizes the source on the way out.
+    const reverse = mapCdpToOriginal(store, { scriptId: "s1", lineNumber: 0, columnNumber: 22 }, undefined);
+    expect(reverse).toEqual({ file: "src/foo.ts", line: 3, column: 2 });
+  });
+
+  it("returns null for unmapped scripts and no candidates for unknown sources", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/x.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h1",
+    });
+    // No attachMap → no consumer.
+    expect(mapCdpToOriginal(store, { scriptId: "s1", lineNumber: 0, columnNumber: 0 }, undefined)).toBeNull();
+    expect(mapOriginalToGenerated(store, "no/such/file.ts", 1)).toHaveLength(0);
+  });
+
+  it("compound key: same scriptId in two sessions does NOT collide", () => {
+    // Codex PR#5 #2 regression: pre-fix, ScriptStore was keyed by scriptId
+    // alone, so a worker emitting scriptId="42" would overwrite the root's
+    // scriptId="42" — paused frames in the root then mapped through the
+    // worker's source map.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "42", url: "http://localhost/root.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-root",
+    });
+    store.upsert({
+      scriptId: "42", url: "http://localhost/worker.js",
+      sessionId: "SW1",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 2, hash: "h-worker",
+    });
+    store.attachMap("42", undefined, buildMap("src/main.ts"));
+    store.attachMap("42", "SW1", buildMap("src/worker.ts"));
+
+    // Root's "42" still maps to main.ts.
+    const rootMap = mapCdpToOriginal(store, { scriptId: "42", lineNumber: 0, columnNumber: 22 }, undefined);
+    expect(rootMap).toEqual({ file: "src/main.ts", line: 3, column: 2 });
+
+    // Worker's "42" maps to worker.ts.
+    const workerMap = mapCdpToOriginal(store, { scriptId: "42", lineNumber: 0, columnNumber: 22 }, "SW1");
+    expect(workerMap).toEqual({ file: "src/worker.ts", line: 3, column: 2 });
+
+    // get() resolves each independently.
+    expect(store.get("42", undefined)?.url).toBe("http://localhost/root.js");
+    expect(store.get("42", "SW1")?.url).toBe("http://localhost/worker.js");
+
+    // remove only affects the targeted session.
+    store.remove("42", "SW1");
+    expect(store.get("42", "SW1")).toBeUndefined();
+    expect(store.get("42", undefined)?.url).toBe("http://localhost/root.js");
+  });
+
+  it("findByOriginalSource returns multiple candidates when several scripts map to the same TS file", () => {
+    // Real-world: a TS file imported by multiple chunks (vendor.js + app.js)
+    // produces two scripts whose source maps both reference src/util.ts.
+    // set_breakpoint must bind in BOTH; findByOriginalSource must return both.
+    const store = new ScriptStore();
+    for (const [scriptId, url] of [
+      ["s1", "http://localhost/vendor.js"],
+      ["s2", "http://localhost/app.js"],
+    ] as const) {
+      store.upsert({
+        scriptId, url,
+        startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+        executionContextId: 1, hash: scriptId,
+      });
+      store.attachMap(scriptId, undefined, buildMap("src/util.ts"));
+    }
+    const matches = store.findByOriginalSource("src/util.ts");
+    expect(matches).toHaveLength(2);
+    expect(new Set(matches.map((m) => m.scriptId))).toEqual(new Set(["s1", "s2"]));
+  });
+
+  it("mapOriginalToGenerated finds the line even when caller passes col 0 (regression: PR #11 e2e)", () => {
+    // The real bug: vite/esbuild emit source maps where the only mapping
+    // on `return 2;` (handlers.ts:12) is at originalColumn 2 (the indent).
+    // The earlier impl called generatedPositionFor({line:12, column:0})
+    // which requires an EXACT column match and returned line:null → set_
+    // breakpoint reported `no_mapping` for any TS line whose first mapping
+    // wasn't at col 0. The fix uses allGeneratedPositionsFor which
+    // enumerates every mapping on the source line. This synthetic map
+    // mirrors the failing case: mapping at (line:3, col:2), no mapping at
+    // (line:3, col:0).
+    const gen = new SourceMapGenerator({ file: "out.js" });
+    gen.addMapping({
+      generated: { line: 1, column: 100 },
+      original: { line: 3, column: 2 }, // indented statement, NOT col 0
+      source: "src/handlers.ts",
+    });
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h",
+    });
+    store.attachMap("s1", undefined, gen.toString());
+
+    // Default column (0) — the failing case before the fix.
+    const locs = mapOriginalToGenerated(store, "src/handlers.ts", 3);
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatchObject({
+      scriptId: "s1",
+      lineNumber: 0, // CDP 0-based
+      columnNumber: 100,
+    });
+  });
+
+  it("mapOriginalToGenerated honors an explicitly-supplied column", () => {
+    // Codex/Opus PR #11 round-2: the column parameter was silently ignored
+    // (hard-coded to 0 in the lookup), regressing the explicit-column
+    // contract. With two mappings on the same source line at different
+    // original columns, asking for column 0 returns the first mapping,
+    // asking for column 8 returns the second.
+    const gen = new SourceMapGenerator({ file: "out.js" });
+    gen.addMapping({
+      generated: { line: 1, column: 100 },
+      original: { line: 3, column: 2 },
+      source: "src/foo.ts",
+    });
+    gen.addMapping({
+      generated: { line: 1, column: 200 },
+      original: { line: 3, column: 8 },
+      source: "src/foo.ts",
+    });
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h",
+    });
+    store.attachMap("s1", undefined, gen.toString());
+
+    // column 0 (default) → first mapping on the line.
+    const broad = mapOriginalToGenerated(store, "src/foo.ts", 3);
+    expect(broad).toHaveLength(1);
+    expect(broad[0]?.columnNumber).toBe(100);
+
+    // explicit column 8 → the mapping at that original column.
+    const precise = mapOriginalToGenerated(store, "src/foo.ts", 3, 8);
+    expect(precise).toHaveLength(1);
+    expect(precise[0]?.columnNumber).toBe(200);
+  });
+
+  it("mapOriginalToGenerated de-dups when multiple originalColumns collapse to one generated position", () => {
+    // After heavy minification, multiple originalColumn entries on the
+    // same source line can compress to the same (genLine, genCol) — we
+    // want exactly one breakpoint binding per distinct generated location.
+    const gen = new SourceMapGenerator({ file: "out.js" });
+    gen.addMapping({
+      generated: { line: 1, column: 100 },
+      original: { line: 3, column: 2 },
+      source: "src/foo.ts",
+    });
+    gen.addMapping({
+      generated: { line: 1, column: 100 }, // SAME generated position
+      original: { line: 3, column: 9 }, // different original column
+      source: "src/foo.ts",
+    });
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h",
+    });
+    store.attachMap("s1", undefined, gen.toString());
+    const locs = mapOriginalToGenerated(store, "src/foo.ts", 3);
+    expect(locs).toHaveLength(1);
+  });
+
+  it("findByOriginalSource skips scripts with no sources field (map never attached)", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1", url: "http://localhost/x.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+    // Deliberately don't call attachMap — `sources` stays undefined.
+    expect(store.findByOriginalSource("src/anything.ts")).toEqual([]);
+  });
+
+  it("clear() destroys every consumer (releases SourceMapConsumer Wasm memory)", () => {
+    // SourceMapConsumer holds Wasm-allocated memory that must be explicitly
+    // freed via .destroy(). On `close_session` and `switchTarget`, every
+    // consumer in the store must be destroyed or memory leaks accumulate
+    // across reconnects.
+    const store = new ScriptStore();
+    let destroyed: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const id = `s${i}`;
+      store.upsert({
+        scriptId: id, url: `http://localhost/${id}.js`,
+        startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+        executionContextId: 1, hash: id,
+      });
+      store.attachMap(id, undefined, buildMap(`src/${id}.ts`));
+      // Wrap each consumer's destroy with a spy.
+      const script = store.get(id, undefined)!;
+      const realDestroy = script.consumer!.destroy.bind(script.consumer);
+      script.consumer!.destroy = () => {
+        destroyed.push(id);
+        realDestroy();
+      };
+    }
+    store.clear();
+    expect(destroyed.sort()).toEqual(["s0", "s1", "s2"]);
+    // And the store is empty afterwards.
+    expect(store.all()).toEqual([]);
+  });
+
+  it("clear() is safe when entries have no consumer", () => {
+    // Some scripts arrive without a sourceMapURL → no consumer is attached.
+    // clear() must not crash on `s.consumer?.destroy()` for these.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "no-map", url: "http://localhost/raw.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+    expect(() => store.clear()).not.toThrow();
+    expect(store.all()).toEqual([]);
+  });
+
+  it("HMR upsert: re-parsed script preserves consumer when no map is re-attached", () => {
+    // Documents the behavior the new src/sourcemap/store.ts comment calls
+    // out: upsert's Object.assign does NOT clear consumer/sources because
+    // they're Omit<>'d from the input type. After a soft reload (same
+    // sessionId+scriptId), the script still has its old map until
+    // attachMap() is called again. This is intentional for soft reloads
+    // but means HMR-changed maps leak — surface the behavior in a test
+    // so anyone tempted to "fix" it sees the regression risk.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1", url: "http://localhost/app.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-v1",
+    });
+    store.attachMap("s1", undefined, buildMap("src/main.ts"));
+    expect(store.get("s1", undefined)?.consumer).toBeDefined();
+    expect(store.get("s1", undefined)?.sources).toEqual(["src/main.ts"]);
+
+    // Simulate HMR re-parse: same scriptId, new hash, no attachMap follow-up.
+    store.upsert({
+      scriptId: "s1", url: "http://localhost/app.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-v2",
+    });
+    const after = store.get("s1", undefined)!;
+    // Hash updated.
+    expect(after.hash).toBe("h-v2");
+    // BUT consumer + sources survived — the documented HMR leak.
+    expect(after.consumer).toBeDefined();
+    expect(after.sources).toEqual(["src/main.ts"]);
+  });
+});

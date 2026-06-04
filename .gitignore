@@ -1,0 +1,24 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.local
+coverage/
+.vitest-cache/
+
+# L4 eval run output — NDJSON traces per (scenario, trial). Persisted
+# under evals/runs/<run-id>/ during a `npm run eval` invocation.
+# Aggregated separately into long-lived per-night reports; raw traces
+# are run-local artifacts.
+evals/runs/
+
+# Auto-generated scaffold + build outputs inside L4 sample-app variants.
+# Each variant directory commits only its unique files (index.html,
+# src/*); the package.json / vite.config.ts / tsconfig.json are
+# materialized by scripts/build-variants.mjs at build time.
+evals/sample-app-variants/*/package.json
+evals/sample-app-variants/*/vite.config.ts
+evals/sample-app-variants/*/tsconfig.json
+evals/sample-app-variants/*/dist/
+evals/sample-app-variants/*/node_modules/

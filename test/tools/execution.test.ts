@@ -1,0 +1,180 @@
+import { describe, it, expect } from "vitest";
+import { sessionState } from "../../src/session/state.js";
+import { registerExecutionTools } from "../../src/tools/execution.js";
+import { setupSession, autoReset } from "../setup.js";
+import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
+
+autoReset();
+
+const tools = captureTools(registerExecutionTools);
+const resume = tools.get("resume")!;
+const stepOver = tools.get("step_over")!;
+const stepInto = tools.get("step_into")!;
+const stepOut = tools.get("step_out")!;
+const pause = tools.get("pause")!;
+const waitForPause = tools.get("wait_for_pause")!;
+
+describe("resume", () => {
+  it("not_paused error when not paused", async () => {
+    setupSession();
+    expect(parseErrorEnvelope(await resume.handler({}))?.error).toBe("not_paused");
+  });
+
+  it("no_session error", async () => {
+    setupSession({ noClient: true });
+    expect(parseErrorEnvelope(await resume.handler({}))?.error).toBe("no_session");
+  });
+
+  it("issues Debugger.resume against the paused session's id", async () => {
+    const { fake } = setupSession({ paused: true, pausedSessionId: "SW1" });
+    fake.clearSentCalls();
+    expect(parseOkEnvelope(await resume.handler({}))).toBe("resumed");
+    const call = fake.sentCalls.find((c) => c.method === "Debugger.resume");
+    // Critical: routed to the SAME session that paused, not the root.
+    expect(call?.sessionId).toBe("SW1");
+  });
+});
+
+describe("step_over / step_into / step_out", () => {
+  it("not_paused error when not paused", async () => {
+    setupSession();
+    expect(parseErrorEnvelope(await stepOver.handler({}))?.error).toBe("not_paused");
+    setupSession();
+    expect(parseErrorEnvelope(await stepInto.handler({}))?.error).toBe("not_paused");
+    setupSession();
+    expect(parseErrorEnvelope(await stepOut.handler({}))?.error).toBe("not_paused");
+  });
+
+  it("step_over: pause race — Debugger.paused fires synchronously inside stepOver send, must NOT desync", async () => {
+    // Production pause-race regression (src/session/pause.ts:75 entry guard).
+    // Real Chrome can deliver the stepOver response and the subsequent
+    // Debugger.paused in the same WebSocket batch. The fake's onSend hook
+    // reproduces that exactly: emit Debugger.paused synchronously inside
+    // the stepOver responder. The waitForPauseOrResume call must still
+    // resolve with the new pause state, not return null after timeout.
+    const { fake } = setupSession({ paused: true });
+    // Wire a Debugger.paused subscriber so wireDomainHandlers' production
+    // gate is mirrored — sessionState.pause.onPaused is called by the
+    // production handler, but here we drive it directly via the hook.
+    fake.onSend("Debugger.stepOver", () => {
+      // Production's onResumed has already been called by stepThen before
+      // stepOver fires. We need to push the new pause state via the
+      // PauseTracker directly because we're bypassing wireDomainHandlers.
+      sessionState.pause.onPaused(fake.makePauseState({ reason: "step", sessionId: undefined }));
+    });
+    const r = parseOkEnvelope<{ paused: boolean; reason: string }>(
+      await stepOver.handler({ timeout_ms: 50 }),
+    );
+    expect(r.paused).toBe(true);
+    expect(r.reason).toBe("step");
+  });
+
+  it("step_over: returns paused:false when no pause arrives within timeout", async () => {
+    setupSession({ paused: true });
+    const r = parseOkEnvelope<{ paused: boolean; message: string }>(
+      await stepOver.handler({ timeout_ms: 30 }),
+    );
+    expect(r.paused).toBe(false);
+    expect(r.message).toMatch(/did not pause/i);
+  });
+
+  it("step_into / step_out send the right CDP method", async () => {
+    const ctx1 = setupSession({ paused: true });
+    ctx1.fake.clearSentCalls();
+    await stepInto.handler({ timeout_ms: 20 });
+    expect(ctx1.fake.sentCalls.find((c) => c.method === "Debugger.stepInto")).toBeDefined();
+    const ctx2 = setupSession({ paused: true });
+    ctx2.fake.clearSentCalls();
+    await stepOut.handler({ timeout_ms: 20 });
+    expect(ctx2.fake.sentCalls.find((c) => c.method === "Debugger.stepOut")).toBeDefined();
+  });
+
+  it("step routes to the session that's currently paused (not always root)", async () => {
+    // Captures the paused session BEFORE clearing pause state — required
+    // because pauseState is cleared by onResumed before send fires.
+    const { fake } = setupSession({ paused: true, pausedSessionId: "SW1" });
+    fake.clearSentCalls();
+    await stepOver.handler({ timeout_ms: 20 });
+    const call = fake.sentCalls.find((c) => c.method === "Debugger.stepOver");
+    expect(call?.sessionId).toBe("SW1");
+  });
+});
+
+describe("pause", () => {
+  it("no_session error", async () => {
+    setupSession({ noClient: true });
+    expect(parseErrorEnvelope(await pause.handler({}))?.error).toBe("no_session");
+  });
+
+  it("targets root by default; explicit session_id routes to that child", async () => {
+    const { fake } = setupSession();
+    fake.clearSentCalls();
+    expect(
+      parseOkEnvelope<{ paused_session: string | null }>(await pause.handler({})),
+    ).toEqual({ paused_session: null });
+    expect(fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBeUndefined();
+
+    fake.clearSentCalls();
+    expect(
+      parseOkEnvelope<{ paused_session: string | null }>(await pause.handler({ session_id: "SW1" })),
+    ).toEqual({ paused_session: "SW1" });
+    expect(fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBe("SW1");
+  });
+
+  it("explicit null session_id is treated as root (matches the JSON null sentinel from list_targets)", async () => {
+    const { fake } = setupSession();
+    fake.clearSentCalls();
+    expect(
+      parseOkEnvelope<{ paused_session: string | null }>(await pause.handler({ session_id: null })),
+    ).toEqual({ paused_session: null });
+    expect(fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBeUndefined();
+  });
+});
+
+describe("wait_for_pause", () => {
+  it("no_session error", async () => {
+    setupSession({ noClient: true });
+    expect(parseErrorEnvelope(await waitForPause.handler({}))?.error).toBe("no_session");
+  });
+
+  it("returns immediately when already paused (with the TS-mapped call stack)", async () => {
+    setupSession({ paused: true });
+    const r = parseOkEnvelope<{ reason: string; call_stack: any[] }>(
+      await waitForPause.handler({ timeout_ms: 100 }),
+    );
+    expect(r.reason).toBe("breakpoint");
+    expect(r.call_stack).toHaveLength(1);
+    expect(r.call_stack[0].function_name).toBe("computeStep");
+  });
+
+  it("times out: PauseTracker.waitForPause rejects, the error envelope surfaces", async () => {
+    setupSession();
+    // wait_for_pause uses waitForPause (not waitForPauseOrResume), which
+    // REJECTS on timeout. The error envelope kicks in.
+    const r = await waitForPause.handler({ timeout_ms: 30 });
+    const err = parseErrorEnvelope(r);
+    expect(err?.message).toMatch(/Timed out/);
+  });
+
+  it("returns the session_id of the paused frame so agents can route follow-on calls", async () => {
+    setupSession({ paused: true, pausedSessionId: "SW1" });
+    const r = parseOkEnvelope<{ session_id: string | null; call_stack: any[] }>(
+      await waitForPause.handler({ timeout_ms: 100 }),
+    );
+    expect(r.session_id).toBe("SW1");
+    expect(r.call_stack[0].session_id).toBe("SW1");
+  });
+});
+
+describe("registration metadata", () => {
+  it("registers exactly the six execution tools", () => {
+    expect(Array.from(tools.keys()).sort()).toEqual([
+      "pause",
+      "resume",
+      "step_into",
+      "step_out",
+      "step_over",
+      "wait_for_pause",
+    ]);
+  });
+});
