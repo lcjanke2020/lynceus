@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol 
 
 Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have local source + source-map access. Coordinates flow in TS terms; the server translates to JS for CDP under the hood.
 
-**Status:** alpha (v0.1.0). **License:** [MIT](./LICENSE).
+**Status:** alpha. **License:** [MIT](./LICENSE).
 
 ## What it gives an agent
 
@@ -21,6 +21,34 @@ Across 39 tools:
 Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true })`.
 
 ## Install / build
+
+### Runtime install from npm
+
+Requires Node.js 20+ and a local Chrome/Chromium browser.
+
+```sh
+npm install -g cdp-mcp
+cdp-mcp                           # stdio MCP transport
+cdp-mcp --port 9719               # SSE MCP transport on 127.0.0.1:9719
+cdp-mcp --host 0.0.0.0 --port 9719 --allow-remote
+```
+
+The npm package ships prebuilt `dist/`, so there is no build step for runtime
+use. If `launch_chrome` cannot find Chrome/Chromium automatically, set
+`CHROME_PATH` to the browser binary.
+
+For MCP clients that support SSE, you can run `cdp-mcp` as a persistent local
+service:
+
+- [macOS launchd user service](docs/launchd-service.md)
+- [Linux systemd user service](docs/systemd-service.md)
+
+Persistent service mode keeps the `cdp-mcp` process and current browser/CDP
+session alive across MCP client restarts or reconnects. It does **not** persist
+state across service-process restarts. SSE mode is single-client today; if a
+new client should start fresh, call `close_session` first.
+
+### Build from source
 
 ```sh
 npm install
@@ -62,11 +90,10 @@ Unit + L2 contract tests (~640ms, no browser, no LLM):
 npm test
 ```
 
-Currently 299 tests across 22 files. The `test/` tree is the L2 contract
-layer (every tool exercised against a fake CDP — see `test/fake-cdp.ts`);
-the inline `src/**/*.test.ts` files are L1 pure-data tests; `evals/**/
-*.test.ts` cover the L4 harness's grader/trace/oracle units (21 tests).
-See `docs/test-eval-plan.md` for the full pyramid.
+The `test/` tree is the L2 contract layer (every tool exercised against a fake
+CDP — see `test/fake-cdp.ts`); the inline `src/**/*.test.ts` files are L1
+pure-data tests; `evals/**/*.test.ts` cover the L4 harness's
+grader/trace/oracle units. See `docs/test-eval-plan.md` for the full pyramid.
 
 ### L3 — real-browser end-to-end
 

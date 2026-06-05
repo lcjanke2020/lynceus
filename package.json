@@ -29,7 +29,11 @@
   },
   "main": "dist/index.js",
   "files": [
-    "dist"
+    "dist",
+    "docs/launchd-service.md",
+    "docs/systemd-service.md",
+    "docs/chromium-sandboxing.md",
+    "docs/known-chromium-gaps.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
