@@ -12,7 +12,7 @@ import { registerDomTools } from "./tools/dom.js";
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "cdp-mcp",
-    version: "0.1.0",
+    version: "0.1.2",
   });
 
   registerSessionTools(server);
