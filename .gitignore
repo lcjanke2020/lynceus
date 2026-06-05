@@ -22,3 +22,8 @@ evals/sample-app-variants/*/vite.config.ts
 evals/sample-app-variants/*/tsconfig.json
 evals/sample-app-variants/*/dist/
 evals/sample-app-variants/*/node_modules/
+
+# Local agent/AI review notes — kept out of git, but the directory is
+# preserved via .gitkeep so the drop spot exists on every clone.
+/review_feedback/*
+!/review_feedback/.gitkeep
