@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -26,7 +28,7 @@ function isLoopbackHost(host: string): boolean {
 
 type ServerMode = StdioMode | SseMode;
 
-interface SseClient {
+export interface SseClient {
   server: McpServer;
   transport: SSEServerTransport;
 }
@@ -128,6 +130,24 @@ function parsePort(raw: string): number {
     throw new Error(`Invalid --port value: ${raw}`);
   }
   return port;
+}
+
+const DEFAULT_SSE_KEEPALIVE_MS = 25_000;
+
+// SSE streams sit idle between tool calls, and HTTP clients enforce a
+// body-idle timeout (e.g. undici inside GitHub Copilot CLI tears the stream
+// down after ~12 min with "Body Timeout Error"). A periodic SSE comment frame
+// (`: ...\n\n`) is a no-op per the spec but resets that idle timer. Tunable via
+// CDP_MCP_SSE_KEEPALIVE_MS (non-negative integer ms; 0 disables). See issue #1.
+function getKeepaliveMs(): number {
+  const raw = process.env.CDP_MCP_SSE_KEEPALIVE_MS;
+  if (raw === undefined || raw === "") return DEFAULT_SSE_KEEPALIVE_MS;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    log.warn("invalid CDP_MCP_SSE_KEEPALIVE_MS; using default", { value: raw, default: DEFAULT_SSE_KEEPALIVE_MS });
+    return DEFAULT_SSE_KEEPALIVE_MS;
+  }
+  return value;
 }
 
 async function main() {
@@ -237,7 +257,7 @@ function installProcessErrorHandlers(): void {
   });
 }
 
-async function handleSseRequest({
+export async function handleSseRequest({
   req,
   res,
   clients,
@@ -338,7 +358,12 @@ async function startSseConnection({
   const transport = new SSEServerTransport("/messages", res);
   const server = buildServer();
 
+  // Assigned after connect() (below) so the keepalive never writes before the
+  // SDK has sent the SSE response headers; cleared here on disconnect.
+  let keepalive: ReturnType<typeof setInterval> | undefined;
+
   transport.onclose = () => {
+    if (keepalive) clearInterval(keepalive);
     const client = clients.get(transport.sessionId);
     clients.delete(transport.sessionId);
     void client?.server.close().catch((e) => {
@@ -351,6 +376,23 @@ async function startSseConnection({
 
   clients.set(transport.sessionId, { server, transport });
   await server.connect(transport);
+
+  // connect() has now written the SSE headers + endpoint event, so it's safe
+  // to interleave keepalive comment frames on the stream.
+  const keepaliveMs = getKeepaliveMs();
+  if (keepaliveMs > 0) {
+    keepalive = setInterval(() => {
+      if (res.writableEnded) return;
+      try {
+        res.write(": keepalive\n\n");
+      } catch (e) {
+        log.warn("SSE keepalive write failed", { sessionId: transport.sessionId, error: String(e) });
+      }
+    }, keepaliveMs);
+    // Don't let the keepalive timer alone keep the process alive.
+    keepalive.unref();
+  }
+
   log.info("SSE client connected", { sessionId: transport.sessionId });
 }
 
@@ -434,7 +476,22 @@ function respondText(res: ServerResponse, statusCode: number, body: string): voi
   res.end(body);
 }
 
-main().catch((err) => {
-  log.error("fatal", { error: String(err), stack: err?.stack });
-  process.exit(1);
-});
+// Only run the server when executed as the CLI entry point — not when this
+// module is imported (e.g. by the SSE transport tests). `realpathSync`
+// resolves the npm bin symlink so the comparison holds for global installs.
+function isRunAsMain(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isRunAsMain()) {
+  main().catch((err) => {
+    log.error("fatal", { error: String(err), stack: err?.stack });
+    process.exit(1);
+  });
+}
