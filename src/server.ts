@@ -25,5 +25,16 @@ export function buildServer(): McpServer {
   registerNetworkTools(server);
   registerDomTools(server);
 
+  // The SDK advertises `tools: { listChanged: true }` as soon as any tool is
+  // registered, but never emits the matching notification on its own. Some
+  // clients (e.g. GitHub Copilot CLI over SSE) gate their first `tools/list`
+  // call on receiving a `notifications/tools/list_changed` and otherwise wait
+  // forever — registering zero tools. Emit it once, right after the client's
+  // `initialized` (so the transport is connected and the client is ready).
+  // Harmless for clients that already fetch eagerly. See issue #1.
+  server.server.oninitialized = () => {
+    server.sendToolListChanged();
+  };
+
   return server;
 }

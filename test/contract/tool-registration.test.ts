@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer } from "../../src/server.js";
 import { sessionState } from "../../src/session/state.js";
 
@@ -83,6 +84,45 @@ describe("tools/list", () => {
       // well-formed.
       expect(tool.inputSchema).toBeDefined();
       expect(tool.inputSchema.type).toBe("object");
+    }
+  });
+});
+
+describe("tools/list_changed nudge on startup (issue #1)", () => {
+  // The high-level McpServer advertises `tools: { listChanged: true }` but the
+  // SDK never emits the notification on its own. buildServer() wires an
+  // oninitialized hook to send it once, so clients that gate their first
+  // tools/list on a list_changed (e.g. Copilot CLI over SSE) don't hang.
+  // The handler must be registered BEFORE connect(), since the notification is
+  // emitted in response to the client's `initialized` — so this needs its own
+  // client/server pair rather than the shared one from beforeAll.
+  it("server emits notifications/tools/list_changed after the client initializes", async () => {
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    const server = buildServer();
+    await server.connect(serverT);
+
+    const localClient = new Client({ name: "list-changed-test", version: "0.0.1" }, { capabilities: {} });
+    const notified = new Promise<void>((resolve) => {
+      localClient.setNotificationHandler(ToolListChangedNotificationSchema, () => resolve());
+    });
+
+    try {
+      await localClient.connect(clientT);
+      // connect() completes the initialize handshake and sends `initialized`,
+      // which triggers the server-side notification. Bound the wait so a
+      // regression fails fast instead of hanging to the suite timeout.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("no tools/list_changed within 2s")), 2000);
+      });
+      try {
+        await Promise.race([notified, timeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } finally {
+      await localClient.close();
+      await server.close();
     }
   });
 });
