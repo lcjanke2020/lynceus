@@ -5,7 +5,7 @@
  * This module adds the parts that are specific to running locators *inside the
  * page* and to the cdp-mcp tool error envelope:
  *   - `normalizeLocator` — the contract normalizer, re-wrapping `LocatorError`
- *     as the repo's structured `ToolError` (preserving the `missing_arg` code).
+ *     as the repo's structured `ToolError` (preserving its error code).
  *   - `locatorHelpersScript()` — the in-page helper library (accessibility
  *     heuristics, visibility, `findElements`, `elementInfo`).
  *   - `locatorReadScript()` — the read-only `locate(spec, options)` entry.
@@ -13,8 +13,8 @@
  *     used by the form-driving tools to resolve and mutate an element with the
  *     exact same matching semantics as `locate`.
  *
- * Both `dom.ts` (read) and `forms.ts` (drive) compose these so a locator behaves
- * identically whether it is queried or acted upon.
+ * Both `dom.ts` (read) and the form-driving tools (drive) compose these so a
+ * locator behaves identically whether it is queried or acted upon.
  */
 import { ToolError } from "../util/errors.js";
 import {

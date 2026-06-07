@@ -6,6 +6,7 @@ import {
   normalizeLocator,
   parseLocator,
   serializeLocator,
+  type LocatorBy,
 } from "../src/locator.js";
 import * as contract from "../src/contract.js";
 
@@ -33,6 +34,16 @@ describe("locator contract — normalizeLocator", () => {
     } catch (e) {
       expect(e).toBeInstanceOf(LocatorError);
       expect((e as LocatorError).code).toBe("missing_arg");
+    }
+  });
+
+  it("throws LocatorError(invalid_locator) for an unsupported strategy", () => {
+    try {
+      normalizeLocator({ by: "xpath" as unknown as LocatorBy });
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(LocatorError);
+      expect((e as LocatorError).code).toBe("invalid_locator");
     }
   });
 });

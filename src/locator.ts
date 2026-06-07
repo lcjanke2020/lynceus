@@ -12,9 +12,10 @@
 import { z } from "zod";
 
 /**
- * Error thrown by {@link normalizeLocator} / {@link parseLocator} when a spec is
- * under-specified for its strategy. `code` mirrors the cdp-mcp tool error codes
- * (always `"missing_arg"` today) so tool handlers can re-wrap it structurally.
+ * Error thrown by {@link normalizeLocator} / {@link parseLocator} for an invalid
+ * spec. `code` mirrors the cdp-mcp tool error codes so tool handlers can re-wrap it
+ * structurally: `"missing_arg"` when a spec is under-specified for its strategy,
+ * `"invalid_locator"` for an unsupported strategy.
  */
 export class LocatorError extends Error {
   readonly code: string;
@@ -122,7 +123,7 @@ export function normalizeLocator(input: LocatorSpec): LocatorSpec {
       // case here is missed, `by` is no longer `never` and this fails to build
       // (pairs with `noFallthroughCasesInSwitch`).
       const _exhaustive: never = by;
-      throw new LocatorError(`unsupported locator strategy: ${String(_exhaustive)}`);
+      throw new LocatorError(`unsupported locator strategy: ${String(_exhaustive)}`, "invalid_locator");
     }
   }
 }
