@@ -52,6 +52,7 @@ import type {
 } from "./anthropic.js";
 import type {
   NormalizedMessage,
+  NormalizedThinkingBlock,
   NormalizedToolUseBlock,
 } from "./vendor.js";
 
@@ -61,6 +62,10 @@ import type {
 export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null;
+  /** Moonshot (Kimi) K2 Thinking: the chain-of-thought echoed back on an
+   *  assistant tool-call turn. Required by Moonshot when thinking is on;
+   *  unused by other OpenAI-compat backends. */
+  reasoning_content?: string;
   name?: string;
   tool_calls?: Array<{
     id: string;
@@ -106,6 +111,9 @@ export interface OpenAIChatResponse {
     message: {
       role: "assistant";
       content: string | null;
+      /** Moonshot (Kimi) K2 Thinking returns its reasoning here alongside
+       *  content/tool_calls. Absent for the other OpenAI-compat backends. */
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         id: string;
         type: "function";
@@ -130,9 +138,11 @@ export interface OpenAIChatResponse {
  *  message per result (OpenAI requires this fan-out — there is no
  *  multi-tool-result message shape).
  *
- *  Thinking / redacted_thinking blocks on assistant turns are dropped:
- *  neither LM Studio nor OpenAI (Chat Completions) round-trip
- *  Anthropic's signed thinking format. */
+ *  Anthropic-signed thinking / redacted_thinking blocks on assistant turns
+ *  are dropped — Chat Completions can't round-trip them. EXCEPTION: a
+ *  moonshot-tagged thinking block is re-emitted as `reasoning_content`, which
+ *  Kimi K2 Thinking requires echoed back on tool-call turns (see
+ *  `translateResponse` for the capture side). */
 export function translateMessages(
   system: string | TextBlock[],
   messages: MessageParam[],
@@ -152,6 +162,7 @@ export function translateMessages(
     }
     if (m.role === "assistant") {
       let text = "";
+      let reasoning = "";
       const toolCalls: NonNullable<OpenAIChatMessage["tool_calls"]> = [];
       for (const block of m.content as unknown as Array<{
         type: string;
@@ -168,12 +179,18 @@ export function translateMessages(
               arguments: JSON.stringify(block.input ?? {}),
             },
           });
+        } else if (block.type === "thinking" && block.vendor === "moonshot") {
+          // Re-emit Moonshot's reasoning_content on the assistant turn — K2
+          // Thinking hard-rejects a tool-call message that omits it. Gated on
+          // the moonshot tag so other vendors' thinking blocks stay dropped.
+          reasoning += String(block.thinking ?? "");
         }
-        // thinking / redacted_thinking blocks are dropped — see header.
+        // other thinking / redacted_thinking blocks are dropped — see header.
       }
       const msg: OpenAIChatMessage = {
         role: "assistant",
         content: text || null,
+        ...(reasoning ? { reasoning_content: reasoning } : {}),
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       };
       out.push(msg);
@@ -250,6 +267,21 @@ export function translateResponse(
     throw new Error(`${idPrefix} response had no choices`);
   }
   const content: NormalizedMessage["content"] = [];
+  // Moonshot (Kimi) K2 Thinking returns its chain-of-thought in
+  // `reasoning_content` and HARD-REJECTS a follow-up turn whose assistant
+  // tool-call message omits it. Capture it as a moonshot-tagged thinking
+  // block so the runner traces it (sidecar) AND re-feeds it via
+  // translateMessages on the next turn. Gated on the vendor (idPrefix) so the
+  // other OpenAI-compat backends are byte-identical to before.
+  const reasoning =
+    idPrefix === "moonshot" ? choice.message.reasoning_content : undefined;
+  if (typeof reasoning === "string" && reasoning.length > 0) {
+    content.push({
+      type: "thinking",
+      vendor: "moonshot",
+      thinking: reasoning,
+    } as NormalizedThinkingBlock);
+  }
   if (choice.message.content) {
     content.push({ type: "text", text: choice.message.content } as TextBlock);
   }

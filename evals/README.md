@@ -1,6 +1,6 @@
 # evals/
 
-**Last updated: 2026-05-18**
+**Last updated: 2026-06-06**
 
 L4 of the test pyramid — runs Claude through scripted scenarios that exercise the full MCP tool surface end-to-end against a real browser. For pyramid context see [../docs/ARCHITECTURE.md §Test pyramid](../docs/ARCHITECTURE.md); for the cost model + caching guarantees see [../docs/test-eval-plan.md §L4](../docs/test-eval-plan.md).
 
@@ -8,14 +8,17 @@ L4 of the test pyramid — runs Claude through scripted scenarios that exercise 
 
 | Path | Role |
 |---|---|
-| `cli.ts` | Entry point. Parses `--scenarios=…` / `--trials=…` / budget flags. `resolveProviderClient()` picks a `VendorAdapter` from `EVAL_PROVIDER` (unset/`"anthropic"` → runner default; `"openai"` → `makeOpenaiAdapter()` for reasoning-off / `makeOpenaiResponsesAdapter()` for reasoning-on, auto-routed (#50/#58); `"vertex"` → `makeVertexAdapter()` for Gemini 3.x (#51); `"lm-studio"` → investigation artifact). Dispatches to the runner. |
+| `cli.ts` | Entry point. Parses `--scenarios=…` / `--trials=…` / budget flags. `resolveProviderClient()` picks a `VendorAdapter` from `EVAL_PROVIDER` (unset/`"anthropic"` → runner default; `"openai"` → `makeOpenaiAdapter()` for reasoning-off / `makeOpenaiResponsesAdapter()` for reasoning-on, auto-routed (#50/#58); `"vertex"` → `makeVertexAdapter()` for Gemini 3.x (#51); `"deepseek"`/`"moonshot"` → `makeDeepseekAdapter()`/`makeMoonshotAdapter()` (remote OpenAI-compat vendors, LEO-233); `"lm-studio"` → investigation artifact). Dispatches to the runner. |
 | `harness/vendor.ts` | The vendor-agnostic seam (#47): `Vendor`, `VendorAdapter`, `NormalizedMessage`, `NormalizedThinkingBlock`, `VendorMessageRequest`, `ThinkingRequest`. The runner consumes only these shapes. |
 | `harness/runner.ts` | Spawns a fresh `dist/index.js` MCP subprocess and the per-scenario static server, runs the tool-use loop against `adapter.messages(...)`, writes NDJSON traces, calls the oracle. Zero `@anthropic-ai/sdk` imports post-#47. |
 | `harness/anthropic.ts` | Anthropic adapter — `makeAnthropicAdapter()`, request building (`buildAnthropicRequest`, `effectiveTokenCap`), and the `@internal` helpers (`splitAssistantContent`, `readCacheUsage`) kept exported for regression tests. Owns ephemeral cache markers on system prompt + tool list. |
 | `harness/lm-studio-adapter.ts` | LM Studio (OpenAI-compatible) adapter — `makeLmStudioAdapter()`. Investigation artifact for issue #45 (still tagged NOT-FOR-MERGE in the header); post-#47 implements `VendorAdapter` directly, no `AnthropicClient` faking. |
+| `harness/openai-compat-adapter.ts` | Shared OpenAI-compatible Chat Completions factory — `makeOpenAICompatAdapter()` (LEO-233). Backs the DeepSeek + Moonshot adapters; clones the LM Studio transport (`max_tokens`, no Responses API, no v1 cache accounting), parametrized by vendor tag / env-var names / default base URL. |
+| `harness/deepseek-adapter.ts` | DeepSeek adapter — `makeDeepseekAdapter()` (LEO-233). Thin wrapper over the factory; reads `EVAL_DEEPSEEK_*`, defaults to `https://api.deepseek.com/v1`. Use the v4 model ids. |
+| `harness/moonshot-adapter.ts` | Moonshot (Kimi) adapter — `makeMoonshotAdapter()` (LEO-233). Thin wrapper over the factory; reads `EVAL_MOONSHOT_*`, defaults to the global `https://api.moonshot.ai/v1`. The eval `/v1` path — distinct from the Kimi Claude Code `/anthropic` setup. |
 | `harness/vertex-adapter.ts` | Vertex (Gemini) adapter — `makeVertexAdapter()`. Direct `@google/genai` SDK with `vertexai: true` (NOT ADK, per the design doc). Explicit `cachedContents` lifecycle scoped per-trial via the `endScenario()` hook; thoughtSignature round-trips through `NormalizedThinkingBlock`'s vertex variant. Issue #51. |
 | `harness/mcp-client.ts` | Bridges the Anthropic tool-use protocol to the MCP server's stdio JSON-RPC. |
-| `harness/model.ts` | Default model (`claude-opus-4-7` + adaptive `medium` thinking), per-vendor pricing catalog (`PRICING_CATALOG` + `pricingFor(vendor, model)` post-#48; LM Studio wildcard `"*"` sentinel = $0), reasoning config, env overrides (`EVAL_MODEL_OVERRIDE`, `EVAL_REASONING_LEVEL`, `EVAL_REASONING_BUDGET`). |
+| `harness/model.ts` | Default model (`claude-opus-4-7` + adaptive `medium` thinking), per-vendor pricing catalog (`PRICING_CATALOG` + `pricingFor(vendor, model)` post-#48; LM Studio wildcard `"*"` sentinel = $0; DeepSeek + Kimi rows added in LEO-233), reasoning config, env overrides (`EVAL_MODEL_OVERRIDE`, `EVAL_REASONING_LEVEL`, `EVAL_REASONING_BUDGET`). |
 | `harness/grader.ts` | Per-scenario oracle — emits `correctness ∈ {0,1}`, `mechanic ∈ {0,1}`, efficiency ratio, recovery count. No LLM judge. |
 | `harness/trace.ts` | Trace serialization (NDJSON under `evals/runs/<run-id>/`). `readTraceFile` folds pre-#49 legacy shapes forward via `normalizeLegacyEntry`. |
 | `harness/static-server.ts` | Tiny static server for the scenario's sample-app variant. |
@@ -136,6 +139,18 @@ EVAL_PROVIDER=openai OPENAI_API_KEY=… EVAL_OPENAI_MODEL=gpt-5.5 EVAL_REASONING
 # rates move. Auth setup: Google Application Default Credentials —
 # https://cloud.google.com/docs/authentication/application-default-credentials
 EVAL_PROVIDER=vertex EVAL_VERTEX_PROJECT_ID=<gcp-project> EVAL_REASONING_LEVEL=medium npm run eval:quick
+
+# Cross-vendor: DeepSeek + Kimi/Moonshot (LEO-233 — remote OpenAI-compat /v1,
+# reasoning-off in v1). These BILL REAL MONEY — set a low EVAL_BUDGET_USD fuse
+# and smoke eval:quick first. Use the v4 DeepSeek ids (deepseek-chat/-reasoner
+# aliases deprecate 2026-07-24). The model must have a PRICING_CATALOG.<vendor>
+# row or the adapter throws at construction (pre-flight, before any paid call).
+# Reported cost is a conservative UPPER BOUND — v1 doesn't yet credit the
+# vendors' automatic context-cache discount. Base URL defaults to
+# https://api.deepseek.com/v1 / https://api.moonshot.ai/v1; override via
+# EVAL_<VENDOR>_BASE_URL.
+EVAL_PROVIDER=deepseek EVAL_DEEPSEEK_API_KEY=… EVAL_DEEPSEEK_MODEL=deepseek-v4-pro EVAL_BUDGET_USD=5 npm run eval:quick
+EVAL_PROVIDER=moonshot EVAL_MOONSHOT_API_KEY=… EVAL_MOONSHOT_MODEL=kimi-k2.6 EVAL_BUDGET_USD=5 npm run eval:quick
 ```
 
 If `variantDir` is missing the runner fails fast with the exact message *"Run 'npm run sample:build' (canonical) or build the scenario's variant first."* (`evals/cli.ts`).

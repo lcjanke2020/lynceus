@@ -17,7 +17,13 @@
 
 import type { Message, MessageParam, TextBlock, Tool } from "./anthropic.js";
 
-export type Vendor = "anthropic" | "openai" | "vertex" | "lm-studio";
+export type Vendor =
+  | "anthropic"
+  | "openai"
+  | "vertex"
+  | "lm-studio"
+  | "deepseek"
+  | "moonshot";
 
 /** Tier vocabulary the runner crosses the seam with. Each adapter maps
  *  the tier to its vendor-native concept:
@@ -142,6 +148,17 @@ export type NormalizedThinkingBlock =
       vendor: "vertex";
       thinking: string;
       thoughtSignature: string;
+    }
+  | {
+      // Moonshot (Kimi) K2 Thinking. Moonshot returns the chain-of-thought in
+      // `reasoning_content` on the assistant message (Chat Completions) and
+      // HARD-REJECTS a follow-up turn whose assistant tool-call message omits
+      // it. The openai-compat adapter captures it here and re-emits it as
+      // `reasoning_content` on the next-turn assistant message (LEO-233). No
+      // signature/blob — it's plain reasoning text round-tripped verbatim.
+      type: "thinking";
+      vendor: "moonshot";
+      thinking: string;
     };
 
 export interface NormalizedMessage {

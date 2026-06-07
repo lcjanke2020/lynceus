@@ -275,6 +275,8 @@ interface PricingCatalog {
   anthropic: Record<SupportedModel, AnthropicPricingRow>;
   openai: Record<string, PricingPerMTok>;
   vertex: Record<string, PricingPerMTok>;
+  deepseek: Record<string, PricingPerMTok>;
+  moonshot: Record<string, PricingPerMTok>;
   "lm-studio": Record<string, PricingPerMTok>;
 }
 
@@ -406,6 +408,28 @@ export const PRICING_CATALOG: PricingCatalog = {
       longContextOutput: 18.0,
     },
   },
+  // DeepSeek + Moonshot (Kimi) — remote OpenAI-compatible vendors (LEO-233).
+  // Units USD per 1M tokens; standard (non-cache) pricing. v1 does NOT bill
+  // prompt caching: the adapters leave `NormalizedMessage.usage.cacheTokens`
+  // undefined, so `estimateCostUsd` bills every input token at the full input
+  // rate. That makes the v1 estimate a conservative UPPER BOUND, not exact —
+  // both vendors auto-apply server-side context caching and their
+  // `prompt_tokens` INCLUDES the cached tokens, so the real invoice is lower
+  // whenever the cache hits (the recorded cache-read rates are ~10-100x
+  // cheaper). Direction is safe: the budget gate trips early, never late.
+  // Cache-read rates are kept in comments for the v2 follow-up (LEO-233 §3).
+  // ⚠️ Pricing drifts — re-verify against each vendor's published pricing page
+  // (platform.deepseek.com, platform.moonshot.ai) before any large real-money
+  // run. Rates captured June 2026; see LEO-233 for the source breakdown.
+  deepseek: {
+    // Use the v4 ids; deepseek-chat/deepseek-reasoner aliases die 2026-07-24.
+    "deepseek-v4-flash": { input: 0.14, output: 0.28 }, // cache-read ≈ $0.0028
+    "deepseek-v4-pro": { input: 1.74, output: 3.48 }, //   cache-read ≈ $0.0145
+  },
+  moonshot: {
+    "kimi-k2.6": { input: 0.95, output: 4.0 }, // cache-read ≈ $0.16
+    "kimi-k2.5": { input: 0.6, output: 2.5 }, //  cache-read ≈ $0.10
+  },
   "lm-studio": {
     // Wildcard sentinel — every model under lm-studio is free; cost
     // math short-circuits on this vendor regardless of model id.
@@ -536,6 +560,15 @@ export function estimateCostUsd(
     }
     case "lm-studio":
       // No cache buckets — local runs have no cache layer.
+      break;
+    case "deepseek":
+    case "moonshot":
+      // v1: no cache accounting — the OpenAI-compat adapters leave
+      // cacheTokens undefined, so input + output bill at full rate. Explicit
+      // no-op cases (vs falling through) so the next person wiring cache
+      // accounting in LEO-233 §3 sees the hook. Both vendors' prompt_tokens
+      // INCLUDES cached tokens, so that follow-up must subtract before billing
+      // the fresh-input bucket (same shape as the openai/vertex cases above).
       break;
   }
 
