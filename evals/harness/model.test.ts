@@ -178,6 +178,21 @@ describe("estimateCostUsd", () => {
     expect(cost).toBeCloseTo((100_000 / 1_000_000) * row.input, 6);
   });
 
+  it("DeepSeek/Moonshot: clamp cached tokens to <= inputTokens (defensive, no cost inflation)", () => {
+    // A vendor bug reporting more cache-hit tokens than prompt tokens must not
+    // bill more cache-read tokens than the total prompt (Copilot review).
+    const row = PRICING_CATALOG.deepseek["deepseek-v4-pro"]!;
+    const cost = estimateCostUsd("deepseek", "deepseek-v4-pro", {
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cacheTokens: { cachedTokens: 999_999 },
+    });
+    // cached clamped to inputTokens → entire prompt billed at the cache-read
+    // rate, fresh-input bucket is zero. Never exceeds input * inputCacheRead.
+    expect(cost).toBeCloseTo((1_000 / 1_000_000) * row.inputCacheRead!, 6);
+    expect(cost).toBeGreaterThanOrEqual(0);
+  });
+
   it("Moonshot: bills the cached portion at inputCacheRead, the rest at input (LEO-233 §3)", () => {
     const row = PRICING_CATALOG.moonshot["kimi-k2.6"]!;
     const cost = estimateCostUsd("moonshot", "kimi-k2.6", {

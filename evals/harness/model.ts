@@ -564,8 +564,11 @@ export function estimateCostUsd(
       // `prompt_cache_hit_tokens`, moonshot from
       // `prompt_tokens_details.cached_tokens`). Both vendors' `prompt_tokens`
       // INCLUDES the cached portion, so subtract before billing the fresh-input
-      // bucket — same shape as the openai/vertex cases above.
-      const cached = cacheTokens.cachedTokens ?? 0;
+      // bucket — same shape as the openai/vertex cases above. Clamp cached to
+      // <= inputTokens defensively (Copilot review): a vendor bug reporting more
+      // cache-hit tokens than prompt tokens must not bill more cache-read tokens
+      // than the total prompt and inflate the estimate.
+      const cached = Math.min(cacheTokens.cachedTokens ?? 0, tokens.inputTokens);
       cacheReadTokens = cached;
       inputTokensForBilling = Math.max(0, tokens.inputTokens - cached);
       break;
