@@ -237,7 +237,10 @@ Non-default vendor backends (select via EVAL_PROVIDER):
                             must carry a row (unknown models throw).
     EVAL_DEEPSEEK_BASE_URL  optional; defaults to https://api.deepseek.com/v1.
     OpenAI-compatible Chat Completions (max_tokens, no Responses API).
-    Reasoning off in v1 (reasoning_content not captured yet — LEO-233).
+    Reasoning ON via the nested 'thinking' object (always-on 'high', GH #8);
+    reasoning_content captured to the .thinking sidecar but NOT re-fed (DeepSeek
+    400s if it is in input — the mirror opposite of Kimi). Cache-read discount
+    billed from prompt_cache_hit_tokens.
     Bills real money — set a low EVAL_BUDGET_USD and smoke eval:quick first.
   EVAL_PROVIDER=moonshot                                          (LEO-233)
     EVAL_MOONSHOT_API_KEY   required.
@@ -247,7 +250,10 @@ Non-default vendor backends (select via EVAL_PROVIDER):
                             (the global .ai endpoint, not .cn). This is the
                             eval-harness /v1 path — distinct from the Kimi
                             Claude Code setup's /anthropic endpoint.
-    Same OpenAI-compat + v1 caveats as deepseek.
+    OpenAI-compatible Chat Completions (max_tokens, no Responses API). K2
+    Thinking reasons by Moonshot's DEFAULT; reasoning_content is captured AND
+    re-fed on tool-call turns (K2 rejects a turn that omits it). Cache-read
+    discount billed from prompt_tokens_details.cached_tokens. Bills real money.
 
 Model pin:
   ${MODEL_ID} (level=${REASONING.level}${REASONING.budgetTokens ? `, budget=${REASONING.budgetTokens}` : ""}).
@@ -283,9 +289,9 @@ async function main(): Promise<void> {
       );
     }
     if (provider.vendor === "deepseek") {
-      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233):`);
+      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233 / GH #8):`);
       console.error(
-        `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the deepseek adapter drops req.thinking on the wire (no Responses API), so these fields are NOT a faithful record of what the backend did.`,
+        `[eval]   - DeepSeek V4 runs WITH reasoning on (the adapter sends thinking:{type:"enabled",reasoning_effort:"high"}); reasoning_content is captured to the .thinking sidecar but NOT re-fed (DeepSeek 400s if it is in input). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to DeepSeek's effort — it's always 'high', so treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
       );
     }
     if (provider.vendor === "moonshot") {

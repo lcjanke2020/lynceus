@@ -107,11 +107,25 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
       (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
     );
     expect(body.model).toBe("deepseek-v4-pro");
-    expect(body.max_tokens).toBe(4096);
+    // GH #7: default per-request output cap is 32K (covers reasoning + answer),
+    // not the old 4096 that truncated thinking models.
+    expect(body.max_tokens).toBe(32_768);
     expect(body.max_completion_tokens).toBeUndefined();
     expect(body.temperature).toBe(0.7);
     expect(body.tool_choice).toBe("auto");
     expect(body.tools).toHaveLength(1);
+  });
+
+  it("turns reasoning on via the nested thinking object (GH #8)", async () => {
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeDeepseekAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    // DeepSeek V4 enables reasoning via `thinking`, NOT the top-level
+    // `reasoning_effort` OpenAI uses. Always-on `high` for parity with Kimi.
+    expect(body.thinking).toEqual({ type: "enabled", reasoning_effort: "high" });
+    expect(body.reasoning_effort).toBeUndefined();
   });
 
   it("uses caller-supplied maxTokens", async () => {
@@ -171,7 +185,37 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     ]);
   });
 
-  it("does NOT bill cache in v1: cacheTokens stays undefined even when usage reports cached tokens", async () => {
+  it("surfaces reasoning_content as a deepseek thinking block (capture-only, GH #8)", async () => {
+    stubFetchOk({
+      id: "ds-r",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: null,
+            reasoning_content: "let me think…",
+            tool_calls: [
+              { id: "call_d", type: "function", function: { name: "noop", arguments: "{}" } },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 5, completion_tokens: 3 },
+    });
+    const resp = await makeDeepseekAdapter().messages({
+      system: SYSTEM,
+      messages: MESSAGES,
+    });
+    expect(resp.content[0]).toEqual({
+      type: "thinking",
+      vendor: "deepseek",
+      thinking: "let me think…",
+    });
+    expect(resp.stopReason).toBe("tool_use");
+  });
+
+  it("bills cache from prompt_cache_hit_tokens (LEO-233 §3)", async () => {
     stubFetchOk({
       choices: [
         { message: { role: "assistant", content: "x" }, finish_reason: "stop" },
@@ -179,7 +223,34 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
       usage: {
         prompt_tokens: 1000,
         completion_tokens: 50,
-        prompt_tokens_details: { cached_tokens: 700 },
+        prompt_cache_hit_tokens: 700,
+        prompt_cache_miss_tokens: 300,
+      },
+    });
+    const resp = await makeDeepseekAdapter().messages({
+      system: SYSTEM,
+      messages: MESSAGES,
+    });
+    // DeepSeek reports cache hits top-level (NOT prompt_tokens_details); the
+    // adapter normalizes it to `cachedTokens`. `prompt_tokens` includes the
+    // cached portion — estimateCostUsd subtracts it before billing fresh input.
+    expect(resp.usage).toEqual({
+      inputTokens: 1000,
+      outputTokens: 50,
+      cacheTokens: { cachedTokens: 700 },
+    });
+  });
+
+  it("leaves cacheTokens undefined when there is no cache hit", async () => {
+    stubFetchOk({
+      choices: [
+        { message: { role: "assistant", content: "x" }, finish_reason: "stop" },
+      ],
+      usage: {
+        prompt_tokens: 1000,
+        completion_tokens: 50,
+        prompt_cache_hit_tokens: 0,
+        prompt_cache_miss_tokens: 1000,
       },
     });
     const resp = await makeDeepseekAdapter().messages({

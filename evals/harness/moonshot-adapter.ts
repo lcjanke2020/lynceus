@@ -21,5 +21,12 @@ export function makeMoonshotAdapter(): VendorAdapter {
     modelEnv: "EVAL_MOONSHOT_MODEL",
     baseUrlEnv: "EVAL_MOONSHOT_BASE_URL",
     defaultBaseUrl: "https://api.moonshot.ai/v1",
+    // No `extraBody`: Kimi K2 Thinking reasons by Moonshot's server-side
+    // default — there's no request-side toggle to send. Cache hits come back
+    // OpenAI-style under `prompt_tokens_details.cached_tokens` (LEO-233 §3).
+    cacheTokensFrom: (usage) => {
+      const hit = usage?.prompt_tokens_details?.cached_tokens ?? 0;
+      return hit > 0 ? { cachedTokens: hit } : undefined;
+    },
   });
 }

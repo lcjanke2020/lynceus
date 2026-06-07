@@ -124,6 +124,33 @@ describe("translateMessages", () => {
     ]);
   });
 
+  it("does NOT re-emit a deepseek thinking block as reasoning_content (capture-only, GH #8)", () => {
+    // Mirror opposite of the moonshot re-emit above: DeepSeek 400s if
+    // reasoning_content is present in input, so a deepseek-tagged block must be
+    // dropped on the way back out — keeping the assistant turn's content +
+    // tool_calls but with NO reasoning_content.
+    const out = translateMessages("", [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", vendor: "deepseek", thinking: "deepseek cot" },
+          { type: "text", text: "calling a tool" },
+          { type: "tool_use", id: "call_d", name: "noop", input: { a: 1 } },
+        ] as unknown as MessageParam["content"],
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.content).toBe("calling a tool");
+    expect(out[0]!.reasoning_content).toBeUndefined();
+    expect(out[0]!.tool_calls).toEqual([
+      {
+        id: "call_d",
+        type: "function",
+        function: { name: "noop", arguments: JSON.stringify({ a: 1 }) },
+      },
+    ]);
+  });
+
   it("fans out user tool_result blocks into separate role:tool messages", () => {
     const out = translateMessages("", [
       {
@@ -261,7 +288,26 @@ describe("translateResponse", () => {
     expect(out.stopReason).toBe("tool_use");
   });
 
-  it("ignores reasoning_content for non-moonshot vendors (byte-identical to before)", () => {
+  it("captures DeepSeek reasoning_content as a deepseek thinking block (idPrefix=deepseek, GH #8)", () => {
+    const resp = mkResp({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "answer",
+            reasoning_content: "deepseek cot",
+          },
+          finish_reason: "stop",
+        },
+      ],
+    });
+    expect(translateResponse(resp, "deepseek").content).toEqual([
+      { type: "thinking", vendor: "deepseek", thinking: "deepseek cot" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("ignores reasoning_content for non-reasoning vendors (openai, lm-studio)", () => {
     const resp = mkResp({
       choices: [
         {
@@ -274,7 +320,7 @@ describe("translateResponse", () => {
         },
       ],
     });
-    expect(translateResponse(resp, "deepseek").content).toEqual([
+    expect(translateResponse(resp, "openai").content).toEqual([
       { type: "text", text: "answer" },
     ]);
     expect(translateResponse(resp, "lm-studio").content).toEqual([

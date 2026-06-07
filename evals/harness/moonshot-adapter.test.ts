@@ -73,8 +73,12 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
     expect(headers["Authorization"]).toBe("Bearer test-key");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.model).toBe("kimi-k2.6");
-    expect(body.max_tokens).toBe(4096);
+    // GH #7: default per-request output cap is 32K, not the old 4096.
+    expect(body.max_tokens).toBe(32_768);
     expect(body.max_completion_tokens).toBeUndefined();
+    // Moonshot reasons by server-side default — no request-side toggle (the
+    // `thinking` object is DeepSeek-only).
+    expect(body.thinking).toBeUndefined();
   });
 
   it("vendor-tags the response id when the API omits one", async () => {
@@ -119,6 +123,31 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
       thinking: "thinking…",
     });
     expect(resp.stopReason).toBe("tool_use");
+  });
+
+  it("bills cache from prompt_tokens_details.cached_tokens (LEO-233 §3)", async () => {
+    stubFetchOk({
+      id: "ks-c",
+      choices: [
+        { message: { role: "assistant", content: "x" }, finish_reason: "stop" },
+      ],
+      usage: {
+        prompt_tokens: 800,
+        completion_tokens: 20,
+        prompt_tokens_details: { cached_tokens: 500 },
+      },
+    });
+    const resp = await makeMoonshotAdapter().messages({
+      system: SYSTEM,
+      messages: MESSAGES,
+    });
+    // Moonshot reports cache hits OpenAI-style (nested), unlike DeepSeek's
+    // top-level field; the adapter normalizes both to `cachedTokens`.
+    expect(resp.usage).toEqual({
+      inputTokens: 800,
+      outputTokens: 20,
+      cacheTokens: { cachedTokens: 500 },
+    });
   });
 
   it("throws when EVAL_MOONSHOT_API_KEY is missing", () => {

@@ -159,6 +159,18 @@ export type NormalizedThinkingBlock =
       type: "thinking";
       vendor: "moonshot";
       thinking: string;
+    }
+  | {
+      // DeepSeek (V4 reasoner) — the MIRROR OPPOSITE of moonshot (GH #8).
+      // DeepSeek also returns its chain-of-thought in `reasoning_content` on
+      // the assistant message, but it HARD-REJECTS (400) a follow-up turn whose
+      // input messages CONTAIN `reasoning_content`. So the openai-compat adapter
+      // captures it here for the `.thinking` sidecar but `translateMessages`
+      // must NOT re-emit it (the re-emit gate stays `vendor === "moonshot"`).
+      // Capture-only; plain reasoning text, no signature/blob.
+      type: "thinking";
+      vendor: "deepseek";
+      thinking: string;
     };
 
 export interface NormalizedMessage {

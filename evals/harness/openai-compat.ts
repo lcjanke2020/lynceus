@@ -95,6 +95,12 @@ export interface OpenAIChatRequest {
   max_tokens?: number;
   max_completion_tokens?: number;
   reasoning_effort?: "low" | "medium" | "high" | "xhigh";
+  /** DeepSeek V4 reasoning toggle (GH #8). DeepSeek enables thinking via a
+   *  nested object — NOT the top-level `reasoning_effort` OpenAI uses. Only
+   *  `high` / `max` are accepted (`low`/`medium` map to `high`, `xhigh` to
+   *  `max`); default effort is `high`. The deepseek adapter sets this via
+   *  `extraBody`; other OpenAI-compat backends leave it unset. */
+  thinking?: { type: "enabled" | "disabled"; reasoning_effort?: "high" | "max" };
 }
 
 /** Subset of the Chat Completions response shape we read.
@@ -128,6 +134,12 @@ export interface OpenAIChatResponse {
     prompt_tokens_details?: {
       cached_tokens?: number;
     };
+    /** DeepSeek's context-cache accounting (LEO-233 §3). DeepSeek reports
+     *  cache hits via these top-level fields rather than OpenAI's nested
+     *  `prompt_tokens_details.cached_tokens` (which Moonshot uses). In both
+     *  cases `prompt_tokens` INCLUDES the cached portion. */
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
   };
 }
 
@@ -142,7 +154,10 @@ export interface OpenAIChatResponse {
  *  are dropped — Chat Completions can't round-trip them. EXCEPTION: a
  *  moonshot-tagged thinking block is re-emitted as `reasoning_content`, which
  *  Kimi K2 Thinking requires echoed back on tool-call turns (see
- *  `translateResponse` for the capture side). */
+ *  `translateResponse` for the capture side). A deepseek-tagged block is
+ *  deliberately NOT re-emitted (it stays dropped): DeepSeek 400s if
+ *  `reasoning_content` is present in input — the mirror opposite of Kimi
+ *  (GH #8). So the re-emit gate stays narrowly `vendor === "moonshot"`. */
 export function translateMessages(
   system: string | TextBlock[],
   messages: MessageParam[],
@@ -267,18 +282,27 @@ export function translateResponse(
     throw new Error(`${idPrefix} response had no choices`);
   }
   const content: NormalizedMessage["content"] = [];
-  // Moonshot (Kimi) K2 Thinking returns its chain-of-thought in
-  // `reasoning_content` and HARD-REJECTS a follow-up turn whose assistant
-  // tool-call message omits it. Capture it as a moonshot-tagged thinking
-  // block so the runner traces it (sidecar) AND re-feeds it via
-  // translateMessages on the next turn. Gated on the vendor (idPrefix) so the
-  // other OpenAI-compat backends are byte-identical to before.
-  const reasoning =
-    idPrefix === "moonshot" ? choice.message.reasoning_content : undefined;
-  if (typeof reasoning === "string" && reasoning.length > 0) {
+  // Moonshot (Kimi) and DeepSeek (V4) both return their chain-of-thought in
+  // `reasoning_content`. Capture it as a vendor-tagged thinking block so the
+  // runner traces it to the `.thinking` sidecar. Gated on the vendor
+  // (idPrefix) so the cache-/reasoning-free OpenAI-compat backends
+  // (openai, lm-studio) are byte-identical to before.
+  //
+  // The MIRROR-OPPOSITE re-feed behavior lives in `translateMessages`, NOT
+  // here: a moonshot block is re-emitted as `reasoning_content` (K2 hard-
+  // rejects a tool-call turn that OMITS it); a deepseek block is dropped
+  // (DeepSeek 400s if `reasoning_content` is PRESENT in input). The tag
+  // carried on the block is what selects between those two paths.
+  const reasoningVendor: "moonshot" | "deepseek" | undefined =
+    idPrefix === "moonshot" ? "moonshot" : idPrefix === "deepseek" ? "deepseek" : undefined;
+  const reasoning = reasoningVendor ? choice.message.reasoning_content : undefined;
+  if (reasoningVendor && typeof reasoning === "string" && reasoning.length > 0) {
+    // Cast: TS can't narrow an object whose `vendor` is a 2-literal union to a
+    // single union member (`moonshot` / `deepseek` blocks are distinct members).
+    // `reasoningVendor` is a proper literal so the assertion is sound.
     content.push({
       type: "thinking",
-      vendor: "moonshot",
+      vendor: reasoningVendor,
       thinking: reasoning,
     } as NormalizedThinkingBlock);
   }
