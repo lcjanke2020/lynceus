@@ -147,7 +147,8 @@ EVAL_PROVIDER=vertex EVAL_VERTEX_PROJECT_ID=<gcp-project> EVAL_REASONING_LEVEL=m
 # row or the adapter throws at construction (pre-flight, before any paid call).
 # Reported cost is a conservative UPPER BOUND — v1 doesn't yet credit the
 # vendors' automatic context-cache discount. Base URL defaults to
-# api.deepseek.com/v1 / api.moonshot.ai/v1; override via EVAL_<VENDOR>_BASE_URL.
+# https://api.deepseek.com/v1 / https://api.moonshot.ai/v1; override via
+# EVAL_<VENDOR>_BASE_URL.
 EVAL_PROVIDER=deepseek EVAL_DEEPSEEK_API_KEY=… EVAL_DEEPSEEK_MODEL=deepseek-v4-pro EVAL_BUDGET_USD=5 npm run eval:quick
 EVAL_PROVIDER=moonshot EVAL_MOONSHOT_API_KEY=… EVAL_MOONSHOT_MODEL=kimi-k2.6 EVAL_BUDGET_USD=5 npm run eval:quick
 ```
