@@ -272,6 +272,12 @@ async function main(): Promise<void> {
         `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the LM Studio adapter discards thinking/output_config, so these fields are NOT a faithful record of what the backend did.`,
       );
     }
+    if (provider.vendor === "deepseek" || provider.vendor === "moonshot") {
+      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233 v1):`);
+      console.error(
+        `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the ${provider.vendor} adapter drops req.thinking on the wire (no Responses API; reasoning_content capture is a follow-up, LEO-233 §3), so these fields are NOT a faithful record of what the backend did.`,
+      );
+    }
     if (provider.vendor === "vertex") {
       console.error(
         `[eval]   Vertex adapter (#51): explicit cachedContents resource lifecycle — the adapter creates a cache on prefix change and deletes it at scenario end. Resource is operator-visible on the GCP project (gcloud beta ai cached-contents list).`,
