@@ -91,6 +91,36 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
     expect(resp.id).toMatch(/^moonshot-/);
   });
 
+  it("surfaces reasoning_content as a moonshot thinking block in resp.content", async () => {
+    stubFetchOk({
+      id: "ks-2",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: null,
+            reasoning_content: "thinking…",
+            tool_calls: [
+              { id: "call_k", type: "function", function: { name: "noop", arguments: "{}" } },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 5, completion_tokens: 3 },
+    });
+    const resp = await makeMoonshotAdapter().messages({
+      system: SYSTEM,
+      messages: MESSAGES,
+    });
+    expect(resp.content[0]).toEqual({
+      type: "thinking",
+      vendor: "moonshot",
+      thinking: "thinking…",
+    });
+    expect(resp.stopReason).toBe("tool_use");
+  });
+
   it("throws when EVAL_MOONSHOT_API_KEY is missing", () => {
     delete process.env.EVAL_MOONSHOT_API_KEY;
     expect(() => makeMoonshotAdapter()).toThrow(/EVAL_MOONSHOT_API_KEY/);

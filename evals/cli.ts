@@ -282,10 +282,16 @@ async function main(): Promise<void> {
         `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the LM Studio adapter discards thinking/output_config, so these fields are NOT a faithful record of what the backend did.`,
       );
     }
-    if (provider.vendor === "deepseek" || provider.vendor === "moonshot") {
-      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233 v1):`);
+    if (provider.vendor === "deepseek") {
+      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233):`);
       console.error(
-        `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the ${provider.vendor} adapter drops req.thinking on the wire (no Responses API; reasoning_content capture is a follow-up, LEO-233 §3), so these fields are NOT a faithful record of what the backend did.`,
+        `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the deepseek adapter drops req.thinking on the wire (no Responses API), so these fields are NOT a faithful record of what the backend did.`,
+      );
+    }
+    if (provider.vendor === "moonshot") {
+      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233):`);
+      console.error(
+        `[eval]   - Kimi K2 Thinking runs with Moonshot's DEFAULT thinking on; the adapter captures reasoning_content and round-trips it on tool-call turns (also written to the .thinking sidecar). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to Moonshot's thinking depth — treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
       );
     }
     if (provider.vendor === "vertex") {

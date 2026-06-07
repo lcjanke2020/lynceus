@@ -9,12 +9,15 @@
 // verbatim.
 //
 // Deliberately NOT routed through the OpenAI Responses adapter: neither vendor
-// implements `/v1/responses`. Reasoning is OFF in v1 — both expose thinking via
-// a `reasoning_content` field on Chat Completions, capturing it is a follow-up
-// (LEO-233 §3). Sends `max_tokens` (NOT `max_completion_tokens`). Caching is not
-// accounted in v1: the adapter leaves `NormalizedMessage.usage.cacheTokens`
-// undefined, so `estimateCostUsd` bills input + output only (the cache term is
-// zero). Per-vendor cache-key extraction is the v2 follow-up (LEO-233 §3).
+// implements `/v1/responses`. The harness's thinking TIER (req.thinking) is not
+// mapped to a vendor knob. DeepSeek runs reasoning-off; Moonshot's Kimi K2
+// Thinking runs with its DEFAULT thinking on, and Moonshot's `reasoning_content`
+// is captured + round-tripped by the shared openai-compat translators (required
+// — K2 hard-rejects a tool-call turn that omits it; LEO-233). Sends `max_tokens`
+// (NOT `max_completion_tokens`). Caching is not accounted in v1: the adapter
+// leaves `NormalizedMessage.usage.cacheTokens` undefined, so `estimateCostUsd`
+// bills input + output only (the cache term is zero). Per-vendor cache-key
+// extraction is the v2 follow-up (LEO-233 §3).
 
 import {
   translateMessages,
@@ -94,8 +97,10 @@ export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter 
         // OpenAI Chat Completions adapter sends.
         max_tokens: req.maxTokens ?? 4096,
       };
-      // req.thinking dropped in v1 — no Responses API; reasoning_content
-      // capture is a follow-up (LEO-233 §3).
+      // The harness thinking TIER (req.thinking) is dropped — no Responses API
+      // and no vendor tier knob. Moonshot's reasoning_content is captured +
+      // round-tripped by the shared translators (translateResponse /
+      // translateMessages), not here.
 
       const url = `${baseUrl}/chat/completions`;
       return withRetry(

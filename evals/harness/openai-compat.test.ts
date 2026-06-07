@@ -99,6 +99,31 @@ describe("translateMessages", () => {
     expect(out).toEqual([{ role: "assistant", content: "kept" }]);
   });
 
+  it("re-emits a moonshot thinking block as reasoning_content (keeps tool_calls; still drops other thinking)", () => {
+    const out = translateMessages("", [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", vendor: "moonshot", thinking: "k2 chain-of-thought" },
+          { type: "thinking", thinking: "anthropic-signed", signature: "sig" },
+          { type: "text", text: "calling a tool" },
+          { type: "tool_use", id: "call_k", name: "noop", input: { a: 1 } },
+        ] as unknown as MessageParam["content"],
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.role).toBe("assistant");
+    expect(out[0]!.content).toBe("calling a tool");
+    expect(out[0]!.reasoning_content).toBe("k2 chain-of-thought");
+    expect(out[0]!.tool_calls).toEqual([
+      {
+        id: "call_k",
+        type: "function",
+        function: { name: "noop", arguments: JSON.stringify({ a: 1 }) },
+      },
+    ]);
+  });
+
   it("fans out user tool_result blocks into separate role:tool messages", () => {
     const out = translateMessages("", [
       {
@@ -202,6 +227,59 @@ describe("translateResponse", () => {
     expect(out.stopReason).toBe("end_turn");
     expect(out.id).toBe("chatcmpl-1");
     expect(out.usage).toEqual({ inputTokens: 42, outputTokens: 7 });
+  });
+
+  it("captures Moonshot reasoning_content as a moonshot thinking block (idPrefix=moonshot)", () => {
+    const out = translateResponse(
+      mkResp({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              reasoning_content: "let me think…",
+              tool_calls: [
+                {
+                  id: "call_k",
+                  type: "function",
+                  function: { name: "launch_chrome", arguments: "{}" },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+      "moonshot",
+    );
+    // Thinking block first, then the tool_use — so the runner re-feeds it on
+    // the next assistant turn (K2 Thinking requires reasoning_content echoed).
+    expect(out.content).toEqual([
+      { type: "thinking", vendor: "moonshot", thinking: "let me think…" },
+      { type: "tool_use", id: "call_k", name: "launch_chrome", input: {} },
+    ]);
+    expect(out.stopReason).toBe("tool_use");
+  });
+
+  it("ignores reasoning_content for non-moonshot vendors (byte-identical to before)", () => {
+    const resp = mkResp({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "answer",
+            reasoning_content: "should be ignored",
+          },
+          finish_reason: "stop",
+        },
+      ],
+    });
+    expect(translateResponse(resp, "deepseek").content).toEqual([
+      { type: "text", text: "answer" },
+    ]);
+    expect(translateResponse(resp, "lm-studio").content).toEqual([
+      { type: "text", text: "answer" },
+    ]);
   });
 
   it("emits tool_use blocks with JSON-parsed arguments", () => {
