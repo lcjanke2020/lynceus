@@ -414,8 +414,9 @@ export const PRICING_CATALOG: PricingCatalog = {
   // undefined, so `estimateCostUsd`'s input + output terms are exact and the
   // cache term is zero. Cache-read rates are recorded in comments for the v2
   // cache follow-up (LEO-233 §3).
-  // ⚠️ Pricing drifts — re-verify before any large real-money run.
-  // Source: deepseek-kimi-adapter-implementation-guide.md (June 2026).
+  // ⚠️ Pricing drifts — re-verify against each vendor's published pricing page
+  // (platform.deepseek.com, platform.moonshot.ai) before any large real-money
+  // run. Rates captured June 2026; see LEO-233 for the source breakdown.
   deepseek: {
     // Use the v4 ids; deepseek-chat/deepseek-reasoner aliases die 2026-07-24.
     "deepseek-v4-flash": { input: 0.14, output: 0.28 }, // cache-read ≈ $0.0028
