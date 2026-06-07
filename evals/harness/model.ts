@@ -5,13 +5,14 @@
 // EVAL_MODEL_OVERRIDE env added here — once the rotation work lands,
 // MODEL_ID will be a function of `new Date().getUTCDay()` plus this env.
 //
-// **Default model: opus-4.7 + adaptive `medium` thinking.** Switched
-// from Sonnet 4.6 once real-money runs landed ~5× under the original
-// $50–100/run estimate (Sonnet 4.6 nightly came in at ~$5–10). Opus 4.7
-// with medium-effort adaptive thinking is the operator's preferred
-// signal for "what should the nightly look like" — higher-quality
-// traces inform the rotation proposal (PR #12). Sonnet 4.6 remains
-// selectable via EVAL_MODEL_OVERRIDE for cheap ad-hoc runs.
+// **Default model: opus-4.8 + adaptive `medium` thinking.** Bumped from
+// Opus 4.7 on 2026-06-07 after a four-way L4 campaign: Opus 4.8 medium
+// led on both scored axes (6/8 correct, 7/8 mechanic), ahead of Kimi
+// k2.6 (5/8), gpt-oss-120b (6/8 but debugger-skipping, non-faithful
+// traces), and DeepSeek v4-pro (3/8). 4.8 shares 4.7's request surface
+// (adaptive-only thinking, no `temperature`) and rate card, so the swap
+// is drop-in. Opus 4.7 and Sonnet 4.6 remain selectable via
+// EVAL_MODEL_OVERRIDE for cheap/legacy ad-hoc runs.
 
 import type { ReasoningConfig } from "./types.js";
 import type { Vendor } from "./vendor.js";
@@ -20,10 +21,10 @@ import type { Vendor } from "./vendor.js";
  *  to PRICING_CATALOG below + this union. Forces "we have pricing for
  *  this" at the type level — prevents "ran Opus, got Sonnet-priced cost
  *  numbers" silent failures. */
-export const SUPPORTED_MODELS = ["claude-sonnet-4-6", "claude-opus-4-7"] as const;
+export const SUPPORTED_MODELS = ["claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8"] as const;
 export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
 
-const DEFAULT_MODEL_ID: SupportedModel = "claude-opus-4-7";
+const DEFAULT_MODEL_ID: SupportedModel = "claude-opus-4-8";
 
 function isSupportedModel(s: string): s is SupportedModel {
   return (SUPPORTED_MODELS as readonly string[]).includes(s);
@@ -56,6 +57,11 @@ export const MODEL_ID: SupportedModel = readModelId();
  *  bumping models. */
 const MODELS_WITHOUT_TEMPERATURE: ReadonlySet<SupportedModel> = new Set<SupportedModel>([
   "claude-opus-4-7",
+  // Opus 4.8 keeps Opus 4.7's request surface: `temperature`/`top_p`/`top_k`
+  // are removed and 400 on any value (per the Opus 4.8 model card — adaptive
+  // thinking only, sampling params gone). Same rationale as 4.7; added on the
+  // documented surface, not from an empirical 400 in this harness.
+  "claude-opus-4-8",
 ]);
 
 /** Whether the active model accepts the `temperature` parameter. Used
@@ -73,15 +79,19 @@ export const SUPPORTS_TEMPERATURE: boolean = !MODELS_WITHOUT_TEMPERATURE.has(MOD
  *    `enabled` returns 400).
  *
  *  The harness honors the same `EVAL_REASONING_LEVEL` env on both
- *  styles — `low`/`medium`/`high` map directly to effort tiers, and
- *  `xhigh`/`max` clamp down to `"high"` (the highest adaptive level).
- *  `custom` (budget-only env path) is a no-op on adaptive models —
- *  there's nothing for the operator to override. */
+ *  styles — `low`/`medium`/`high`/`xhigh`/`max` all map directly to
+ *  Anthropic effort tiers (see `tierToEffort` — they pass through, not
+ *  clamped; all five are valid on Opus 4.7/4.8). `custom` (budget-only
+ *  env path) is a no-op on adaptive models — there's nothing for the
+ *  operator to override. */
 export type ThinkingStyle = "budget" | "adaptive";
 
 const MODEL_THINKING_STYLE: Record<SupportedModel, ThinkingStyle> = {
   "claude-sonnet-4-6": "budget",
   "claude-opus-4-7": "adaptive",
+  // Opus 4.8 inherits 4.7's adaptive-only thinking (manual `enabled` +
+  // budget_tokens 400s; effort low|medium|high|xhigh|max all valid).
+  "claude-opus-4-8": "adaptive",
 };
 
 export const THINKING_STYLE: ThinkingStyle = MODEL_THINKING_STYLE[MODEL_ID];
@@ -306,6 +316,16 @@ export const PRICING_CATALOG: PricingCatalog = {
       output: 15.0,
     },
     "claude-opus-4-7": {
+      input: 5.0,
+      inputCacheWrite: 6.25,
+      inputCacheRead: 0.5,
+      output: 25.0,
+    },
+    // Opus 4.8 ships on the same rate card as Opus 4.7 — input $5 / output $25
+    // per MTok, 1M context at standard pricing (no long-context premium), 5-min
+    // ephemeral cache write = 1.25× input ($6.25), cache read = 0.1× ($0.50).
+    // Source: Anthropic Opus 4.8 model card / pricing (verified 2026-06-06).
+    "claude-opus-4-8": {
       input: 5.0,
       inputCacheWrite: 6.25,
       inputCacheRead: 0.5,
