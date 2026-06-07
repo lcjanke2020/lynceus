@@ -27,3 +27,18 @@ btn.addEventListener("click", () => {
 nameInput.addEventListener("input", () => {
   nameEcho.textContent = `name: ${nameInput.value || "(empty)"}`;
 });
+
+// Form controls for the L3 form-driving spec (select_option / check / fill).
+// Each echoes on `change` so the spec can confirm the tool dispatched the
+// framework-observable event, not just mutated the property.
+const subscribe = document.getElementById("subscribe") as HTMLInputElement;
+const subscribeEcho = document.getElementById("subscribe-echo")!;
+subscribe.addEventListener("change", () => {
+  subscribeEcho.textContent = `subscribe: ${subscribe.checked}`;
+});
+
+const fruit = document.getElementById("fruit") as HTMLSelectElement;
+const fruitEcho = document.getElementById("fruit-echo")!;
+fruit.addEventListener("change", () => {
+  fruitEcho.textContent = `fruit: ${fruit.value}`;
+});

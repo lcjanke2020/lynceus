@@ -211,6 +211,7 @@ export function makeFakeCdp(): FakeCdp {
     data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=",
   }));
   responders.set("Runtime.evaluate", () => ({ result: { type: "undefined" } }));
+  responders.set("Runtime.callFunctionOn", () => ({ result: { type: "undefined" } }));
   responders.set("Runtime.getProperties", () => ({ result: [] }));
   responders.set("Debugger.evaluateOnCallFrame", () => ({ result: { type: "undefined" } }));
   responders.set("Debugger.getScriptSource", () => ({ scriptSource: "" }));
@@ -222,6 +223,7 @@ export function makeFakeCdp(): FakeCdp {
     node: { nodeId: 0, nodeName: "DIV", attributes: [], backendNodeId: 0 },
   }));
   responders.set("DOM.getOuterHTML", () => ({ outerHTML: "<div></div>" }));
+  responders.set("DOM.resolveNode", () => ({ object: { objectId: "fake-object-id" } }));
   responders.set("Network.getRequestPostData", () => ({ postData: "" }));
   responders.set("Network.getResponseBody", () => ({ body: "", base64Encoded: false }));
   responders.set("Input.dispatchMouseEvent", () => undefined);

@@ -8,7 +8,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 ## What it gives an agent
 
-Across 39 tools:
+Across 44 tools:
 
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.
 - **Stepping** — `step_over`, `step_into`, `step_out`, `resume`, `pause`, plus the authoritative sync point `wait_for_pause`.
@@ -101,7 +101,7 @@ grader/trace/oracle units. See `docs/test-eval-plan.md` for the full pyramid.
 npm run test:e2e
 ```
 
-Drives the 39 MCP tools against a real headless Chromium attached to a
+Drives the 44 MCP tools against a real headless Chromium attached to a
 built copy of `examples/sample-app/`. Nine specs cover lifecycle, breakpoints,
 stepping, exceptions, console, network, workers, screenshot, and DOM
 interaction. Sequential (one Chrome shared across specs, isolated by a
