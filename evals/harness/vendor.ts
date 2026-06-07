@@ -17,7 +17,13 @@
 
 import type { Message, MessageParam, TextBlock, Tool } from "./anthropic.js";
 
-export type Vendor = "anthropic" | "openai" | "vertex" | "lm-studio";
+export type Vendor =
+  | "anthropic"
+  | "openai"
+  | "vertex"
+  | "lm-studio"
+  | "deepseek"
+  | "moonshot";
 
 /** Tier vocabulary the runner crosses the seam with. Each adapter maps
  *  the tier to its vendor-native concept:

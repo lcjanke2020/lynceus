@@ -1,0 +1,143 @@
+// Shared OpenAI-compatible Chat Completions adapter factory (LEO-233).
+//
+// DeepSeek and Moonshot (Kimi) both speak the OpenAI Chat Completions wire
+// format — the same shape the LM Studio adapter already drives, but over the
+// public internet with a real bill. This factory is the thin transport + env
+// wrapper the two share; per-vendor specifics (vendor tag, env-var names,
+// default base URL) come in via `OpenAICompatConfig`. The Anthropic-`tool_use`
+// <-> OpenAI-`tool_calls` plumbing lives in `openai-compat.ts` and is reused
+// verbatim.
+//
+// Deliberately NOT routed through the OpenAI Responses adapter: neither vendor
+// implements `/v1/responses`. Reasoning is OFF in v1 — both expose thinking via
+// a `reasoning_content` field on Chat Completions, capturing it is a follow-up
+// (LEO-233 §3). Sends `max_tokens` (NOT `max_completion_tokens`). Caching is not
+// accounted in v1: the adapter leaves `NormalizedMessage.usage.cacheTokens`
+// undefined, so `estimateCostUsd` bills input + output only (the cache term is
+// zero). Per-vendor cache-key extraction is the v2 follow-up (LEO-233 §3).
+
+import {
+  translateMessages,
+  translateResponse,
+  translateTools,
+  type OpenAIChatRequest,
+  type OpenAIChatResponse,
+} from "./openai-compat.js";
+import type {
+  NormalizedMessage,
+  Vendor,
+  VendorAdapter,
+  VendorMessageRequest,
+} from "./vendor.js";
+import { withRetry } from "./with-retry.js";
+
+export interface OpenAICompatConfig {
+  /** Vendor tag stamped on traces + consumed by withRetry's classifier. */
+  vendor: Vendor;
+  /** Human label used in thrown-error messages (e.g. "DeepSeek"). The
+   *  `<label> request failed: <status>` shape is what with-retry's
+   *  `extractStatus` regex keys on — keep "request failed" in it. */
+  label: string;
+  /** Env var holding the API key (sent as a Bearer token). */
+  apiKeyEnv: string;
+  /** Env var holding the model id. */
+  modelEnv: string;
+  /** Env var that optionally overrides the base URL. Empty string = unset. */
+  baseUrlEnv: string;
+  /** Base URL (including `/v1`) used when `baseUrlEnv` is unset/empty. */
+  defaultBaseUrl: string;
+}
+
+function requireEnv(name: string, label: string, hint: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} is not set. ${label} adapter ${hint}`);
+  return v;
+}
+
+export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter {
+  const apiKey = requireEnv(
+    cfg.apiKeyEnv,
+    cfg.label,
+    `requires ${cfg.apiKeyEnv} (API key) and ${cfg.modelEnv} (model id); ${cfg.baseUrlEnv} optional.`,
+  );
+  const model = requireEnv(
+    cfg.modelEnv,
+    cfg.label,
+    `requires ${cfg.modelEnv} (model id); ${cfg.apiKeyEnv} (API key) also required.`,
+  );
+  // Treat empty string as unset (mirrors the OpenAI adapter's base-URL handling).
+  const baseUrlRaw = process.env[cfg.baseUrlEnv];
+  const baseUrl = (
+    baseUrlRaw && baseUrlRaw.length > 0 ? baseUrlRaw : cfg.defaultBaseUrl
+  ).replace(/\/+$/, "");
+
+  return {
+    vendor: cfg.vendor,
+    model,
+    async messages(req: VendorMessageRequest): Promise<NormalizedMessage> {
+      const oReq: OpenAIChatRequest = {
+        model,
+        messages: translateMessages(req.system, req.messages),
+        ...(req.tools && req.tools.length > 0
+          ? { tools: translateTools(req.tools), tool_choice: "auto" }
+          : {}),
+        ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        // DeepSeek/Kimi use `max_tokens`, NOT the `max_completion_tokens` the
+        // OpenAI Chat Completions adapter sends.
+        max_tokens: req.maxTokens ?? 4096,
+      };
+      // req.thinking dropped in v1 — no Responses API; reasoning_content
+      // capture is a follow-up (LEO-233 §3).
+
+      const url = `${baseUrl}/chat/completions`;
+      return withRetry(
+        async () => {
+          const controller = new AbortController();
+          const timeout = setTimeout(
+            () => controller.abort(),
+            req.timeoutMs ?? 5 * 60 * 1000,
+          );
+          let resp: Response;
+          try {
+            resp = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify(oReq),
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timeout);
+          }
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => "");
+            // Mirrors the OpenAI/LM Studio throw shape so with-retry's
+            // status + Retry-After extraction works (see #63).
+            throw Object.assign(
+              new Error(
+                `${cfg.label} request failed: ${resp.status} ${resp.statusText} — ${body.slice(0, 500)}`,
+              ),
+              {
+                status: resp.status,
+                headers: {
+                  "retry-after": resp.headers.get("retry-after") ?? undefined,
+                },
+              },
+            );
+          }
+          const oResp = (await resp.json()) as OpenAIChatResponse;
+          // cacheTokensFrom omitted in v1 — no cache accounting (see header):
+          // the shared translator leaves cacheTokens undefined.
+          return translateResponse(oResp, cfg.vendor);
+        },
+        {
+          vendor: cfg.vendor,
+          timeoutMs: req.timeoutMs,
+          onRetry: req.onRetry,
+        },
+      );
+    },
+  };
+}

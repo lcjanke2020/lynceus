@@ -275,6 +275,8 @@ interface PricingCatalog {
   anthropic: Record<SupportedModel, AnthropicPricingRow>;
   openai: Record<string, PricingPerMTok>;
   vertex: Record<string, PricingPerMTok>;
+  deepseek: Record<string, PricingPerMTok>;
+  moonshot: Record<string, PricingPerMTok>;
   "lm-studio": Record<string, PricingPerMTok>;
 }
 
@@ -405,6 +407,23 @@ export const PRICING_CATALOG: PricingCatalog = {
       longContextInputCacheRead: 0.40,
       longContextOutput: 18.0,
     },
+  },
+  // DeepSeek + Moonshot (Kimi) — remote OpenAI-compatible vendors (LEO-233).
+  // Units USD per 1M tokens; standard (non-cache) pricing. v1 does NOT bill
+  // prompt caching: the adapters leave `NormalizedMessage.usage.cacheTokens`
+  // undefined, so `estimateCostUsd`'s input + output terms are exact and the
+  // cache term is zero. Cache-read rates are recorded in comments for the v2
+  // cache follow-up (LEO-233 §3).
+  // ⚠️ Pricing drifts — re-verify before any large real-money run.
+  // Source: deepseek-kimi-adapter-implementation-guide.md (June 2026).
+  deepseek: {
+    // Use the v4 ids; deepseek-chat/deepseek-reasoner aliases die 2026-07-24.
+    "deepseek-v4-flash": { input: 0.14, output: 0.28 }, // cache-read ≈ $0.0028
+    "deepseek-v4-pro": { input: 1.74, output: 3.48 }, //   cache-read ≈ $0.0145
+  },
+  moonshot: {
+    "kimi-k2.6": { input: 0.95, output: 4.0 }, // cache-read ≈ $0.16
+    "kimi-k2.5": { input: 0.6, output: 2.5 }, //  cache-read ≈ $0.10
   },
   "lm-studio": {
     // Wildcard sentinel — every model under lm-studio is free; cost

@@ -29,6 +29,8 @@ import { makeLmStudioAdapter } from "./harness/lm-studio-adapter.js";
 import { makeOpenaiAdapter } from "./harness/openai-adapter.js";
 import { makeOpenaiResponsesAdapter } from "./harness/openai-responses-adapter.js";
 import { makeVertexAdapter } from "./harness/vertex-adapter.js";
+import { makeDeepseekAdapter } from "./harness/deepseek-adapter.js";
+import { makeMoonshotAdapter } from "./harness/moonshot-adapter.js";
 
 function resolveProviderClient(): VendorAdapter | undefined {
   const provider = process.env.EVAL_PROVIDER;
@@ -69,8 +71,24 @@ function resolveProviderClient(): VendorAdapter | undefined {
     }
     return makeVertexAdapter();
   }
+  if (provider === "deepseek") {
+    if (!process.env.EVAL_DEEPSEEK_MODEL) {
+      throw new Error(
+        "EVAL_DEEPSEEK_MODEL is required when EVAL_PROVIDER=deepseek (e.g. 'deepseek-v4-pro').",
+      );
+    }
+    return makeDeepseekAdapter();
+  }
+  if (provider === "moonshot") {
+    if (!process.env.EVAL_MOONSHOT_MODEL) {
+      throw new Error(
+        "EVAL_MOONSHOT_MODEL is required when EVAL_PROVIDER=moonshot (e.g. 'kimi-k2.6').",
+      );
+    }
+    return makeMoonshotAdapter();
+  }
   throw new Error(
-    `Unknown EVAL_PROVIDER: '${provider}'. Supported: 'anthropic' (default), 'openai' (#50/#58), 'vertex' (#51), 'lm-studio' (investigation artifact, issue #45).`,
+    `Unknown EVAL_PROVIDER: '${provider}'. Supported: 'anthropic' (default), 'openai' (#50/#58), 'vertex' (#51), 'deepseek' (LEO-233), 'moonshot' (LEO-233), 'lm-studio' (investigation artifact, issue #45).`,
   );
 }
 
@@ -200,6 +218,26 @@ Non-default vendor backends (select via EVAL_PROVIDER):
     EVAL_LM_STUDIO_BASE_URL, EVAL_LM_STUDIO_MODEL, EVAL_LM_STUDIO_API_KEY
     All required. Investigation-artifact path (issue #45) — see header
     of evals/harness/lm-studio-adapter.ts.
+  EVAL_PROVIDER=deepseek                                          (LEO-233)
+    EVAL_DEEPSEEK_API_KEY   required.
+    EVAL_DEEPSEEK_MODEL     required (e.g. 'deepseek-v4-pro' /
+                            'deepseek-v4-flash' — use the v4 ids; the
+                            deepseek-chat/deepseek-reasoner aliases
+                            deprecate 2026-07-24). PRICING_CATALOG.deepseek
+                            must carry a row (unknown models throw).
+    EVAL_DEEPSEEK_BASE_URL  optional; defaults to https://api.deepseek.com/v1.
+    OpenAI-compatible Chat Completions (max_tokens, no Responses API).
+    Reasoning off in v1 (reasoning_content not captured yet — LEO-233).
+    Bills real money — set a low EVAL_BUDGET_USD and smoke eval:quick first.
+  EVAL_PROVIDER=moonshot                                          (LEO-233)
+    EVAL_MOONSHOT_API_KEY   required.
+    EVAL_MOONSHOT_MODEL     required (e.g. 'kimi-k2.6' / 'kimi-k2.5').
+                            PRICING_CATALOG.moonshot must carry a row.
+    EVAL_MOONSHOT_BASE_URL  optional; defaults to https://api.moonshot.ai/v1
+                            (the global .ai endpoint, not .cn). This is the
+                            eval-harness /v1 path — distinct from the Kimi
+                            Claude Code setup's /anthropic endpoint.
+    Same OpenAI-compat + v1 caveats as deepseek.
 
 Model pin:
   ${MODEL_ID} (level=${REASONING.level}${REASONING.budgetTokens ? `, budget=${REASONING.budgetTokens}` : ""}).
