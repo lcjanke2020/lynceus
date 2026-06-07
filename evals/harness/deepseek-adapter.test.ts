@@ -185,7 +185,7 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     ]);
   });
 
-  it("surfaces reasoning_content as a deepseek thinking block (capture-only, GH #8)", async () => {
+  it("surfaces reasoning_content as a deepseek thinking block (response capture side, GH #8)", async () => {
     stubFetchOk({
       id: "ds-r",
       choices: [
