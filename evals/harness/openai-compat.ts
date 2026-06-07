@@ -94,13 +94,13 @@ export interface OpenAIChatRequest {
   temperature?: number;
   max_tokens?: number;
   max_completion_tokens?: number;
-  reasoning_effort?: "low" | "medium" | "high" | "xhigh";
-  /** DeepSeek V4 reasoning toggle (GH #8). DeepSeek enables thinking via a
-   *  nested object — NOT the top-level `reasoning_effort` OpenAI uses. Only
-   *  `high` / `max` are accepted (`low`/`medium` map to `high`, `xhigh` to
-   *  `max`); default effort is `high`. The deepseek adapter sets this via
-   *  `extraBody`; other OpenAI-compat backends leave it unset. */
-  thinking?: { type: "enabled" | "disabled"; reasoning_effort?: "high" | "max" };
+  reasoning_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** DeepSeek V4 reasoning toggle (GH #8). DeepSeek enables/disables thinking
+   *  via this object; the EFFORT is the top-level `reasoning_effort` field above
+   *  (`high`/`max` for DeepSeek; `high` is the default). v4-pro reasons by
+   *  default, so this is mostly an explicit, future-disable-able marker. The
+   *  deepseek adapter sets it via `extraBody`; other backends leave it unset. */
+  thinking?: { type: "enabled" | "disabled" };
 }
 
 /** Subset of the Chat Completions response shape we read.
@@ -152,12 +152,10 @@ export interface OpenAIChatResponse {
  *
  *  Anthropic-signed thinking / redacted_thinking blocks on assistant turns
  *  are dropped — Chat Completions can't round-trip them. EXCEPTION: a
- *  moonshot-tagged thinking block is re-emitted as `reasoning_content`, which
- *  Kimi K2 Thinking requires echoed back on tool-call turns (see
- *  `translateResponse` for the capture side). A deepseek-tagged block is
- *  deliberately NOT re-emitted (it stays dropped): DeepSeek 400s if
- *  `reasoning_content` is present in input — the mirror opposite of Kimi
- *  (GH #8). So the re-emit gate stays narrowly `vendor === "moonshot"`. */
+ *  moonshot- or deepseek-tagged thinking block is re-emitted as
+ *  `reasoning_content`. Both Kimi K2 Thinking and DeepSeek V4 thinking mode
+ *  require it echoed back on tool-call turns (the API rejects a tool-call
+ *  message that omits it; see `translateResponse` for the capture side, GH #8). */
 export function translateMessages(
   system: string | TextBlock[],
   messages: MessageParam[],
@@ -194,10 +192,17 @@ export function translateMessages(
               arguments: JSON.stringify(block.input ?? {}),
             },
           });
-        } else if (block.type === "thinking" && block.vendor === "moonshot") {
-          // Re-emit Moonshot's reasoning_content on the assistant turn — K2
-          // Thinking hard-rejects a tool-call message that omits it. Gated on
-          // the moonshot tag so other vendors' thinking blocks stay dropped.
+        } else if (
+          block.type === "thinking" &&
+          (block.vendor === "moonshot" || block.vendor === "deepseek")
+        ) {
+          // Re-emit reasoning_content on the assistant turn. BOTH Moonshot's K2
+          // Thinking and DeepSeek's V4 thinking mode reject a tool-call message
+          // that omits it ("reasoning_content ... must be passed back"). Gated on
+          // these two reasoning vendors so other vendors' (anthropic/vertex/
+          // openai) thinking blocks stay dropped. DeepSeek V4 ACCEPTS
+          // reasoning_content in input (verified vs the live API) — it is NOT the
+          // mirror opposite the old `deepseek-reasoner` guide described (GH #8).
           reasoning += String(block.thinking ?? "");
         }
         // other thinking / redacted_thinking blocks are dropped — see header.
@@ -284,15 +289,11 @@ export function translateResponse(
   const content: NormalizedMessage["content"] = [];
   // Moonshot (Kimi) and DeepSeek (V4) both return their chain-of-thought in
   // `reasoning_content`. Capture it as a vendor-tagged thinking block so the
-  // runner traces it to the `.thinking` sidecar. Gated on the vendor
-  // (idPrefix) so the cache-/reasoning-free OpenAI-compat backends
-  // (openai, lm-studio) are byte-identical to before.
-  //
-  // The MIRROR-OPPOSITE re-feed behavior lives in `translateMessages`, NOT
-  // here: a moonshot block is re-emitted as `reasoning_content` (K2 hard-
-  // rejects a tool-call turn that OMITS it); a deepseek block is dropped
-  // (DeepSeek 400s if `reasoning_content` is PRESENT in input). The tag
-  // carried on the block is what selects between those two paths.
+  // runner traces it to the `.thinking` sidecar AND re-feeds it via
+  // translateMessages on the next turn (both vendors require reasoning_content
+  // echoed back on tool-call turns — GH #8). Gated on the vendor (idPrefix) so
+  // the reasoning-free OpenAI-compat backends (openai, lm-studio) are
+  // byte-identical to before.
   const reasoningVendor: "moonshot" | "deepseek" | undefined =
     idPrefix === "moonshot" ? "moonshot" : idPrefix === "deepseek" ? "deepseek" : undefined;
   const reasoning = reasoningVendor ? choice.message.reasoning_content : undefined;

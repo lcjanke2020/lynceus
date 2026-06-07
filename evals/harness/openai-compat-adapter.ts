@@ -12,13 +12,14 @@
 // implements `/v1/responses`. The harness's thinking TIER (req.thinking) is not
 // mapped to a vendor knob. Both vendors reason: Moonshot's Kimi K2 Thinking runs
 // with its DEFAULT thinking on; DeepSeek V4 is turned on per-vendor via
-// `cfg.extraBody.thinking` (always-on `high`, for parity — GH #8). Both vendors'
-// `reasoning_content` is captured by the shared openai-compat translators, but
-// only Moonshot's is re-emitted on the next turn (K2 hard-rejects a tool-call
-// turn that omits it); DeepSeek's is capture-only (it 400s if it is present in
-// input — the mirror opposite; LEO-233 / GH #8). Sends `max_tokens` (NOT
-// `max_completion_tokens`), defaulting to DEFAULT_MAX_OUTPUT_TOKENS so a
-// reasoning turn isn't truncated (GH #7). Per-vendor prompt-cache accounting is
+// `cfg.extraBody` (`thinking` enabled + top-level `reasoning_effort` — GH #8).
+// Both vendors' `reasoning_content` is captured by the shared openai-compat
+// translators AND re-emitted on the next turn — both K2 and DeepSeek V4 reject a
+// tool-call message that omits it (DeepSeek V4 behaves like Kimi here, not the
+// mirror opposite the old `deepseek-reasoner` guide implied; verified vs the
+// live API — GH #8). Sends `max_tokens` (NOT `max_completion_tokens`),
+// defaulting to DEFAULT_MAX_OUTPUT_TOKENS so a reasoning turn isn't truncated
+// (GH #7). Per-vendor prompt-cache accounting is
 // wired via `cfg.cacheTokensFrom` (LEO-233 §3): DeepSeek's
 // `prompt_cache_hit_tokens` and Moonshot's `prompt_tokens_details.cached_tokens`
 // flow into `NormalizedMessage.usage.cacheTokens`, which `estimateCostUsd` bills
@@ -56,10 +57,19 @@ export interface OpenAICompatConfig {
   /** Base URL (including `/v1`) used when `baseUrlEnv` is unset/empty. */
   defaultBaseUrl: string;
   /** Per-vendor extra request-body fields merged into every Chat Completions
-   *  request (GH #8). DeepSeek uses this to enable reasoning via its nested
-   *  `thinking` object; Moonshot/LM-Studio leave it unset (Moonshot reasons by
-   *  server-side default with no request param). */
-  extraBody?: Partial<OpenAIChatRequest>;
+   *  request (GH #8). DeepSeek uses this to enable reasoning (`thinking` toggle
+   *  + `reasoning_effort`); Moonshot/LM-Studio leave it unset (Moonshot reasons
+   *  by server-side default with no request param).
+   *
+   *  The core request fields are excluded from the type so a vendor config
+   *  CANNOT clobber `model`/`messages`/`tools`/`max_tokens` etc. via `extraBody`
+   *  (Copilot + kimi review) — those come from the base build / `req.maxTokens`.
+   *  `extraBody` is still merged last, but the type makes the override
+   *  impossible at compile time rather than relying on field ordering. */
+  extraBody?: Omit<
+    Partial<OpenAIChatRequest>,
+    "model" | "messages" | "tools" | "tool_choice" | "max_tokens" | "max_completion_tokens"
+  >;
   /** Per-vendor cache-token extractor (LEO-233 §3). Maps the vendor's native
    *  usage shape to the normalized `cacheTokens` map consumed by
    *  `estimateCostUsd`. DeepSeek reads `prompt_cache_hit_tokens`; Moonshot
@@ -126,16 +136,17 @@ export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter 
         // reasoning tokens for thinking models (GH #7) — see
         // DEFAULT_MAX_OUTPUT_TOKENS.
         max_tokens: req.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-        // Per-vendor extras (GH #8): DeepSeek's `thinking` reasoning toggle.
+        // Per-vendor extras (GH #8): DeepSeek's reasoning toggle.
         // Merged last so it can't be clobbered by the base fields above.
         ...(cfg.extraBody ?? {}),
       };
       // The harness thinking TIER (req.thinking) is NOT mapped to a vendor knob
-      // here — no Responses API. Moonshot reasons by server-side default and
-      // DeepSeek is turned on via `cfg.extraBody.thinking` (always-on `high`,
-      // for parity with Kimi). Both vendors' `reasoning_content` is captured by
-      // the shared translator (translateResponse); only Moonshot's is re-fed
-      // (translateMessages) — DeepSeek 400s if it is (GH #8).
+      // here — no Responses API. Moonshot reasons by server-side default;
+      // DeepSeek is turned on via `cfg.extraBody` (thinking enabled + top-level
+      // reasoning_effort). Both vendors' `reasoning_content` is captured by the
+      // shared translator (translateResponse) AND re-fed on the next tool-call
+      // turn (translateMessages) — both APIs reject a tool-call turn that omits
+      // it (GH #8).
 
       const url = `${baseUrl}/chat/completions`;
       return withRetry(

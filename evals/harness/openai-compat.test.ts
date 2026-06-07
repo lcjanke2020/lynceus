@@ -124,11 +124,11 @@ describe("translateMessages", () => {
     ]);
   });
 
-  it("does NOT re-emit a deepseek thinking block as reasoning_content (capture-only, GH #8)", () => {
-    // Mirror opposite of the moonshot re-emit above: DeepSeek 400s if
-    // reasoning_content is present in input, so a deepseek-tagged block must be
-    // dropped on the way back out — keeping the assistant turn's content +
-    // tool_calls but with NO reasoning_content.
+  it("re-emits a deepseek thinking block as reasoning_content (GH #8 — same as moonshot)", () => {
+    // DeepSeek V4 thinking mode requires reasoning_content echoed back on
+    // tool-call turns (verified vs the live API) — NOT the mirror opposite the
+    // old deepseek-reasoner guide described. So a deepseek-tagged block is
+    // re-emitted, exactly like moonshot.
     const out = translateMessages("", [
       {
         role: "assistant",
@@ -141,7 +141,7 @@ describe("translateMessages", () => {
     ]);
     expect(out).toHaveLength(1);
     expect(out[0]!.content).toBe("calling a tool");
-    expect(out[0]!.reasoning_content).toBeUndefined();
+    expect(out[0]!.reasoning_content).toBe("deepseek cot");
     expect(out[0]!.tool_calls).toEqual([
       {
         id: "call_d",

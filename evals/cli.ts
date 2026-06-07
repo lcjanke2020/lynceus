@@ -237,10 +237,10 @@ Non-default vendor backends (select via EVAL_PROVIDER):
                             must carry a row (unknown models throw).
     EVAL_DEEPSEEK_BASE_URL  optional; defaults to https://api.deepseek.com/v1.
     OpenAI-compatible Chat Completions (max_tokens, no Responses API).
-    Reasoning ON via the nested 'thinking' object (always-on 'high', GH #8);
-    reasoning_content captured to the .thinking sidecar but NOT re-fed (DeepSeek
-    400s if it is in input — the mirror opposite of Kimi). Cache-read discount
-    billed from prompt_cache_hit_tokens.
+    Reasoning ON via 'thinking':{type:enabled} + top-level reasoning_effort:high
+    (GH #8); reasoning_content captured to the .thinking sidecar AND re-fed on
+    tool-call turns (DeepSeek V4 requires it echoed back — same as Kimi, NOT the
+    mirror opposite). Cache-read discount billed from prompt_cache_hit_tokens.
     Bills real money — set a low EVAL_BUDGET_USD and smoke eval:quick first.
   EVAL_PROVIDER=moonshot                                          (LEO-233)
     EVAL_MOONSHOT_API_KEY   required.
@@ -291,7 +291,7 @@ async function main(): Promise<void> {
     if (provider.vendor === "deepseek") {
       console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233 / GH #8):`);
       console.error(
-        `[eval]   - DeepSeek V4 runs WITH reasoning on (the adapter sends thinking:{type:"enabled",reasoning_effort:"high"}); reasoning_content is captured to the .thinking sidecar but NOT re-fed (DeepSeek 400s if it is in input). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to DeepSeek's effort — it's always 'high', so treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
+        `[eval]   - DeepSeek V4 runs WITH reasoning on (the adapter sends thinking:{type:"enabled"} + reasoning_effort:"high"); reasoning_content is captured to the .thinking sidecar AND re-fed on tool-call turns (V4 requires it echoed back — same as Kimi). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to DeepSeek's effort — it's always 'high', so treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
       );
     }
     if (provider.vendor === "moonshot") {

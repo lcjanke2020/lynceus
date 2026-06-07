@@ -116,16 +116,16 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     expect(body.tools).toHaveLength(1);
   });
 
-  it("turns reasoning on via the nested thinking object (GH #8)", async () => {
+  it("turns reasoning on via the thinking toggle + top-level reasoning_effort (GH #8)", async () => {
     const fetchMock = stubFetchOk(OK_BODY);
     await makeDeepseekAdapter().messages({ system: SYSTEM, messages: MESSAGES });
     const body = JSON.parse(
       (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
     );
-    // DeepSeek V4 enables reasoning via `thinking`, NOT the top-level
-    // `reasoning_effort` OpenAI uses. Always-on `high` for parity with Kimi.
-    expect(body.thinking).toEqual({ type: "enabled", reasoning_effort: "high" });
-    expect(body.reasoning_effort).toBeUndefined();
+    // DeepSeek V4 thinking-mode shape: `thinking` toggle enables it, effort is
+    // the TOP-LEVEL `reasoning_effort` field. `high` for explicit always-on.
+    expect(body.thinking).toEqual({ type: "enabled" });
+    expect(body.reasoning_effort).toBe("high");
   });
 
   it("uses caller-supplied maxTokens", async () => {

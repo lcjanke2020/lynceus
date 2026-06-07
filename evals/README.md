@@ -14,7 +14,7 @@ L4 of the test pyramid — runs Claude through scripted scenarios that exercise 
 | `harness/anthropic.ts` | Anthropic adapter — `makeAnthropicAdapter()`, request building (`buildAnthropicRequest`, `effectiveTokenCap`), and the `@internal` helpers (`splitAssistantContent`, `readCacheUsage`) kept exported for regression tests. Owns ephemeral cache markers on system prompt + tool list. |
 | `harness/lm-studio-adapter.ts` | LM Studio (OpenAI-compatible) adapter — `makeLmStudioAdapter()`. Investigation artifact for issue #45 (still tagged NOT-FOR-MERGE in the header); post-#47 implements `VendorAdapter` directly, no `AnthropicClient` faking. |
 | `harness/openai-compat-adapter.ts` | Shared OpenAI-compatible Chat Completions factory — `makeOpenAICompatAdapter()` (LEO-233 / GH #8). Backs the DeepSeek + Moonshot adapters; `max_tokens` (NOT `max_completion_tokens`), no Responses API. Parametrized by vendor tag / env-var names / default base URL, plus per-vendor `extraBody` (DeepSeek's `thinking` reasoning toggle) and `cacheTokensFrom` (cache accounting). Default per-request output cap is 32K so reasoning isn't truncated (GH #7). |
-| `harness/deepseek-adapter.ts` | DeepSeek adapter — `makeDeepseekAdapter()` (LEO-233 / GH #8). Thin wrapper over the factory; reads `EVAL_DEEPSEEK_*`, defaults to `https://api.deepseek.com/v1`. Use the v4 model ids. Reasoning on via the nested `thinking` object (always-on `high`) — captured to the `.thinking` sidecar but never re-fed (DeepSeek 400s if `reasoning_content` is in input). Cache via top-level `prompt_cache_hit_tokens`. |
+| `harness/deepseek-adapter.ts` | DeepSeek adapter — `makeDeepseekAdapter()` (LEO-233 / GH #8). Thin wrapper over the factory; reads `EVAL_DEEPSEEK_*`, defaults to `https://api.deepseek.com/v1`. Use the v4 model ids. Reasoning on via `thinking`:{type:enabled} + top-level `reasoning_effort:high` — `reasoning_content` captured to the `.thinking` sidecar AND re-fed on tool-call turns (V4 requires it echoed back, same as Kimi — verified vs the live API). Cache via top-level `prompt_cache_hit_tokens`. |
 | `harness/moonshot-adapter.ts` | Moonshot (Kimi) adapter — `makeMoonshotAdapter()` (LEO-233). Thin wrapper over the factory; reads `EVAL_MOONSHOT_*`, defaults to the global `https://api.moonshot.ai/v1`. The eval `/v1` path — distinct from the Kimi Claude Code `/anthropic` setup. K2 reasons by server-side default; `reasoning_content` is captured AND re-fed (K2 hard-rejects a tool-call turn that omits it). Cache via `prompt_tokens_details.cached_tokens`. |
 | `harness/vertex-adapter.ts` | Vertex (Gemini) adapter — `makeVertexAdapter()`. Direct `@google/genai` SDK with `vertexai: true` (NOT ADK, per the design doc). Explicit `cachedContents` lifecycle scoped per-trial via the `endScenario()` hook; thoughtSignature round-trips through `NormalizedThinkingBlock`'s vertex variant. Issue #51. |
 | `harness/mcp-client.ts` | Bridges the Anthropic tool-use protocol to the MCP server's stdio JSON-RPC. |
@@ -146,10 +146,12 @@ EVAL_PROVIDER=vertex EVAL_VERTEX_PROJECT_ID=<gcp-project> EVAL_REASONING_LEVEL=m
 # deprecate 2026-07-24). The model must have a PRICING_CATALOG.<vendor> row or
 # the adapter throws at construction (pre-flight, before any paid call).
 # Both vendors REASON: Kimi K2 Thinking is on by Moonshot's server-side default;
-# DeepSeek V4 is turned on via its nested `thinking` object (always-on `high`,
-# GH #8). Each vendor's reasoning_content is captured to the `.thinking` sidecar,
-# but only Kimi's is re-fed on the next turn — DeepSeek 400s if it is (the mirror
-# opposite; capture-only). The per-request output cap is 32K (GH #7) so a
+# DeepSeek V4 is turned on via `thinking`:{type:enabled} + top-level
+# reasoning_effort:high (GH #8). Each vendor's reasoning_content is captured to
+# the `.thinking` sidecar AND re-fed on tool-call turns — BOTH APIs reject a
+# tool-call turn that omits it (DeepSeek V4 behaves like Kimi here, not the
+# mirror opposite the old deepseek-reasoner guide implied). The per-request
+# output cap is 32K (GH #7) so a
 # reasoning turn isn't truncated mid-thought (watch `finish_reason: length`).
 # Cost now credits each vendor's automatic context-cache discount (cache hits
 # billed at the cache-read rate): DeepSeek via `prompt_cache_hit_tokens`,
