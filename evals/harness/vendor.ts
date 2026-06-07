@@ -159,6 +159,19 @@ export type NormalizedThinkingBlock =
       type: "thinking";
       vendor: "moonshot";
       thinking: string;
+    }
+  | {
+      // DeepSeek (V4 thinking mode) — behaves like moonshot, NOT the mirror
+      // opposite the old `deepseek-reasoner` guide described (GH #8). DeepSeek
+      // returns its chain-of-thought in `reasoning_content` and REQUIRES it
+      // echoed back on tool-call turns (the API rejects a tool-call message
+      // that omits it — "reasoning_content ... must be passed back", verified
+      // vs the live API). So the openai-compat adapter captures it here AND
+      // re-emits it via translateMessages (gate widened to moonshot|deepseek).
+      // Plain reasoning text, no signature/blob.
+      type: "thinking";
+      vendor: "deepseek";
+      thinking: string;
     };
 
 export interface NormalizedMessage {
