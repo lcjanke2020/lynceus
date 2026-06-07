@@ -253,6 +253,27 @@ Or via `~/.claude.json`:
 - **Errors** come back as `isError: true` with a structured `{ error, message }` JSON payload.
 - **Compact returns**: previews trimmed to ~200 chars, lists capped at sensible defaults — bodies lazy-loaded via dedicated tools.
 
+## Programmatic contract (`cdp-mcp/contract`)
+
+The structured `LocatorSpec` that `locate`, `wait_for`, and the form-driving tools
+accept is published as a side-effect-free subpath export, so external tooling can
+*produce and validate* specs without duplicating the shape or pulling in the CLI:
+
+```ts
+import { locatorSchema, parseLocator, serializeLocator } from "cdp-mcp/contract";
+import type { LocatorSpec } from "cdp-mcp/contract";
+
+const spec = parseLocator({ by: "role", role: "button", name: "Submit" });
+locatorSchema.parse(spec);          // throws on an invalid shape
+serializeLocator(spec);             // stable, normalized JSON
+```
+
+Exports: `LocatorSpec` (type), `LocatorBy`, `locatorSchema` / `locatorShape` /
+`locatorBySchema` (Zod), and `normalizeLocator` / `parseLocator` / `serializeLocator`
+/ `LocatorError`. This module imports only `zod`. The subpath is **ESM-only** (the
+`exports` map defines `import`, not `require`) — consume it from an ESM module or a
+bundler.
+
 ## Prior art
 
 If `cdp-mcp` doesn't fit your workflow, look at:
