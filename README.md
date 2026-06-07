@@ -270,7 +270,9 @@ serializeLocator(spec);             // stable, normalized JSON
 
 Exports: `LocatorSpec` (type), `LocatorBy`, `locatorSchema` / `locatorShape` /
 `locatorBySchema` (Zod), and `normalizeLocator` / `parseLocator` / `serializeLocator`
-/ `LocatorError`. This module imports only `zod`.
+/ `LocatorError`. This module imports only `zod`. The subpath is **ESM-only** (the
+`exports` map defines `import`, not `require`) — consume it from an ESM module or a
+bundler.
 
 ## Prior art
 

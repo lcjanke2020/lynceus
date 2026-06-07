@@ -49,6 +49,10 @@ export const locatorShape = {
   role: z.string().optional().describe("ARIA/implicit role for by=role, e.g. button, link, textbox."),
   name: z.string().optional().describe("Accessible name, field name, or fallback value depending on the locator strategy."),
   test_id: z.string().optional().describe("Value for data-testid, data-test-id, or data-test."),
+  // Both snake_case (`test_id`) and camelCase (`testId`) are accepted so callers
+  // can use whichever matches their convention; `normalizeLocator` /
+  // `serializeLocator` fold them to the canonical `test_id`. Likewise `name` is a
+  // cross-strategy fallback that gets folded into the strategy-specific field.
   testId: z.string().optional().describe("CamelCase alias for test_id."),
   label: z.string().optional().describe("Label text for by=label."),
   placeholder: z.string().optional().describe("Placeholder text for by=placeholder."),
@@ -113,6 +117,13 @@ export function normalizeLocator(input: LocatorSpec): LocatorSpec {
     case "name":
       if (!input.name) throw new LocatorError("name is required for by=name");
       return { ...input, by };
+    default: {
+      // Compile-time exhaustiveness: if `locatorBySchema` gains a strategy and a
+      // case here is missed, `by` is no longer `never` and this fails to build
+      // (pairs with `noFallthroughCasesInSwitch`).
+      const _exhaustive: never = by;
+      throw new LocatorError(`unsupported locator strategy: ${String(_exhaustive)}`);
+    }
   }
 }
 
@@ -121,7 +132,57 @@ export function parseLocator(input: unknown): LocatorSpec {
   return normalizeLocator(locatorSchema.parse(input));
 }
 
-/** Serialize a LocatorSpec to a stable, normalized JSON string. */
+/**
+ * Serialize a LocatorSpec to a stable, normalized JSON string. Equivalent specs
+ * serialize identically regardless of which alias the caller used — e.g.
+ * `{ css: ".x" }` and `{ selector: ".x" }` both yield `{"by":"css","selector":".x"}`
+ * — so the output is safe to use as a cache key or for equality checks.
+ */
 export function serializeLocator(spec: LocatorSpec): string {
-  return JSON.stringify(normalizeLocator(spec));
+  return JSON.stringify(canonicalLocator(spec));
+}
+
+/**
+ * Reduce a spec to only its canonical fields, in a fixed key order, dropping
+ * alias inputs (`css`, `testId`, and the cross-strategy `name` fallback). This is
+ * what makes {@link serializeLocator} stable across equivalent inputs — the raw
+ * `normalizeLocator` result still carries whichever aliases the caller passed.
+ */
+function canonicalLocator(spec: LocatorSpec): LocatorSpec {
+  const n = normalizeLocator(spec);
+  const out: LocatorSpec = {};
+  switch (n.by) {
+    case "css":
+      out.by = "css";
+      out.selector = n.selector;
+      break;
+    case "role":
+      out.by = "role";
+      out.role = n.role;
+      if (n.name !== undefined) out.name = n.name;
+      break;
+    case "text":
+      out.by = "text";
+      out.text = n.text;
+      break;
+    case "test_id":
+    case "testId":
+      out.by = "test_id";
+      out.test_id = n.test_id;
+      break;
+    case "label":
+      out.by = "label";
+      out.label = n.label;
+      break;
+    case "placeholder":
+      out.by = "placeholder";
+      out.placeholder = n.placeholder;
+      break;
+    case "name":
+      out.by = "name";
+      out.name = n.name;
+      break;
+  }
+  if (n.exact !== undefined) out.exact = n.exact;
+  return out;
 }

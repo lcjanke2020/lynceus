@@ -58,6 +58,17 @@ describe("locator contract — schema + helpers", () => {
   it("serializeLocator returns a normalized JSON string", () => {
     expect(JSON.parse(serializeLocator({ css: ".x" }))).toMatchObject({ by: "css", selector: ".x" });
   });
+
+  it("serializeLocator is stable across equivalent aliases", () => {
+    // `{ css }` and `{ selector }` mean the same thing — they must serialize identically.
+    expect(serializeLocator({ css: ".x" })).toBe(serializeLocator({ selector: ".x" }));
+    expect(serializeLocator({ css: ".x" })).toBe('{"by":"css","selector":".x"}');
+    // Alias keys are dropped from the canonical output (no leftover `"css":` / `"testId":`).
+    expect(serializeLocator({ css: ".x" })).not.toContain('"css":');
+    expect(serializeLocator({ by: "test_id", testId: "row" })).toBe('{"by":"test_id","test_id":"row"}');
+    // Key order is fixed regardless of input key order.
+    expect(serializeLocator({ selector: ".x", by: "css" })).toBe(serializeLocator({ by: "css", css: ".x" }));
+  });
 });
 
 describe("public barrel — src/contract.ts", () => {
