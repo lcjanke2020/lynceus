@@ -72,6 +72,11 @@ function resolveProviderClient(): VendorAdapter | undefined {
     return makeVertexAdapter();
   }
   if (provider === "deepseek") {
+    if (!process.env.EVAL_DEEPSEEK_API_KEY) {
+      throw new Error(
+        "EVAL_DEEPSEEK_API_KEY is required when EVAL_PROVIDER=deepseek.",
+      );
+    }
     if (!process.env.EVAL_DEEPSEEK_MODEL) {
       throw new Error(
         "EVAL_DEEPSEEK_MODEL is required when EVAL_PROVIDER=deepseek (e.g. 'deepseek-v4-pro').",
@@ -80,6 +85,11 @@ function resolveProviderClient(): VendorAdapter | undefined {
     return makeDeepseekAdapter();
   }
   if (provider === "moonshot") {
+    if (!process.env.EVAL_MOONSHOT_API_KEY) {
+      throw new Error(
+        "EVAL_MOONSHOT_API_KEY is required when EVAL_PROVIDER=moonshot.",
+      );
+    }
     if (!process.env.EVAL_MOONSHOT_MODEL) {
       throw new Error(
         "EVAL_MOONSHOT_MODEL is required when EVAL_PROVIDER=moonshot (e.g. 'kimi-k2.6').",

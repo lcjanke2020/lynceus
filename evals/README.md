@@ -139,6 +139,17 @@ EVAL_PROVIDER=openai OPENAI_API_KEY=… EVAL_OPENAI_MODEL=gpt-5.5 EVAL_REASONING
 # rates move. Auth setup: Google Application Default Credentials —
 # https://cloud.google.com/docs/authentication/application-default-credentials
 EVAL_PROVIDER=vertex EVAL_VERTEX_PROJECT_ID=<gcp-project> EVAL_REASONING_LEVEL=medium npm run eval:quick
+
+# Cross-vendor: DeepSeek + Kimi/Moonshot (LEO-233 — remote OpenAI-compat /v1,
+# reasoning-off in v1). These BILL REAL MONEY — set a low EVAL_BUDGET_USD fuse
+# and smoke eval:quick first. Use the v4 DeepSeek ids (deepseek-chat/-reasoner
+# aliases deprecate 2026-07-24). The model must have a PRICING_CATALOG.<vendor>
+# row or the adapter throws at construction (pre-flight, before any paid call).
+# Reported cost is a conservative UPPER BOUND — v1 doesn't yet credit the
+# vendors' automatic context-cache discount. Base URL defaults to
+# api.deepseek.com/v1 / api.moonshot.ai/v1; override via EVAL_<VENDOR>_BASE_URL.
+EVAL_PROVIDER=deepseek EVAL_DEEPSEEK_API_KEY=… EVAL_DEEPSEEK_MODEL=deepseek-v4-pro EVAL_BUDGET_USD=5 npm run eval:quick
+EVAL_PROVIDER=moonshot EVAL_MOONSHOT_API_KEY=… EVAL_MOONSHOT_MODEL=kimi-k2.6 EVAL_BUDGET_USD=5 npm run eval:quick
 ```
 
 If `variantDir` is missing the runner fails fast with the exact message *"Run 'npm run sample:build' (canonical) or build the scenario's variant first."* (`evals/cli.ts`).

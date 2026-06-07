@@ -30,6 +30,7 @@ import type {
   VendorMessageRequest,
 } from "./vendor.js";
 import { withRetry } from "./with-retry.js";
+import { pricingFor } from "./model.js";
 
 export interface OpenAICompatConfig {
   /** Vendor tag stamped on traces + consumed by withRetry's classifier. */
@@ -70,6 +71,13 @@ export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter 
   const baseUrl = (
     baseUrlRaw && baseUrlRaw.length > 0 ? baseUrlRaw : cfg.defaultBaseUrl
   ).replace(/\/+$/, "");
+
+  // Pre-flight: fail at construction if there's no pricing row for this
+  // (vendor, model). Otherwise pricingFor() wouldn't throw until
+  // estimateCostUsd runs in the runner — i.e. AFTER the first billable
+  // request. For a paid remote path, turn that post-spend crash into a
+  // construction-time error (LEO-233 review). Row intentionally discarded.
+  pricingFor(cfg.vendor, model);
 
   return {
     vendor: cfg.vendor,

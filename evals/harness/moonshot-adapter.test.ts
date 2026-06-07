@@ -100,4 +100,38 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
     delete process.env.EVAL_MOONSHOT_MODEL;
     expect(() => makeMoonshotAdapter()).toThrow(/EVAL_MOONSHOT_MODEL/);
   });
+
+  // Parity with the DeepSeek suite: prove the "Moonshot request failed: 5xx"
+  // error shape is classified as retryable by with-retry, independent of any
+  // future factory refactor (kimi review).
+  it("retries on 500 then succeeds, emitting one onRetry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+        text: async () => "boom",
+        json: async () => ({}),
+        headers: { get: () => null },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => JSON.stringify(OK_BODY),
+        json: async () => OK_BODY,
+        headers: { get: () => null },
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const onRetry = vi.fn();
+    const resp = await makeMoonshotAdapter().messages({
+      system: SYSTEM,
+      messages: MESSAGES,
+      onRetry,
+    });
+    expect(resp.id).toBe("ks-1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  }, 10_000);
 });

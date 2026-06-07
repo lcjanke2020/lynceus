@@ -238,6 +238,17 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     expect(() => makeDeepseekAdapter()).toThrow(/EVAL_DEEPSEEK_MODEL/);
   });
 
+  // Pre-flight pricing validation (LEO-233 review): an unknown model id must
+  // throw at construction — BEFORE any billable request — not later in
+  // estimateCostUsd after the first paid call. No fetch should be issued.
+  it("throws at construction (no fetch) for a model with no pricing row", () => {
+    process.env.EVAL_DEEPSEEK_MODEL = "deepseek-vNN-imaginary";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(() => makeDeepseekAdapter()).toThrow(/No pricing row for \(deepseek/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   // withRetry wrap (#63): a 500 must be recoverable and emit one onRetry. Also
   // proves the thrown error shape ("… request failed: 500 …") is classified as
   // retryable by with-retry's status extractor.
