@@ -1,6 +1,6 @@
 # src/tools/
 
-**Last updated: 2026-05-19**
+**Last updated: 2026-06-07**
 
 All 44 MCP tools live here, one file per category. Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
