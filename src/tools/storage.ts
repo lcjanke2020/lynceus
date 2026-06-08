@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { readFile, writeFile, rename, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { requireSession } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
@@ -69,6 +70,47 @@ const cookieParamSchema = z.object({
   expires: z.number().optional().describe("Expiry as seconds since epoch; omit for a session cookie."),
 });
 
+/**
+ * Write `data` to `dest` at mode 0o600, overwrite-safe and TOCTOU-safe.
+ *
+ * The storage-state file holds plaintext cookie secrets, so the 0o600
+ * postcondition must hold even on a shared, world-writable directory. Two traps:
+ *  - Node's writeFile `mode` only applies when it *creates* the file, so writing
+ *    straight to `dest` would leave an existing 0644 file world-readable.
+ *  - A *predictable* temp path lets an attacker pre-create (or symlink) it at
+ *    0644, so the secret gets written through their file and renamed into place.
+ *
+ * So: create a temp with an **unpredictable** same-directory suffix using
+ * exclusive create (`flag: "wx"` ⇒ O_CREAT|O_EXCL — fails on any pre-existing
+ * file and refuses to follow a symlink), which makes 0o600 a real creation-time
+ * guarantee, then atomically rename it over the destination (same filesystem, so
+ * the secret never exists at the destination path in a half-written/0644 state).
+ * Retry on the astronomically-unlikely name collision.
+ */
+async function writeSecretFileAtomic(dest: string, data: string): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const tmp = `${dest}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      await writeFile(tmp, data, { flag: "wx", mode: 0o600 });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+        lastErr = e;
+        continue; // collision (or planted file/symlink) — try a fresh random name
+      }
+      throw e; // ENOENT (missing parent dir), EACCES, etc.
+    }
+    try {
+      await rename(tmp, dest);
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw e;
+    }
+    return;
+  }
+  throw lastErr;
+}
+
 export function registerStorageTools(server: McpServer) {
   registerJsonTool(
     server,
@@ -92,17 +134,11 @@ export function registerStorageTools(server: McpServer) {
           : [];
       const state: StorageState = { cookies: cookies.map(cdpCookieToState), origins };
       // The file holds full cookie values (incl. HttpOnly auth/session tokens) —
-      // the description says "treat it as a secret". Write a fresh temp file at
-      // 0o600 and atomically rename it over the destination: this guarantees 0o600
-      // even when overwriting an existing 0644 file (Node's writeFile `mode` only
-      // applies to newly-created files), and leaves no window where the secret
-      // sits world-readable.
-      const tmp = `${input.path}.${process.pid}.tmp`;
+      // the description says "treat it as a secret". writeSecretFileAtomic writes
+      // it 0o600 and overwrite-safe (see the helper for the threat model).
       try {
-        await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
-        await rename(tmp, input.path);
+        await writeSecretFileAtomic(input.path, JSON.stringify(state, null, 2));
       } catch (e) {
-        await rm(tmp, { force: true }).catch(() => {});
         if ((e as NodeJS.ErrnoException).code === "ENOENT") {
           throw new ToolError(
             "not_found",

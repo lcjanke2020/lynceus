@@ -1,10 +1,39 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, readFile, writeFile, rm, chmod, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerStorageTools } from "../../src/tools/storage.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
+
+// Lets a test pin the *next* randomBytes() result so the export's temp-file path
+// is predictable for one call (used to plant a colliding temp and prove the
+// exclusive-create retry). Every other call falls through to real randomBytes,
+// so the mock is transparent to all other tests.
+const cryptoMock = vi.hoisted(() => {
+  let queued: string | null = null;
+  return {
+    queueHex: (hex: string) => {
+      queued = hex;
+    },
+    nextHex: () => {
+      const v = queued;
+      queued = null;
+      return v;
+    },
+  };
+});
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomBytes: ((size: number) => {
+      const hex = cryptoMock.nextHex();
+      return hex ? Buffer.from(hex, "hex") : actual.randomBytes(size);
+    }) as typeof actual.randomBytes,
+  };
+});
 
 autoReset();
 
@@ -71,6 +100,34 @@ describe("export_storage_state", () => {
         // writeFile's `mode` alone would leave the overwritten file at 0644;
         // the temp-file + rename makes the postcondition 0600.
         expect((await stat(path)).mode & 0o777).toBe(0o600);
+      });
+    },
+  );
+
+  // Security: a pre-existing (planted/symlinked) temp at the candidate path must
+  // never receive the secret. Exclusive create (flag "wx") must reject it and the
+  // export must retry with a fresh random name.
+  it.skipIf(process.platform === "win32")(
+    "never writes the secret through a pre-existing 0644 temp file (exclusive create + EEXIST retry)",
+    async () => {
+      await withTmp(async (dir) => {
+        const { fake } = setupSession();
+        fake.respond("Runtime.evaluate", evalValue({ origin: "null", localStorage: [] }));
+        const path = join(dir, "state.json");
+        // Force the FIRST temp candidate to a known path and pre-plant it at 0644.
+        const planted = `${path}.deadbeefdeadbeef.tmp`; // 8 bytes -> 16 hex chars
+        await writeFile(planted, "attacker-placeholder", { mode: 0o644 });
+        await chmod(planted, 0o644);
+        cryptoMock.queueHex("deadbeefdeadbeef"); // first randomBytes(8) collides with `planted`
+
+        await exportState.handler({ path });
+
+        // Export landed at 0600, written via a fresh random temp (not the planted one).
+        expect((await stat(path)).mode & 0o777).toBe(0o600);
+        expect(JSON.parse(await readFile(path, "utf8"))).toHaveProperty("cookies");
+        // The planted temp was rejected, never written through: unchanged content + mode.
+        expect(await readFile(planted, "utf8")).toBe("attacker-placeholder");
+        expect((await stat(planted)).mode & 0o777).toBe(0o644);
       });
     },
   );
