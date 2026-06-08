@@ -67,9 +67,11 @@ SSE mode caveats:
   tears down client A's session).
 - **Non-loopback bind requires opt-in.** `--allow-remote` (or
   `CDP_MCP_ALLOW_REMOTE=1`) is required to bind to anything other than
-  loopback. MCP tools include `evaluate` (in-page code exec) and a
-  `screenshot path=` filesystem write; the gate makes remote exposure
-  a deliberate operator decision rather than a default.
+  loopback. MCP tools include `evaluate` (in-page code exec), a
+  `screenshot path=` filesystem write, `export_storage_state` (writes full
+  cookie values — including HttpOnly auth secrets — to a server-side file) and
+  `load_storage_state` (reads an arbitrary server-side file); the gate makes
+  remote exposure a deliberate operator decision rather than a default.
 - **Host / Origin headers are validated on loopback binds** to block
   DNS-rebinding against `127.0.0.1` / `localhost` / `[::1]`. On
   non-loopback binds the operator has already accepted exposure via
