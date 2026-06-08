@@ -159,7 +159,7 @@ The full 4-layer strategy lives in [test-eval-plan.md](./test-eval-plan.md) — 
 ```mermaid
 flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
-    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>39 tools · no real browser · npm test"]
+    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>48 tools · no real browser · npm test"]
     L3["L3 — E2E<br/>test/e2e/*.test.ts vs real headless Chromium<br/>seconds · npm run test:e2e"]
     L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter seam<br/>(Anthropic SDK + LM Studio adapter today; #50 OpenAI, #51 Vertex)<br/>first observed: $3.97 full pass (Opus-4.7-medium, default) · npm run eval"]
     L1 --> L2 --> L3 --> L4
