@@ -42,3 +42,15 @@ const fruitEcho = document.getElementById("fruit-echo")!;
 fruit.addEventListener("change", () => {
   fruitEcho.textContent = `fruit: ${fruit.value}`;
 });
+
+// Multi-select for the L3 select_option(multiple:true) coverage. Echoes the
+// full set of selected values on `change`. Null-guarded so sample-app variants
+// that omit this control still build/run.
+const fruitsMulti = document.getElementById("fruits-multi") as HTMLSelectElement | null;
+const fruitsMultiEcho = document.getElementById("fruits-multi-echo");
+if (fruitsMulti && fruitsMultiEcho) {
+  fruitsMulti.addEventListener("change", () => {
+    const picked = Array.from(fruitsMulti.selectedOptions).map((o) => o.value);
+    fruitsMultiEcho.textContent = `fruits-multi: ${picked.join(",")}`;
+  });
+}

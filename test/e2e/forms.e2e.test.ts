@@ -49,6 +49,52 @@ describe("form driving (e2e)", () => {
     expect(byIndex.selected[0]?.value).toBe("apple");
   });
 
+  // Read the live selection set of #fruits-multi straight from the DOM.
+  const selectedMulti = async (): Promise<string> =>
+    (
+      await call<{ value: string }>(tools, "evaluate", {
+        expression: `Array.from(document.getElementById("fruits-multi").selectedOptions).map((o) => o.value).join(",")`,
+        return_by_value: true,
+      })
+    ).value;
+
+  it("select_option multiple:true selects every match on a <select multiple> and dispatches change", async () => {
+    const r = await call<{ status: string; selected: Array<{ value: string }>; multiple: boolean }>(tools, "select_option", {
+      selector: "#fruits-multi",
+      option_value: ["apple", "cherry"],
+      multiple: true,
+    });
+    expect(r.status).toBe("selected");
+    expect(r.selected.map((s) => s.value)).toEqual(["apple", "cherry"]);
+    expect(r.multiple).toBe(true);
+    expect(await selectedMulti()).toBe("apple,cherry");
+
+    const echo = await call<{ html: string }>(tools, "get_element_html", { selector: "#fruits-multi-echo" });
+    expect(echo.html).toContain("apple,cherry");
+  });
+
+  it("select_option without multiple selects only the first match, even on a <select multiple>", async () => {
+    // Proves the `multiple` flag is honored (not dead code): omitting it must
+    // NOT select-all on a <select multiple>; it takes the first match only.
+    const r = await call<{ selected: Array<{ value: string }> }>(tools, "select_option", {
+      selector: "#fruits-multi",
+      option_value: ["apple", "cherry"],
+    });
+    expect(r.selected).toHaveLength(1);
+    expect(r.selected[0]?.value).toBe("apple");
+    expect(await selectedMulti()).toBe("apple");
+  });
+
+  it("select_option multiple:true with no match leaves the existing selection intact and returns not_found", async () => {
+    await call(tools, "select_option", { selector: "#fruits-multi", option_value: ["apple", "cherry"], multiple: true });
+    expect(await selectedMulti()).toBe("apple,cherry");
+
+    // A zero-match call must not deselect what was already chosen.
+    const err = await callExpectError(tools, "select_option", { selector: "#fruits-multi", option_value: "durian", multiple: true });
+    expect(err.error).toBe("not_found");
+    expect(await selectedMulti()).toBe("apple,cherry");
+  });
+
   it("check / uncheck are idempotent and dispatch change", async () => {
     expect((await call<{ status: string }>(tools, "check", { selector: "#subscribe" })).status).toBe("checked");
     expect((await call<{ status: string }>(tools, "check", { selector: "#subscribe" })).status).toBe("already-checked");

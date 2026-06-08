@@ -57,11 +57,18 @@ export function registerFormTools(server: McpServer) {
         const options = Array.from(el.options);
         const selected = [];
         if (allowMultiple) {
-          options.forEach((opt, i) => {
-            const m = isMatch(opt, i);
-            opt.selected = m;
-            if (m) selected.push({ value: opt.value, label: optionLabel(opt), index: i });
-          });
+          // Decide matches before mutating: a zero-match select_option must
+          // leave the existing selection untouched (and fall through to the
+          // not_found return below) rather than deselect every option and
+          // report an error without firing events. On a real match the
+          // non-matches are cleared, giving multi-select replace semantics.
+          const matched = options.map((opt, i) => isMatch(opt, i));
+          if (matched.some(Boolean)) {
+            options.forEach((opt, i) => {
+              opt.selected = matched[i];
+              if (matched[i]) selected.push({ value: opt.value, label: optionLabel(opt), index: i });
+            });
+          }
         } else {
           for (let i = 0; i < options.length; i++) {
             if (isMatch(options[i], i)) {
