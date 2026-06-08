@@ -17,6 +17,7 @@ import { registerInspectTools } from "../../../src/tools/inspect.js";
 import { registerConsoleTools } from "../../../src/tools/console.js";
 import { registerNetworkTools } from "../../../src/tools/network.js";
 import { registerDomTools } from "../../../src/tools/dom.js";
+import { registerFormTools } from "../../../src/tools/forms.js";
 
 export function buildToolMap(): Map<string, CapturedTool> {
   return captureTools((server: McpServer) => {
@@ -29,6 +30,7 @@ export function buildToolMap(): Map<string, CapturedTool> {
     registerConsoleTools(server);
     registerNetworkTools(server);
     registerDomTools(server);
+    registerFormTools(server);
   });
 }
 

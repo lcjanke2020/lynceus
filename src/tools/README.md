@@ -1,8 +1,8 @@
 # src/tools/
 
-**Last updated: 2026-05-19**
+**Last updated: 2026-06-07**
 
-All 39 MCP tools live here, one file per category. Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
+All 44 MCP tools live here, one file per category. Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
 ## The `registerJsonTool` pattern
 
@@ -36,7 +36,7 @@ registerJsonTool(
 - **Buffered tools** (`get_console_logs`, `get_network_requests`) paginate via `since` cursor — pass back the previous `cursor` value to get only new entries.
 - **Compact previews.** Use `previewRemoteObject()` and `truncate()` from `src/util/format.ts`. Lists capped at sensible defaults; bodies lazy-loaded via dedicated tools, never inlined in list responses.
 
-## Tool catalog (39 tools)
+## Tool catalog (44 tools)
 
 | File | Tool | One-line description |
 |---|---|---|
@@ -79,8 +79,13 @@ registerJsonTool(
 | | `type_text` | Focus + `Input.insertText`. |
 | | `press_key` | `Input.dispatchKeyEvent` keydown/keyup. |
 | | `screenshot` | Base64 PNG or save to `path`. |
+| `forms.ts` | `select_option` | Set a native `<select>` by `option_value` / `option_label` / `option_index`; dispatches input + change. Returns `status: "selected"`. |
+| | `check` | Ensure a checkbox/radio is checked (idempotent: `status: "checked" \| "already-checked"`). |
+| | `uncheck` | Ensure a checkbox/radio is unchecked (idempotent: `status: "unchecked" \| "already-unchecked"`). |
+| | `fill` | Set an input/textarea/contenteditable (LocatorSpec) to exactly a value, replacing contents; dispatches input + change. |
+| | `suggest_locator` | Rank stable LocatorSpec candidates for an element (by `node_id` or `selector`), with per-candidate match counts. |
 
-Plus `_register.ts` — the registration helper, not itself a tool.
+Plus `_register.ts` — the registration helper, not itself a tool, and `_locator_runtime.ts` — the shared in-page locator script (helpers/read/mutation) used by `dom.ts` + `forms.ts`.
 
 ## Adding a new MCP tool
 

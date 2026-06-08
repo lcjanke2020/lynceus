@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**Last updated: 2026-05-18**
+**Last updated: 2026-06-07**
 
 Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropped into this repo. Read this end-to-end before doing anything else.
 
 ## What this project is
 
-`cdp-mcp` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 39 tools across 9 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console + network, structured DOM driving. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the three production vendors (Anthropic + OpenAI + Vertex) and the LM Studio reference adapter share one runner.
+`cdp-mcp` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 44 tools across 10 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console + network, structured DOM driving, form driving. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the three production vendors (Anthropic + OpenAI + Vertex) and the LM Studio reference adapter share one runner.
 
 ## Read first
 
