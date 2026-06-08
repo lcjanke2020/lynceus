@@ -18,7 +18,8 @@ function happyTrace(): TraceEntry[] {
     ...pair("7", "navigate", { url: "http://x" }, { url: "http://x" }),
     ...pair("8", "get_cookies", { urls: ["http://x"] }, { cookies: [] }), // confirm gone
     ...pair("9", "load_storage_state", { path: PATH }, { loaded: PATH, cookies: 1, origins_restored: ["http://x"], origins_skipped: [] }),
-    ...pair("10", "evaluate", { expression: "localStorage.getItem('user_pref')" }, { value: "dark" }), // verify after load
+    ...pair("10", "get_cookies", { urls: ["http://x"] }, { cookies: [{ name: "session_token", domain: "127.0.0.1", path: "/", redacted: true, value_length: 6 }] }), // auth cookie back (value redacted)
+    ...pair("11", "evaluate", { expression: "localStorage.getItem('user_pref')" }, { value: "dark" }), // user_pref back
   ];
 }
 
@@ -86,10 +87,29 @@ describe("session-resume oracle", () => {
     // RESUME_SYSTEM tells the agent to close_session when done, so the real run is
     // close → relaunch → load → verify → close(cleanup). The trailing close must
     // not invalidate the reset.
-    const trace: TraceEntry[] = [...happyTrace(), ...pair("11", "close_session", {}, { closed: true })];
+    const trace: TraceEntry[] = [...happyTrace(), ...pair("12", "close_session", {}, { closed: true })];
     const out = sessionResume.oracle(trace, GOOD_ANSWER);
     expect(out.mechanic).toBe(1);
     expect(out.correctness).toBe(1);
+  });
+
+  it("fails mechanic when the cookie is not verified via get_cookies after load (regression: Copilot PR #17 r4)", () => {
+    // All correct EXCEPT the post-load verification is an evaluate only — never
+    // confirms (or exercises) the get_cookies / session_token round-trip.
+    const trace: TraceEntry[] = [
+      ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),
+      ...pair("2", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("3", "set_cookies", { cookies: [{ name: "session_token", value: "s", url: "http://x" }] }, { set: 1 }),
+      ...pair("4", "export_storage_state", { path: PATH }, { saved: PATH, cookies: 1, origins: 1 }),
+      ...pair("5", "close_session", {}, { closed: true }),
+      ...pair("6", "launch_chrome", { headless: true }, { targetId: "T2" }),
+      ...pair("7", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("8", "load_storage_state", { path: PATH }, { loaded: PATH, cookies: 1, origins_restored: ["http://x"], origins_skipped: [] }),
+      ...pair("9", "evaluate", { expression: "localStorage.getItem('user_pref')" }, { value: "dark" }),
+    ];
+    const out = sessionResume.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(0);
+    expect(out.notes).toMatch(/session_token cookie is back/);
   });
 
   it("is xfail-tagged (re-hedged after PR #17 tightened the localStorage-restore check)", () => {

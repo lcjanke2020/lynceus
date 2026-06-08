@@ -99,13 +99,19 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // — the scenario's whole point is "confirm it resolves to exactly one element".
   // A structural input match alone (ignoring the result) would let count:0/2 pass
   // (codex, PR #17).
+  // A "robust" locator is a SEMANTIC one — suggest_locator ranks `by:"css"` last
+  // precisely because it's the brittle fallback, and this scenario exists to
+  // reward picking a semantic locator over it. So both verifying and reporting
+  // must be of a non-css candidate; an agent that validates/reports `#go` (the
+  // trap) must not pass (Copilot, PR #17 round 4).
+  const isSemantic = (by?: string): boolean => by !== undefined && by !== "css";
   const verified = c.some((x) => {
     if (!(x.tool === "locate" || x.tool === "wait_for") || x.isError) return false;
     const o = out(x);
     // locate exposes top-level `count`; wait_for nests it under `result`
     // (src/tools/dom.ts) — read the right shape per tool (codex, PR #17 round 2).
     const cnt = x.tool === "wait_for" ? Number((o.result as { count?: unknown } | undefined)?.count) : Number(o.count);
-    return cnt === 1 && candidates.some((k) => locatorMatchesInput(k.locator, x.input));
+    return cnt === 1 && candidates.some((k) => isSemantic(k.locator.by) && locatorMatchesInput(k.locator, x.input));
   });
   const noEvalMutation = !mutatedViaEvaluate(c);
   const mechanic: 0 | 1 = calledSuggest && verified && noEvalMutation ? 1 : 0;
@@ -113,17 +119,22 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // CORRECTNESS — the recommended candidate is unambiguous and the agent
   // reports a genuinely unambiguous candidate. Accept ANY unambiguous candidate
   // (role+name OR text both qualify for the Go button) — don't force by:role.
-  const unambig = candidates.filter((k) => k.match_count === 1 && k.resolves_to_target);
+  const unambig = candidates.filter((k) => k.match_count === 1 && k.resolves_to_target && isSemantic(k.locator.by));
   const recommendedUnambig =
     typeof recommended === "number" &&
     candidates[recommended]?.match_count === 1 &&
-    candidates[recommended]?.resolves_to_target === true;
+    candidates[recommended]?.resolves_to_target === true &&
+    isSemantic(candidates[recommended]?.locator?.by);
   const faReportsUnambig = unambig.some((k) => locatorAppearsInText(k.locator, finalAnswer));
-  const correctness: 0 | 1 = calledSuggest && recommendedUnambig && faReportsUnambig && noEvalMutation ? 1 : 0;
+  // correctness also requires actually validating a semantic locator (`verified`),
+  // so verifying only the css fallback can't pass even if the answer's text
+  // incidentally matches a semantic candidate.
+  const correctness: 0 | 1 =
+    calledSuggest && verified && recommendedUnambig && faReportsUnambig && noEvalMutation ? 1 : 0;
 
   const why: string[] = [];
   if (!calledSuggest) why.push("mechanic: never called suggest_locator");
-  if (!verified) why.push("mechanic: did not verify a candidate resolves to exactly one element via locate/wait_for");
+  if (!verified) why.push("mechanic: did not verify a SEMANTIC candidate (not the css fallback) resolves to exactly one element via locate/wait_for");
   if (!noEvalMutation) why.push("mechanic/correctness: mutated page state via raw evaluate");
   if (!recommendedUnambig) why.push("correctness: suggest_locator's recommended candidate was not unambiguous");
   if (!faReportsUnambig) why.push("correctness: final answer did not report an unambiguous locator");

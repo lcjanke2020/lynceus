@@ -48,9 +48,20 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // Use the LAST successful load (the agent may retry after a wrong path) so the
   // verify-after check is relative to the load that mattered (Copilot, PR #17).
   const loadIdx = c.map((x) => x.tool === "load_storage_state" && !x.isError).lastIndexOf(true);
-  const verifyAfterLoad =
+  // Verify the AUTH COOKIE actually came back after the final load, via
+  // get_cookies — which also makes the scenario exercise get_cookies (a tool it
+  // claims to cover). get_cookies redacts session_token's value but still lists
+  // it by name (Copilot, PR #17 round 4). The localStorage half is already proven
+  // by origins_restored (above) + the answer naming user_pref=dark (below).
+  const cookieBackAfterLoad =
     loadIdx >= 0 &&
-    c.slice(loadIdx + 1).some((x) => ["get_cookies", "get_form_state", "evaluate"].includes(x.tool) && !x.isError);
+    c.slice(loadIdx + 1).some(
+      (x) =>
+        x.tool === "get_cookies" &&
+        !x.isError &&
+        Array.isArray(out(x).cookies) &&
+        (out(x).cookies as Array<{ name?: unknown }>).some((k) => k.name === "session_token"),
+    );
   // A reset is ANY close_session BEFORE the final load that has a relaunch
   // between it and the load. Keying on the LAST close was wrong: RESUME_SYSTEM
   // tells the agent to "close_session when done", so a correct run ends
@@ -71,7 +82,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // localStorage.getItem / document.cookie reads are not flagged.
   const noEvalMutation = !mutatedViaEvaluate(c);
   const mechanic: 0 | 1 =
-    !!exported && !!loaded && realReset && exportHadState && loadRestored && verifyAfterLoad && noEvalMutation
+    !!exported && !!loaded && realReset && exportHadState && loadRestored && cookieBackAfterLoad && noEvalMutation
       ? 1
       : 0;
 
@@ -90,7 +101,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   if (!realReset) why.push("mechanic: no genuine reset before restore (need close_session → relaunch → load in order)");
   if (!loaded) why.push("mechanic: never called load_storage_state");
   if (!loadRestored) why.push("mechanic: load_storage_state did not restore the origin's localStorage (origins_restored empty)");
-  if (!verifyAfterLoad) why.push("mechanic: did not verify state after restoring");
+  if (!cookieBackAfterLoad) why.push("mechanic: did not verify the session_token cookie is back via get_cookies after restoring");
   if (!noEvalMutation) why.push("mechanic: seeded/restored state via raw evaluate instead of set_cookies/load_storage_state");
   if (!faSuccess) why.push("correctness: final answer did not affirm resume with user_pref=dark");
 

@@ -59,7 +59,7 @@ describe("robust-locator oracle", () => {
     const trace: TraceEntry[] = [...base(), ...pair("3", "suggest_locator", { selector: "#go" }, SUGGEST_OUT)];
     const out = robustLocator.oracle(trace, 'role=button name="Go"');
     expect(out.mechanic).toBe(0);
-    expect(out.notes).toMatch(/did not verify a candidate resolves to exactly one element/);
+    expect(out.notes).toMatch(/did not verify a SEMANTIC candidate/);
   });
 
   it("fails mechanic when the verifying locate resolves to more than one element (regression: codex PR #17)", () => {
@@ -82,6 +82,17 @@ describe("robust-locator oracle", () => {
     const out = robustLocator.oracle(trace, 'role=button name="Go" — exactly one match.');
     expect(out.mechanic).toBe(1);
     expect(out.correctness).toBe(1);
+  });
+
+  it("does not credit verifying/reporting only the brittle CSS fallback #go (regression: Copilot PR #17 r4)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "suggest_locator", { selector: "#go" }, SUGGEST_OUT),
+      ...pair("4", "locate", { by: "css", css: "#go" }, { count: 1, elements: [{}] }),
+    ];
+    const out = robustLocator.oracle(trace, "The most robust locator is the CSS selector #go.");
+    expect(out.mechanic).toBe(0); // only verified the css fallback, not a semantic locator
+    expect(out.correctness).toBe(0);
   });
 
   it("matches a test_id candidate verified via the camelCase testId alias (regression: Copilot PR #17 r3)", () => {
