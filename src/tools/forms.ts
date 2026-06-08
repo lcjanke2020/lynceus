@@ -145,7 +145,7 @@ export function registerFormTools(server: McpServer) {
         throw new ToolError("missing_arg", "node_id or selector required");
       }
       let value: SuggestResult | undefined;
-      if (input.selector) {
+      if (input.selector && input.node_id === undefined) {
         const expression = `(() => {
           ${locatorHelpersScript()}${suggestDefScript()}
           let el;
