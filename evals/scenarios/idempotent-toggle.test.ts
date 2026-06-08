@@ -84,6 +84,20 @@ describe("idempotent-toggle oracle", () => {
     expect(out.notes).toMatch(/read-back missing/);
   });
 
+  it("credits a correct run whose answer reports states as yes/no (offish/onish symmetry — claude PR #17 r6)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "check", { selector: "#subscribe" }, { status: "already-checked", checked: true, count: 1 }),
+      ...pair("4", "uncheck", { selector: "#beta" }, { status: "unchecked", checked: false, count: 1 }),
+      ...pair("5", "check", { role: "radio", name: "Pro" }, { status: "checked", checked: true, count: 1 }),
+      ...pair("6", "get_form_state", {}, END_STATE),
+    ];
+    // End state is correct; the answer reports it as yes/no rather than on/off.
+    const out = idempotentToggle.oracle(trace, "Email updates: yes, Beta features: no, plan: Pro.");
+    expect(out.mechanic).toBe(1);
+    expect(out.correctness).toBe(1);
+  });
+
   it("fails mechanic when uncheck is never used (beta left on)", () => {
     const trace: TraceEntry[] = [
       ...base(),

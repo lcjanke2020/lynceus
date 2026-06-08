@@ -51,7 +51,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // The prompt asks to "report the final state of all three", so require the
   // answer to name the fields AND an ON-ish and an OFF-ish state (Copilot, r5).
   const onish = /\b(on|checked|enabled|active|true|yes|selected)\b/.test(fa);
-  const offish = /\b(off|unchecked|disabled|inactive|false|cleared|unselected)\b/.test(fa);
+  const offish = /\b(off|unchecked|disabled|inactive|false|cleared|unselected|no|none)\b/.test(fa);
   const faOk =
     /(email|subscrib|updates)/.test(fa) && /beta/.test(fa) && /pro/.test(fa) && onish && offish;
   const correctness: 0 | 1 = stateOk && faOk && noEvalMutation ? 1 : 0;
