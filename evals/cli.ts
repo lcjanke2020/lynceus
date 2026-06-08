@@ -160,7 +160,7 @@ Env:
   EVAL_BUDGET_USD         override the default $100 hard cap.
   EVAL_MODEL_OVERRIDE     swap the pinned model. One of:
                           ${SUPPORTED_MODELS.map((m) => `'${m}'`).join(", ")}.
-                          Unset uses the default (Opus 4.7 with adaptive
+                          Unset uses the default (Opus 4.8 with adaptive
                           medium-effort thinking). Pricing is resolved
                           via PRICING_CATALOG[vendor][model] through
                           pricingFor() so cost estimates stay correct
@@ -172,11 +172,11 @@ Env:
   EVAL_REASONING_LEVEL    one of 'none', 'low', 'medium', 'high', 'xhigh',
                           'max'. On budget-style models (Sonnet 4.6) each
                           tier picks a default budget from TIER_BUDGET_TOKENS.
-                          On adaptive-style models (Opus 4.7) the tier maps
+                          On adaptive-style models (Opus 4.8) the tier maps
                           to Anthropic's 'effort' parameter (low through max
                           all valid). The harness pins display='summarized'
                           for adaptive so the trace sidecar captures real
-                          thinking content (Opus 4.7 defaults to 'omitted').
+                          thinking content (Opus 4.8 defaults to 'omitted').
   EVAL_REASONING_BUDGET   override the per-request thinking budget
                           (positive integer ≥ 1024). Used alone, the
                           level is tagged 'custom'.

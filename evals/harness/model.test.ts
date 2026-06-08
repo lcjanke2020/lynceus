@@ -537,12 +537,12 @@ describe("readModelId", () => {
   });
 
   it("returns the default model when EVAL_MODEL_OVERRIDE is unset", () => {
-    expect(readModelId()).toBe("claude-opus-4-7");
+    expect(readModelId()).toBe("claude-opus-4-8");
   });
 
   it("returns the default model when EVAL_MODEL_OVERRIDE is empty", () => {
     process.env.EVAL_MODEL_OVERRIDE = "";
-    expect(readModelId()).toBe("claude-opus-4-7");
+    expect(readModelId()).toBe("claude-opus-4-8");
   });
 
   it("accepts every supported model id", () => {
@@ -581,6 +581,14 @@ describe("PRICING_CATALOG", () => {
     );
   });
 
+  it("Opus 4.8 ships on the same rate card as Opus 4.7", () => {
+    // 4.8 reuses 4.7's pricing (input $5 / output $25, cache 1.25×/0.1×).
+    // Pin equality so a typo in either row is caught at L1.
+    expect(PRICING_CATALOG.anthropic["claude-opus-4-8"]).toEqual(
+      PRICING_CATALOG.anthropic["claude-opus-4-7"],
+    );
+  });
+
   it("cache-write is 1.25× input and cache-read is 0.1× input per Anthropic's documented multipliers", () => {
     for (const model of SUPPORTED_MODELS) {
       const p = PRICING_CATALOG.anthropic[model]!;
@@ -613,11 +621,19 @@ describe("SUPPORTS_TEMPERATURE", () => {
     expect(mod.SUPPORTS_TEMPERATURE).toBe(true);
   });
 
-  it("is false for Opus 4.7 (default model — server-side sampling, rejects temperature param)", async () => {
+  it("is false for Opus 4.7 (via override — server-side sampling, rejects temperature param)", async () => {
     vi.resetModules();
-    delete process.env.EVAL_MODEL_OVERRIDE;
+    process.env.EVAL_MODEL_OVERRIDE = "claude-opus-4-7";
     const mod = await import("./model.js");
     expect(mod.SUPPORTS_TEMPERATURE).toBe(false);
+  });
+
+  it("is false for Opus 4.8 (same surface as 4.7 — sampling params removed)", async () => {
+    vi.resetModules();
+    process.env.EVAL_MODEL_OVERRIDE = "claude-opus-4-8";
+    const mod = await import("./model.js");
+    expect(mod.SUPPORTS_TEMPERATURE).toBe(false);
+    expect(mod.THINKING_STYLE).toBe("adaptive");
   });
 });
 
@@ -642,8 +658,8 @@ describe("PRICING_PER_MTOK resolves via EVAL_MODEL_OVERRIDE at module load", () 
     vi.resetModules();
     delete process.env.EVAL_MODEL_OVERRIDE;
     const mod = await import("./model.js");
-    expect(mod.MODEL_ID).toBe("claude-opus-4-7");
-    expect(mod.PRICING_PER_MTOK).toEqual(mod.PRICING_CATALOG.anthropic["claude-opus-4-7"]);
+    expect(mod.MODEL_ID).toBe("claude-opus-4-8");
+    expect(mod.PRICING_PER_MTOK).toEqual(mod.PRICING_CATALOG.anthropic["claude-opus-4-8"]);
   });
 });
 
@@ -663,7 +679,7 @@ describe("resolveReasoning — LEVEL × BUDGET truth table", () => {
   });
 
   it("LEVEL unset + BUDGET unset → tier-medium on the default (adaptive) model", () => {
-    // The default model (Opus 4.7) is adaptive-style, so the "both unset"
+    // The default model (Opus 4.8) is adaptive-style, so the "both unset"
     // branch picks medium-effort thinking rather than off. Adaptive vs
     // budget branching of this default is covered separately below via
     // vi.resetModules + EVAL_MODEL_OVERRIDE.
@@ -735,7 +751,7 @@ describe("resolveReasoning per-thinking-style defaults", () => {
     vi.resetModules();
   });
 
-  it("adaptive-style default (Opus 4.7) → medium-effort tier when both env vars unset", async () => {
+  it("adaptive-style default (Opus 4.8) → medium-effort tier when both env vars unset", async () => {
     vi.resetModules();
     delete process.env.EVAL_MODEL_OVERRIDE;
     const mod = await import("./model.js");

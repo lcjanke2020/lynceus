@@ -146,8 +146,8 @@ confinement, or Bubblewrap.
 
 ```sh
 export ANTHROPIC_API_KEY=...
-npm run eval:quick                 # 1 scenario × 1 trial (~$0.50–2 at default Opus-4.7-medium; ~$0.05 with EVAL_MODEL_OVERRIDE=claude-sonnet-4-6)
-npm run eval                       # all scenarios × 3 trials (first observed ~$4 at default Opus-4.7-medium on a reference host — one data point, not the steady-state band)
+npm run eval:quick                 # 1 scenario × 1 trial (~$0.50–2 at default Opus-4.8-medium; ~$0.05 with EVAL_MODEL_OVERRIDE=claude-sonnet-4-6)
+npm run eval                       # all scenarios × 3 trials (~$4 full pass — first observed on Opus-4.7-medium, the prior default; 4.8 shares its rate card)
 npm run eval -- --scenarios=compute-step --trials=1
 ```
 
@@ -165,7 +165,7 @@ produces a natural-language final answer. NDJSON traces land under
 exercise the debugger workflow under test) + **correctness** (did the
 final answer name the bug) — plus efficiency ratio and recovery count.
 
-**Default model**: `claude-opus-4-7` with adaptive thinking at
+**Default model**: `claude-opus-4-8` with adaptive thinking at
 `effort=medium` (set in `evals/harness/model.ts`). Adaptive-style models
 (Opus 4.7+) default to medium-effort thinking when no env override is
 set; budget-style models (Sonnet 4.6, selectable via
