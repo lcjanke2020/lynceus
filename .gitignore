@@ -27,3 +27,8 @@ evals/sample-app-variants/*/node_modules/
 # preserved via .gitkeep so the drop spot exists on every clone.
 /review_feedback/*
 !/review_feedback/.gitkeep
+
+# Local convenience symlink into the per-machine Syncthing share (LEO-254) —
+# environment-specific; must never be committed (it would be a broken symlink in
+# any other clone). Eval-run archives live under <share>/cdp-mcp/, not in-repo.
+/SyncAcrossNetwork

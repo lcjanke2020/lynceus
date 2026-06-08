@@ -5,14 +5,12 @@
 // the set of supported scenarios obvious in code review, and lets each
 // scenario's variant directory be statically referenced.
 //
-// Variant-build status: `compute-step` and `adversarial-out-of-order`
-// both use the canonical examples/sample-app/dist and work as soon as
-// `npm run sample:build` has run. The other 6 reference
-// evals/sample-app-variants/<name>/dist directories that don't ship in
-// this PR — running them via `npm run eval --scenarios=<name>` will
-// fail-fast with a clear error until the variants land in a follow-up
-// commit. `npm run eval:quick` only runs compute-step so it stays
-// green.
+// Variant-build status: all scenarios are runnable once `npm run sample:build`
+// has run. Five use the canonical examples/sample-app/dist (compute-step,
+// adversarial-out-of-order, form-drive, robust-locator, cookie-redaction); the
+// rest reference evals/sample-app-variants/<name>/dist, materialized by
+// scripts/build-variants.mjs. `npm run eval:quick` only runs compute-step so the
+// per-PR gate stays green/cheap.
 
 import type { Scenario } from "../harness/types.js";
 import { computeStep } from "./compute-step.js";
@@ -23,6 +21,13 @@ import { networkBug } from "./network-bug.js";
 import { conditionalBp } from "./conditional-bp.js";
 import { workerBug } from "./worker-bug.js";
 import { deepSourceMap } from "./deep-source-map.js";
+// Issue #12 driving + session-portability scenarios.
+import { formDrive } from "./form-drive.js";
+import { clearingFill } from "./clearing-fill.js";
+import { idempotentToggle } from "./idempotent-toggle.js";
+import { robustLocator } from "./robust-locator.js";
+import { sessionResume } from "./session-resume.js";
+import { cookieRedaction } from "./cookie-redaction.js";
 
 export const SCENARIOS: Record<string, Scenario> = {
   [computeStep.name]: computeStep,
@@ -33,6 +38,13 @@ export const SCENARIOS: Record<string, Scenario> = {
   [conditionalBp.name]: conditionalBp,
   [workerBug.name]: workerBug,
   [deepSourceMap.name]: deepSourceMap,
+  // Issue #12 driving + session-portability scenarios.
+  [formDrive.name]: formDrive,
+  [clearingFill.name]: clearingFill,
+  [idempotentToggle.name]: idempotentToggle,
+  [robustLocator.name]: robustLocator,
+  [sessionResume.name]: sessionResume,
+  [cookieRedaction.name]: cookieRedaction,
 };
 
 export function lookupScenario(name: string): Scenario {
