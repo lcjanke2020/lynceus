@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, chmod, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerStorageTools } from "../../src/tools/storage.js";
@@ -54,6 +54,26 @@ describe("export_storage_state", () => {
       expect(state.origins).toEqual([{ origin: "https://example.com", localStorage: [{ name: "k", value: "v" }] }]);
     });
   });
+
+  // POSIX perms only: the unit job also runs on windows-latest, where file
+  // modes aren't meaningful and Node can't chmod to 0600.
+  it.skipIf(process.platform === "win32")(
+    "writes the export 0600 even when overwriting an existing 0644 file",
+    async () => {
+      await withTmp(async (dir) => {
+        const { fake } = setupSession();
+        fake.respond("Runtime.evaluate", evalValue({ origin: "null", localStorage: [] }));
+        const path = join(dir, "state.json");
+        // Pre-create a world-readable destination, forced to 0644 regardless of umask.
+        await writeFile(path, "pre-existing", { mode: 0o644 });
+        await chmod(path, 0o644);
+        await exportState.handler({ path });
+        // writeFile's `mode` alone would leave the overwritten file at 0644;
+        // the temp-file + rename makes the postcondition 0600.
+        expect((await stat(path)).mode & 0o777).toBe(0o600);
+      });
+    },
+  );
 
   it("emits no origins entry for an about:blank page (origin 'null')", async () => {
     await withTmp(async (dir) => {

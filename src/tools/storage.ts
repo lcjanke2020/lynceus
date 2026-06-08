@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename, rm } from "node:fs/promises";
 import { requireSession } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
@@ -91,12 +91,18 @@ export function registerStorageTools(server: McpServer) {
           ? [{ origin: probed.origin, localStorage: probed.localStorage }]
           : [];
       const state: StorageState = { cookies: cookies.map(cdpCookieToState), origins };
-      // 0o600: the file holds full cookie values (incl. HttpOnly auth/session
-      // tokens) — the description says "treat it as a secret", so don't write it
-      // world-readable on a shared box.
+      // The file holds full cookie values (incl. HttpOnly auth/session tokens) —
+      // the description says "treat it as a secret". Write a fresh temp file at
+      // 0o600 and atomically rename it over the destination: this guarantees 0o600
+      // even when overwriting an existing 0644 file (Node's writeFile `mode` only
+      // applies to newly-created files), and leaves no window where the secret
+      // sits world-readable.
+      const tmp = `${input.path}.${process.pid}.tmp`;
       try {
-        await writeFile(input.path, JSON.stringify(state, null, 2), { mode: 0o600 });
+        await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+        await rename(tmp, input.path);
       } catch (e) {
+        await rm(tmp, { force: true }).catch(() => {});
         if ((e as NodeJS.ErrnoException).code === "ENOENT") {
           throw new ToolError(
             "not_found",
