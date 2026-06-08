@@ -23,6 +23,13 @@ import { networkBug } from "./network-bug.js";
 import { conditionalBp } from "./conditional-bp.js";
 import { workerBug } from "./worker-bug.js";
 import { deepSourceMap } from "./deep-source-map.js";
+// Issue #12 driving + session-portability scenarios.
+import { formDrive } from "./form-drive.js";
+import { clearingFill } from "./clearing-fill.js";
+import { idempotentToggle } from "./idempotent-toggle.js";
+import { robustLocator } from "./robust-locator.js";
+import { sessionResume } from "./session-resume.js";
+import { cookieRedaction } from "./cookie-redaction.js";
 
 export const SCENARIOS: Record<string, Scenario> = {
   [computeStep.name]: computeStep,
@@ -33,6 +40,13 @@ export const SCENARIOS: Record<string, Scenario> = {
   [conditionalBp.name]: conditionalBp,
   [workerBug.name]: workerBug,
   [deepSourceMap.name]: deepSourceMap,
+  // Issue #12 driving + session-portability scenarios.
+  [formDrive.name]: formDrive,
+  [clearingFill.name]: clearingFill,
+  [idempotentToggle.name]: idempotentToggle,
+  [robustLocator.name]: robustLocator,
+  [sessionResume.name]: sessionResume,
+  [cookieRedaction.name]: cookieRedaction,
 };
 
 export function lookupScenario(name: string): Scenario {

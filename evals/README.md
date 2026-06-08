@@ -52,9 +52,26 @@ parseable schema.
 
 ## Scenarios present
 
-All 8 scenarios are registered and runnable: `adversarial-out-of-order`, `compute-step`, `conditional-bp`, `console-error`, `deep-source-map`, `event-binding`, `network-bug`, `worker-bug`. `compute-step` is the canonical shipped scenario (root [README](../README.md) demo + `npm run eval:quick` target); the other seven are exercised by `npm run eval`.
+All 14 scenarios are registered and runnable. Eight are **debugger** scenarios — `adversarial-out-of-order`, `compute-step`, `conditional-bp`, `console-error`, `deep-source-map`, `event-binding`, `network-bug`, `worker-bug` — exercising the breakpoint/pause/inspect/console/network/worker surfaces. Six are **driving + session-portability** scenarios (issue #12, see below). `compute-step` is the canonical shipped scenario (root [README](../README.md) demo + `npm run eval:quick` target); the rest are exercised by `npm run eval`.
 
-Two scenarios use the stock app: `compute-step` and `adversarial-out-of-order` set `variantDir` to `examples/sample-app/dist`. The other six have per-scenario forks under `sample-app-variants/<name>/` that `npm run sample:build` materializes via `scripts/build-variants.mjs`.
+Stock-app scenarios set `variantDir` to `examples/sample-app/dist`: `compute-step`, `adversarial-out-of-order`, `form-drive`, `robust-locator`, `cookie-redaction`. The others have per-scenario forks under `sample-app-variants/<name>/` that `npm run sample:build` materializes via `scripts/build-variants.mjs` — including two added for issue #12: `prefilled-form` (a preferences form with a pre-filled input, two pre-checked boxes, and a plan radio group — serves `clearing-fill` + `idempotent-toggle`) and `stateful-app` (writes `localStorage["user_pref"]` on load — serves `session-resume`).
+
+### Driving + session-portability scenarios (issue #12)
+
+These exercise the form-driving and session-portability tools at the **agent** level — does an LLM, given a natural task, reach for the right tool and reach the right end state (the tools' mechanics are already covered by L2 `test/tools/{forms,storage}.test.ts` + L3 `test/e2e/{forms,storage}.e2e.test.ts`). Unlike the debugger scenarios, the agent is **not** finding a bug, so each sets a `systemPromptOverride` from `scenarios/_driving-prompts.ts` (`DRIVING_SYSTEM`, or `RESUME_SYSTEM` for the session flow) — the runner's default prompt is a debugger test plan and would misdirect a driving task. The oracles read tool-result statuses + a `get_form_state`/`get_cookies` read-back (no LLM judge), and forbid solving by mutating state through raw `evaluate` (the `mutatedViaEvaluate` guard — the dedicated driver tools are what's under test).
+
+| Scenario | Variant | Tools covered | The trap it catches |
+|---|---|---|---|
+| `form-drive` | stock | `fill`, `select_option` (single by label, multi by index), `check` | typing into a `<select>`, clicking the checkbox |
+| `clearing-fill` | `prefilled-form` | `fill` (replace) | `type_text` appends onto the old value |
+| `idempotent-toggle` | `prefilled-form` | `check` (idempotent + on a radio), `uncheck` | blindly clicking a pre-checked box toggles it off |
+| `robust-locator` | stock | `suggest_locator` | settling for a brittle CSS locator over an unambiguous semantic one |
+| `session-resume` | `stateful-app` | `export_storage_state`, `load_storage_state`, `set_cookies`, `get_cookies` | "verifying" a resume without a real `close_session` + relaunch |
+| `cookie-redaction` | stock | `set_cookies`, `get_cookies` (redaction) | mis-classifying a `session_*` cookie as safe to log |
+
+Coverage spans all nine issue-#12 tools. `session-resume` ships `xfailCorrectness: true` initially (the close/relaunch multi-phase flow is the most likely to be flaky on the first real run — flip to `false` once the baseline is stable, same playbook as `adversarial-out-of-order`). **Known L4 gap:** `load_storage_state`'s `origins_skipped` (multi-origin localStorage) path is not L4-exercised — it needs a two-origin fixture; it stays covered at L2/L3.
+
+**Cost gating:** `npm run eval:quick` still runs only `compute-step` (the per-PR gate stays fast/cheap). The driving scenarios run nightly via `npm run eval` — they're at temperature 1 (thinking on) so non-deterministic, and `session-resume` is the most expensive (close/relaunch). `cookie-redaction` is the cheapest/most-deterministic and is the natural candidate if a storage-path scenario is later promoted into the per-PR gate.
 
 ## Eval loop
 

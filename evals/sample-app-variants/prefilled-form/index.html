@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Preferences</title>
+    <style>
+      body { font-family: sans-serif; padding: 2rem; max-width: 40rem; margin: 0 auto; }
+      label { display: block; margin-top: 0.75rem; }
+      input[type="text"] { padding: 0.5rem; font-family: monospace; }
+      fieldset { margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Account preferences</h1>
+
+    <!-- Pre-filled text field — exercises clearing-fill (replace, not append). -->
+    <label for="display-name">Display name</label>
+    <input type="text" id="display-name" name="display-name" value="Old Draft Name" />
+
+    <!-- Pre-checked boxes — exercise idempotent check + uncheck. -->
+    <label><input type="checkbox" id="subscribe" name="subscribe" checked /> Email updates</label>
+    <label><input type="checkbox" id="beta" name="beta" checked /> Beta features</label>
+
+    <!-- Radio group defaulting to "free" — exercises check on a radio. -->
+    <fieldset>
+      <legend>Plan</legend>
+      <label><input type="radio" name="plan" value="free" checked /> Free</label>
+      <label><input type="radio" name="plan" value="pro" /> Pro</label>
+    </fieldset>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
