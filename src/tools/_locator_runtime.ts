@@ -218,9 +218,11 @@ export function locatorReadScript(): string {
 /**
  * Mutation helpers for the form-driving tools. Compose after
  * `locatorHelpersScript()`:
- *   - `resolveOne(spec)` → `{ ok, el?, count, visible_count, error? }`, preferring
- *     visible matches (the same visible-first bias `locate` reports) and picking
- *     the first match.
+ *   - `resolveOne(spec)` → `{ ok, el?, count, visible_count, error?, code? }`,
+ *     preferring visible matches (the same visible-first bias `locate` reports)
+ *     and picking the first match. On failure `code` distinguishes an
+ *     invalid/unsupported locator (`invalid_locator`, mirroring locate/wait_for)
+ *     from a valid locator that matched nothing (`not_found`).
  *   - `fireEvents(el, types)` → dispatch bubbling events (e.g. `input`/`change`)
  *     so app frameworks observe a programmatic mutation.
  */
@@ -228,11 +230,15 @@ export function mutationHelpersScript(): string {
   return String.raw`
     const resolveOne = (spec) => {
       const found = findElements(spec);
-      if (!found.ok) return { ok: false, error: found.error };
+      // findElements only returns !ok for an invalid/unsupported locator (bad CSS
+      // selector or unknown strategy) — the same condition locate/wait_for report
+      // as invalid_locator. A valid locator that simply matches nothing is the
+      // distinct not_found case below.
+      if (!found.ok) return { ok: false, error: found.error, code: "invalid_locator" };
       const all = found.elements;
       const visible = all.filter(isVisible);
       const pick = visible.length ? visible : all;
-      if (pick.length === 0) return { ok: false, error: "no element matches locator" };
+      if (pick.length === 0) return { ok: false, error: "no element matches locator", code: "not_found" };
       return { ok: true, el: pick[0], count: all.length, visible_count: visible.length };
     };
     const fireEvents = (el, types) => {

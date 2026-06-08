@@ -96,8 +96,20 @@ export function registerFormTools(server: McpServer) {
     async (input: LocatorSpec & { value: string; session_id?: string }) => {
       const locator = normalizeLocator(input);
       const body = String.raw`
-        const fillable = ("value" in el) || el.isContentEditable;
-        if (!fillable) return { ok: false, error: "element is not fillable (no value property and not contentEditable)", code: "wrong_element" };
+        // fill writes free text, so restrict to text-like controls. Many other
+        // elements expose a "value" property whose meaning is not "the text the
+        // user sees" — <select> (the selected option), checkbox/radio (the
+        // submitted value, not the checked state), and button/submit/reset/file/
+        // image/range/color inputs — so editing them via fill would be surprising.
+        // Those get a structured wrong_element; use select_option / check / uncheck.
+        const NON_TEXT_INPUT_TYPES = ["button", "submit", "reset", "checkbox", "radio", "file", "image", "range", "color"];
+        const isTextInput = el instanceof HTMLInputElement && !NON_TEXT_INPUT_TYPES.includes((el.getAttribute("type") || "text").toLowerCase());
+        const fillable = el.isContentEditable || el instanceof HTMLTextAreaElement || isTextInput;
+        if (!fillable) {
+          const tag = el.tagName.toLowerCase();
+          const detail = el instanceof HTMLInputElement ? "<input type=" + (el.getAttribute("type") || "text") + ">" : "<" + tag + ">";
+          return { ok: false, error: "element is not fillable — fill targets a text <input>, <textarea>, or contenteditable, got " + detail, code: "wrong_element" };
+        }
         const value = ${JSON.stringify(input.value)};
         el.focus();
         if (!("value" in el) && el.isContentEditable) { el.textContent = value; }
@@ -129,7 +141,12 @@ export function registerFormTools(server: McpServer) {
       if (input.selector) {
         const expression = `(() => {
           ${locatorHelpersScript()}${suggestDefScript()}
-          const el = document.querySelector(${JSON.stringify(input.selector)});
+          let el;
+          try {
+            el = document.querySelector(${JSON.stringify(input.selector)});
+          } catch (e) {
+            return { ok: false, error: "Invalid CSS selector " + ${JSON.stringify(input.selector)} + ": " + e.message, code: "invalid_selector" };
+          }
           if (!el) return { ok: false, error: "no element matches selector", code: "not_found" };
           return suggest(el);
         })()`;
@@ -196,7 +213,7 @@ async function runMutation(locator: LocatorSpec, body: string, sessionId?: strin
     const spec = ${JSON.stringify(locator)};
     ${locatorHelpersScript()}${mutationHelpersScript()}
     const resolved = resolveOne(spec);
-    if (!resolved.ok) return { ok: false, error: resolved.error, code: "not_found" };
+    if (!resolved.ok) return { ok: false, error: resolved.error, code: resolved.code ?? "not_found" };
     const el = resolved.el;
     const count = resolved.count;
     ${body}

@@ -132,6 +132,12 @@ describe("fill", () => {
     fake.respond("Runtime.evaluate", evalValue({ ok: false, error: "not fillable", code: "wrong_element" }));
     expect(parseErrorEnvelope(await fill.handler({ selector: "#div", value: "x" }))?.error).toBe("wrong_element");
   });
+
+  it("surfaces invalid_locator (not not_found) for an unresolvable locator", async () => {
+    const { fake } = setupSession();
+    fake.respond("Runtime.evaluate", evalValue({ ok: false, error: "Invalid CSS selector input[", code: "invalid_locator" }));
+    expect(parseErrorEnvelope(await fill.handler({ selector: "input[", value: "x" }))?.error).toBe("invalid_locator");
+  });
 });
 
 describe("suggest_locator", () => {
@@ -174,5 +180,11 @@ describe("suggest_locator", () => {
     const { fake } = setupSession();
     fake.respond("Runtime.evaluate", evalValue({ ok: false, error: "no element matches selector", code: "not_found" }));
     expect(parseErrorEnvelope(await suggest.handler({ selector: "#nope" }))?.error).toBe("not_found");
+  });
+
+  it("invalid_selector when the selector path throws on malformed CSS", async () => {
+    const { fake } = setupSession();
+    fake.respond("Runtime.evaluate", evalValue({ ok: false, error: "Invalid CSS selector input[: ...", code: "invalid_selector" }));
+    expect(parseErrorEnvelope(await suggest.handler({ selector: "input[" }))?.error).toBe("invalid_selector");
   });
 });

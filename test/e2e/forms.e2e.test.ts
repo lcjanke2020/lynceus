@@ -5,7 +5,7 @@
 // mutated a property — and that fill REPLACES rather than appends.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { buildToolMap, call, attachToTestChrome, sampleAppUrl } from "./helpers/build-tools.js";
+import { buildToolMap, call, callExpectError, attachToTestChrome, sampleAppUrl } from "./helpers/build-tools.js";
 import { waitFor } from "./helpers/wait-for.js";
 
 const tools = buildToolMap();
@@ -77,6 +77,31 @@ describe("form driving (e2e)", () => {
       },
       { describe: "#name-echo shows exactly 'Ada' (replaced, not appended)" },
     );
+  });
+
+  it("fill refuses non-text controls with wrong_element (<select>, checkbox)", async () => {
+    // Both expose a `value` property, but neither is a free-text field — fill
+    // must reject them rather than clobber the selected option / submission value.
+    const onSelect = await callExpectError(tools, "fill", { selector: "#fruit", value: "x" });
+    expect(onSelect.error).toBe("wrong_element");
+    const onCheckbox = await callExpectError(tools, "fill", { selector: "#subscribe", value: "x" });
+    expect(onCheckbox.error).toBe("wrong_element");
+
+    // The real text input is still fillable.
+    const ok = await call<{ status: string }>(tools, "fill", { selector: "#name-input", value: "ok" });
+    expect(ok.status).toBe("filled");
+  });
+
+  it("mutating tools surface invalid_locator for a malformed CSS selector", async () => {
+    // An unparseable selector (vs. a valid selector that matches nothing) is an
+    // invalid locator, mirroring locate/wait_for — not not_found.
+    const err = await callExpectError(tools, "fill", { selector: "input[", value: "x" });
+    expect(err.error).toBe("invalid_locator");
+  });
+
+  it("suggest_locator surfaces invalid_selector for a malformed CSS selector", async () => {
+    const err = await callExpectError(tools, "suggest_locator", { selector: "input[" });
+    expect(err.error).toBe("invalid_selector");
   });
 
   it("suggest_locator ranks candidates for the button (node_id path)", async () => {
