@@ -53,7 +53,7 @@ describe("session-resume oracle", () => {
     expect(out.notes).toMatch(/did not affirm resume with user_pref=dark/);
   });
 
-  it("is tagged xfailCorrectness initially", () => {
-    expect(sessionResume.xfailCorrectness).toBe(true);
+  it("is not xfail-tagged (dropped after passing 3/3 on the 2026-06-08 full run)", () => {
+    expect(sessionResume.xfailCorrectness).toBeFalsy();
   });
 });

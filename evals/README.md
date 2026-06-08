@@ -69,7 +69,9 @@ These exercise the form-driving and session-portability tools at the **agent** l
 | `session-resume` | `stateful-app` | `export_storage_state`, `load_storage_state`, `set_cookies`, `get_cookies` | "verifying" a resume without a real `close_session` + relaunch |
 | `cookie-redaction` | stock | `set_cookies`, `get_cookies` (redaction) | mis-classifying a `session_*` cookie as safe to log |
 
-Coverage spans all nine issue-#12 tools. `session-resume` ships `xfailCorrectness: true` initially (the close/relaunch multi-phase flow is the most likely to be flaky on the first real run — flip to `false` once the baseline is stable, same playbook as `adversarial-out-of-order`). **Known L4 gap:** `load_storage_state`'s `origins_skipped` (multi-origin localStorage) path is not L4-exercised — it needs a two-origin fixture; it stays covered at L2/L3.
+Coverage spans all nine issue-#12 tools. (`session-resume` was authored `xfailCorrectness: true` as a hedge on its long close/relaunch flow; the first full Opus-4.8 run — 2026-06-08, 3/3 correct=PASS — showed it solves reliably, so the tag was dropped.) **Known L4 gap:** `load_storage_state`'s `origins_skipped` (multi-origin localStorage) path is not L4-exercised — it needs a two-origin fixture; it stays covered at L2/L3.
+
+First full run (Opus-4.8 medium, all 14 × 3 trials, 2026-06-08): the six issue-#12 scenarios all PASS correctness + mechanic, efficiency 0.68–1.00, ~$0.18–0.34 each.
 
 **Cost gating:** `npm run eval:quick` still runs only `compute-step` (the per-PR gate stays fast/cheap). The driving scenarios run nightly via `npm run eval` — they're at temperature 1 (thinking on) so non-deterministic, and `session-resume` is the most expensive (close/relaunch). `cookie-redaction` is the cheapest/most-deterministic and is the natural candidate if a storage-path scenario is later promoted into the per-PR gate.
 

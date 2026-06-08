@@ -9,10 +9,10 @@
 // Covers (issue #12): export_storage_state, load_storage_state, set_cookies,
 // get_cookies.
 //
-// Starts as xfailCorrectness:true — this is the longest, most multi-phase
-// driving flow (close/relaunch is unusual under a driving prompt) and the most
-// likely to be flaky on the first real run. Flip to false once the baseline is
-// stable (same playbook as adversarial-out-of-order). Mechanic is not xfail.
+// Was tagged xfailCorrectness:true on first authoring (longest, most multi-phase
+// driving flow — close/relaunch is unusual under a driving prompt). The first
+// full Opus-4.8 run (2026-06-08, all 3 trials correct=PASS / mechanic=PASS,
+// surfaced as XPASS!) showed it solves reliably, so the tag was dropped.
 
 import type { Scenario, TraceEntry, OracleResult } from "../harness/types.js";
 import { toolPairs } from "../harness/trace.js";
@@ -88,5 +88,4 @@ export const sessionResume: Scenario = {
   oracle,
   // launch + navigate + set_cookies + export + close + launch + navigate + load + verify ≈ 9.
   oracleMinimumToolCalls: 9,
-  xfailCorrectness: true,
 };

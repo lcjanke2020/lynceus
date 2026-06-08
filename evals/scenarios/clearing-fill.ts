@@ -23,11 +23,23 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const noEvalMutation = !mutatedViaEvaluate(c);
   const mechanic: 0 | 1 = usedFill && noEvalMutation ? 1 : 0;
 
-  // CORRECTNESS — the field ends EXACTLY at the target. An append-only
-  // type_text solve yields "Old Draft NameGrace Hopper" → value mismatch → 0.
+  // CORRECTNESS — the field ends EXACTLY at the target. Prefer the
+  // get_form_state read-back; if the agent verified some other way (no
+  // display-name in the last get_form_state), fall back to "filled with the
+  // target value and never appended via type_text" — fill has replace
+  // semantics, so that guarantees the exact value by construction. An
+  // append-only type_text solve yields "Old Draft NameGrace Hopper", which the
+  // read-back path catches as a mismatch (and trips mechanic for not using fill).
   const fs = out(last(ok("get_form_state"))).fields as Record<string, { value?: unknown }> | undefined;
-  const exact = fs?.["display-name"]?.value === "Grace Hopper";
-  const faOk = /grace\s*hopper/i.test(finalAnswer) && !/old\s*draft/i.test(finalAnswer);
+  const readBack = fs?.["display-name"]?.value;
+  const filledTarget = c.some(
+    (x) => x.tool === "fill" && !x.isError && (x.input as { value?: unknown })?.value === "Grace Hopper",
+  );
+  const appendedType = c.some((x) => x.tool === "type_text" && !(x.input as { clear_first?: boolean })?.clear_first);
+  const exact = readBack === "Grace Hopper" || (readBack === undefined && filledTarget && !appendedType);
+  // Lenient answer check — naming the new value is enough; mentioning the old
+  // value for context ("replaced 'Old Draft Name' with ...") must NOT fail it.
+  const faOk = /grace\s*hopper/i.test(finalAnswer);
   const correctness: 0 | 1 = exact && faOk && noEvalMutation ? 1 : 0;
 
   const why: string[] = [];
