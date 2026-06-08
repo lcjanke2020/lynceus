@@ -9,6 +9,7 @@ import { registerConsoleTools } from "./tools/console.js";
 import { registerNetworkTools } from "./tools/network.js";
 import { registerDomTools } from "./tools/dom.js";
 import { registerFormTools } from "./tools/forms.js";
+import { registerStorageTools } from "./tools/storage.js";
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -26,6 +27,7 @@ export function buildServer(): McpServer {
   registerNetworkTools(server);
   registerDomTools(server);
   registerFormTools(server);
+  registerStorageTools(server);
 
   // The SDK advertises `tools: { listChanged: true }` as soon as any tool is
   // registered, but never emits the matching notification on its own. Some

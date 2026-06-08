@@ -8,7 +8,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 ## What it gives an agent
 
-Across 44 tools:
+Across 48 tools:
 
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.
 - **Stepping** — `step_over`, `step_into`, `step_out`, `resume`, `pause`, plus the authoritative sync point `wait_for_pause`.
@@ -67,9 +67,11 @@ SSE mode caveats:
   tears down client A's session).
 - **Non-loopback bind requires opt-in.** `--allow-remote` (or
   `CDP_MCP_ALLOW_REMOTE=1`) is required to bind to anything other than
-  loopback. MCP tools include `evaluate` (in-page code exec) and a
-  `screenshot path=` filesystem write; the gate makes remote exposure
-  a deliberate operator decision rather than a default.
+  loopback. MCP tools include `evaluate` (in-page code exec), a
+  `screenshot path=` filesystem write, `export_storage_state` (writes full
+  cookie values — including HttpOnly auth secrets — to a server-side file) and
+  `load_storage_state` (reads an arbitrary server-side file); the gate makes
+  remote exposure a deliberate operator decision rather than a default.
 - **Host / Origin headers are validated on loopback binds** to block
   DNS-rebinding against `127.0.0.1` / `localhost` / `[::1]`. On
   non-loopback binds the operator has already accepted exposure via
@@ -101,10 +103,10 @@ grader/trace/oracle units. See `docs/test-eval-plan.md` for the full pyramid.
 npm run test:e2e
 ```
 
-Drives the 44 MCP tools against a real headless Chromium attached to a
-built copy of `examples/sample-app/`. Ten specs cover lifecycle, breakpoints,
+Drives the 48 MCP tools against a real headless Chromium attached to a
+built copy of `examples/sample-app/`. Eleven specs cover lifecycle, breakpoints,
 stepping, exceptions, console, network, workers, screenshot, DOM
-interaction, and form driving. Sequential (one Chrome shared across specs, isolated by a
+interaction, form driving, and storage portability. Sequential (one Chrome shared across specs, isolated by a
 shared `afterEach(close_session)`). Run time is a few seconds on a warm
 machine.
 

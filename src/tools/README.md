@@ -2,7 +2,7 @@
 
 **Last updated: 2026-06-07**
 
-All 44 MCP tools live here, one file per category. Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
+All 48 MCP tools live here, one file per category. Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
 ## The `registerJsonTool` pattern
 
@@ -36,7 +36,7 @@ registerJsonTool(
 - **Buffered tools** (`get_console_logs`, `get_network_requests`) paginate via `since` cursor — pass back the previous `cursor` value to get only new entries.
 - **Compact previews.** Use `previewRemoteObject()` and `truncate()` from `src/util/format.ts`. Lists capped at sensible defaults; bodies lazy-loaded via dedicated tools, never inlined in list responses.
 
-## Tool catalog (44 tools)
+## Tool catalog (48 tools)
 
 | File | Tool | One-line description |
 |---|---|---|
@@ -84,6 +84,10 @@ registerJsonTool(
 | | `uncheck` | Ensure a checkbox/radio is unchecked (idempotent: `status: "unchecked" \| "already-unchecked"`). |
 | | `fill` | Set an input/textarea/contenteditable (LocatorSpec) to exactly a value, replacing contents; dispatches input + change. |
 | | `suggest_locator` | Rank stable LocatorSpec candidates for an element (by `node_id` or `selector`), with per-candidate match counts. |
+| `storage.ts` | `export_storage_state` | Save cookies (incl. HttpOnly) + current-origin localStorage to a Playwright-shaped JSON file. |
+| | `load_storage_state` | Restore cookies + matching-origin localStorage from a storageState file (resume a session). |
+| | `get_cookies` | List cookies with flags; redacts likely session/auth values for display. |
+| | `set_cookies` | Set cookies in the browser jar via CDP (each needs a url or domain). |
 
 Plus `_register.ts` — the registration helper, not itself a tool, and `_locator_runtime.ts` — the shared in-page locator script (helpers/read/mutation) used by `dom.ts` + `forms.ts`.
 

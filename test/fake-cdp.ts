@@ -226,6 +226,9 @@ export function makeFakeCdp(): FakeCdp {
   responders.set("DOM.resolveNode", () => ({ object: { objectId: "fake-object-id" } }));
   responders.set("Network.getRequestPostData", () => ({ postData: "" }));
   responders.set("Network.getResponseBody", () => ({ body: "", base64Encoded: false }));
+  responders.set("Network.getAllCookies", () => ({ cookies: [] }));
+  responders.set("Network.getCookies", () => ({ cookies: [] }));
+  responders.set("Network.setCookies", () => undefined);
   responders.set("Input.dispatchMouseEvent", () => undefined);
   responders.set("Input.dispatchKeyEvent", () => undefined);
   responders.set("Input.insertText", () => undefined);
