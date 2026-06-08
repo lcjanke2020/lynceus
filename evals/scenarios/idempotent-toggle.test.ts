@@ -55,6 +55,35 @@ describe("idempotent-toggle oracle", () => {
     expect(out.notes).toMatch(/blind click|idempotent check/);
   });
 
+  it("fails correctness when the answer names the fields but not their on/off states (regression: Copilot PR #17 r5)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "check", { selector: "#subscribe" }, { status: "already-checked", checked: true, count: 1 }),
+      ...pair("4", "uncheck", { selector: "#beta" }, { status: "unchecked", checked: false, count: 1 }),
+      ...pair("5", "check", { role: "radio", name: "Pro" }, { status: "checked", checked: true, count: 1 }),
+      ...pair("6", "get_form_state", {}, END_STATE),
+    ];
+    const out = idempotentToggle.oracle(trace, "I set Email updates, Beta features, and the Pro plan.");
+    expect(out.mechanic).toBe(1);
+    expect(out.correctness).toBe(0);
+    expect(out.notes).toMatch(/names \+ on\/off/);
+  });
+
+  it("requires get_form_state for correctness — status fallback removed (regression: Copilot PR #17 r5)", () => {
+    // Mechanically plausible, but the agent unchecked the wrong box (Email, not
+    // Beta) and never read the form back. Statuses carry no locator, so without
+    // the read-back this must not pass.
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "check", { selector: "#subscribe" }, { status: "already-checked", checked: true, count: 1 }),
+      ...pair("4", "uncheck", { selector: "#subscribe" }, { status: "unchecked", checked: false, count: 1 }),
+      ...pair("5", "check", { role: "radio", name: "Pro" }, { status: "checked", checked: true, count: 1 }),
+    ];
+    const out = idempotentToggle.oracle(trace, "Email updates ON, Beta OFF, Pro selected.");
+    expect(out.correctness).toBe(0);
+    expect(out.notes).toMatch(/read-back missing/);
+  });
+
   it("fails mechanic when uncheck is never used (beta left on)", () => {
     const trace: TraceEntry[] = [
       ...base(),

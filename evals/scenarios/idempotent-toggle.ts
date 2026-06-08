@@ -40,13 +40,20 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
     idempotentCheck && radioChecked && betaUnchecked && noClick && noEvalMutation ? 1 : 0;
 
   // CORRECTNESS — read-back confirms the three end states + the answer reports them.
+  // Require get_form_state (all three controls are named, and the prompt asks to
+  // read the form back). The tool-result statuses carry no locator, so a status
+  // fallback can't prove the RIGHT controls were toggled — e.g. unchecking the
+  // already-on Email box instead of Beta would pass (Copilot, PR #17 round 5).
   const fs = out(last(ok("get_form_state"))).fields as Record<string, { value?: unknown }> | undefined;
-  const stateOk = fs
-    ? fs.subscribe?.value === true && fs.beta?.value === false && fs.plan?.value === "pro"
-    : idempotentCheck && radioChecked && betaUnchecked; // fallback to statuses
+  const stateOk =
+    !!fs && fs.subscribe?.value === true && fs.beta?.value === false && fs.plan?.value === "pro";
   const fa = finalAnswer.toLowerCase();
+  // The prompt asks to "report the final state of all three", so require the
+  // answer to name the fields AND an ON-ish and an OFF-ish state (Copilot, r5).
+  const onish = /\b(on|checked|enabled|active|true|yes|selected)\b/.test(fa);
+  const offish = /\b(off|unchecked|disabled|inactive|false|cleared|unselected)\b/.test(fa);
   const faOk =
-    /(email|subscrib|updates)/.test(fa) && /beta/.test(fa) && /pro/.test(fa);
+    /(email|subscrib|updates)/.test(fa) && /beta/.test(fa) && /pro/.test(fa) && onish && offish;
   const correctness: 0 | 1 = stateOk && faOk && noEvalMutation ? 1 : 0;
 
   const why: string[] = [];
@@ -55,8 +62,8 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   if (!betaUnchecked) why.push("mechanic: Beta not turned off via uncheck");
   if (!noClick) why.push("mechanic: used a blind click (toggles, not state-aware)");
   if (!noEvalMutation) why.push("mechanic/correctness: mutated state via raw evaluate");
-  if (!stateOk) why.push("correctness: read-back did not match subscribe=on, beta=off, plan=pro");
-  if (!faOk) why.push("correctness: final answer did not report all three states");
+  if (!stateOk) why.push("correctness: get_form_state read-back missing or did not match subscribe=on, beta=off, plan=pro");
+  if (!faOk) why.push("correctness: final answer did not report all three states (names + on/off)");
 
   const summary = `idempotent-toggle correctness=${correctness} mechanic=${mechanic}`;
   return {

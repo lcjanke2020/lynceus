@@ -125,7 +125,18 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
     candidates[recommended]?.match_count === 1 &&
     candidates[recommended]?.resolves_to_target === true &&
     isSemantic(candidates[recommended]?.locator?.by);
-  const faReportsUnambig = unambig.some((k) => locatorAppearsInText(k.locator, finalAnswer));
+  // Strip any css candidate's selector from the answer before the semantic-report
+  // test: the button's text is "Go" and its css selector is "#go", so a bare "#go"
+  // report would otherwise satisfy the `text:"Go"` candidate by coincidence
+  // (`"#go".includes("go")`) — wrongly crediting an agent that validates a semantic
+  // locator but REPORTS the brittle css selector (claude, PR #17 round 5).
+  const cssSelectors = candidates
+    .filter((k) => k.locator.by === "css")
+    .map((k) => k.locator.css)
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  let reportText = finalAnswer;
+  for (const sel of cssSelectors) reportText = reportText.split(sel).join(" ");
+  const faReportsUnambig = unambig.some((k) => locatorAppearsInText(k.locator, reportText));
   // correctness also requires actually validating a semantic locator (`verified`),
   // so verifying only the css fallback can't pass even if the answer's text
   // incidentally matches a semantic candidate.

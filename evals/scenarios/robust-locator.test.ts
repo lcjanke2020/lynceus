@@ -95,6 +95,17 @@ describe("robust-locator oracle", () => {
     expect(out.correctness).toBe(0);
   });
 
+  it("does not credit validating a semantic locator but REPORTING the css selector #go (regression: claude PR #17 r5)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "suggest_locator", { selector: "#go" }, SUGGEST_OUT),
+      ...pair("4", "locate", { by: "role", role: "button", name: "Go" }, { count: 1, elements: [{}] }),
+    ];
+    const out = robustLocator.oracle(trace, "I validated the button, but I'll just use the CSS selector #go.");
+    expect(out.mechanic).toBe(1); // it did validate a semantic candidate
+    expect(out.correctness).toBe(0); // but it settled on / reported the css selector
+  });
+
   it("matches a test_id candidate verified via the camelCase testId alias (regression: Copilot PR #17 r3)", () => {
     const suggest = {
       candidates: [{ locator: { by: "test_id", test_id: "go-btn" }, match_count: 1, unambiguous: true, resolves_to_target: true }],
