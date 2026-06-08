@@ -61,6 +61,17 @@ describe("clearing-fill oracle", () => {
     expect(out.correctness).toBe(1);
   });
 
+  it("flags a compound-assignment evaluate mutation (.value += ...) (regression: Copilot PR #17 r3)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "evaluate", { expression: "document.querySelector('#display-name').value += 'Grace Hopper'" }, { value: "Old Draft NameGrace Hopper" }),
+      ...pair("4", "get_form_state", {}, { ok: true, fields: { "display-name": { kind: "field", value: "Old Draft NameGrace Hopper" } }, missing: [] }),
+    ];
+    const out = clearingFill.oracle(trace, "Field now contains Grace Hopper.");
+    expect(out.correctness).toBe(0);
+    expect(out.notes).toMatch(/raw evaluate/);
+  });
+
   it("does not credit an evaluate-mutation solve", () => {
     const trace: TraceEntry[] = [
       ...base(),

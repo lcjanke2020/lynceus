@@ -17,6 +17,7 @@ interface Locator {
   name?: string;
   text?: string;
   test_id?: string;
+  testId?: string;
   label?: string;
   placeholder?: string;
   css?: string;
@@ -33,7 +34,9 @@ function locatorMatchesInput(loc: Locator, input: unknown): boolean {
     case "text":
       return i.text === loc.text || i.name === loc.text;
     case "test_id":
-      return i.test_id === loc.test_id;
+      // LocatorSpec also allows the camelCase `testId` alias and the `name`
+      // fallback for by:test_id (Copilot, PR #17 round 3).
+      return i.test_id === loc.test_id || i.testId === loc.test_id || i.name === loc.test_id;
     case "label":
       return i.label === loc.label;
     case "placeholder":

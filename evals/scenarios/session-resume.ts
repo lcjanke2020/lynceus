@@ -51,14 +51,21 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const verifyAfterLoad =
     loadIdx >= 0 &&
     c.slice(loadIdx + 1).some((x) => ["get_cookies", "get_form_state", "evaluate"].includes(x.tool) && !x.isError);
-  // The reset must come BEFORE the restore: a close_session, a relaunch AFTER it,
-  // and the final load AFTER the close. A count-only check (close happened + ≥2
-  // launches) would let an agent load+verify and only THEN close (Copilot, PR #17
-  // round 2).
-  const closeIdx = c.map((x) => x.tool === "close_session" && !x.isError).lastIndexOf(true);
-  const relaunchAfterClose =
-    closeIdx >= 0 && c.slice(closeIdx + 1).some((x) => x.tool === "launch_chrome" && !x.isError);
-  const realReset = closeIdx >= 0 && relaunchAfterClose && loadIdx > closeIdx;
+  // A reset is ANY close_session BEFORE the final load that has a relaunch
+  // between it and the load. Keying on the LAST close was wrong: RESUME_SYSTEM
+  // tells the agent to "close_session when done", so a correct run ends
+  // close→relaunch→load→verify→close(cleanup), and that trailing cleanup close has
+  // no relaunch after it — a false-negative (claude, PR #17 round 3). This still
+  // rejects the gaming trace (a close only AFTER load+verify) since such a close
+  // has no load after it.
+  const realReset =
+    loadIdx >= 0 &&
+    c.slice(0, loadIdx).some(
+      (x, i) =>
+        x.tool === "close_session" &&
+        !x.isError &&
+        c.slice(i + 1, loadIdx).some((y) => y.tool === "launch_chrome" && !y.isError),
+    );
   // Forbid seeding/restoring state through raw evaluate — set_cookies +
   // load_storage_state are the tools under test (kimi, PR #17). Read-only
   // localStorage.getItem / document.cookie reads are not flagged.

@@ -84,6 +84,21 @@ describe("robust-locator oracle", () => {
     expect(out.correctness).toBe(1);
   });
 
+  it("matches a test_id candidate verified via the camelCase testId alias (regression: Copilot PR #17 r3)", () => {
+    const suggest = {
+      candidates: [{ locator: { by: "test_id", test_id: "go-btn" }, match_count: 1, unambiguous: true, resolves_to_target: true }],
+      recommended: 0,
+    };
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "suggest_locator", { selector: "#go" }, suggest),
+      ...pair("4", "locate", { by: "test_id", testId: "go-btn" }, { count: 1, elements: [{}] }),
+    ];
+    const out = robustLocator.oracle(trace, 'I used the test id "go-btn" — exactly one match.');
+    expect(out.mechanic).toBe(1);
+    expect(out.correctness).toBe(1);
+  });
+
   it("does not credit an answer that names no accessible name — 'use a role locator' (regression: Copilot PR #17 r2)", () => {
     const trace: TraceEntry[] = [
       ...base(),

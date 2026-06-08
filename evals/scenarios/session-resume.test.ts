@@ -82,6 +82,16 @@ describe("session-resume oracle", () => {
     expect(out.notes).toMatch(/origins_restored empty/);
   });
 
+  it("credits a correct run that ends with a courtesy close_session (regression: claude PR #17 r3)", () => {
+    // RESUME_SYSTEM tells the agent to close_session when done, so the real run is
+    // close → relaunch → load → verify → close(cleanup). The trailing close must
+    // not invalidate the reset.
+    const trace: TraceEntry[] = [...happyTrace(), ...pair("11", "close_session", {}, { closed: true })];
+    const out = sessionResume.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(1);
+    expect(out.correctness).toBe(1);
+  });
+
   it("is xfail-tagged (re-hedged after PR #17 tightened the localStorage-restore check)", () => {
     expect(sessionResume.xfailCorrectness).toBe(true);
   });

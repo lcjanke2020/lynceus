@@ -77,18 +77,19 @@ export function inputText(input: unknown): string {
 /**
  * True if any `evaluate` call mutated page/form/storage state via raw JS —
  * the shortcut the driving scenarios forbid (the dedicated tools are under
- * test). Matches ASSIGNMENT to value/checked/selected, localStorage.setItem,
- * dispatchEvent, and document.cookie writes. The `=(?!=)` negative-lookahead is
- * load-bearing: it excludes `==`/`===` so a *read-only* verify comparison —
- * which DRIVING_SYSTEM explicitly permits (`...value === "x"`) — is NOT flagged
- * as a mutation. Read-only evaluates (getItem, querySelector, location.origin)
+ * test). Matches ASSIGNMENT (plain `=` and compound `+=`/`-=`/… via the
+ * optional operator class) to value/checked/selected/selectedIndex,
+ * localStorage.setItem, dispatchEvent, and document.cookie writes. The `=(?!=)`
+ * negative-lookahead is load-bearing: it excludes `==`/`===` so a *read-only*
+ * verify comparison — which DRIVING_SYSTEM explicitly permits (`...value === "x"`)
+ * — is NOT flagged. Read-only evaluates (getItem, querySelector, location.origin)
  * don't match either.
  */
 export function mutatedViaEvaluate(calls: Pair[]): boolean {
   return calls.some(
     (c) =>
       c.tool === "evaluate" &&
-      /setItem|dispatchEvent|\.value\s*=(?!=)|\.checked\s*=(?!=)|\.selected\s*=(?!=)|\.selectedIndex\s*=(?!=)|document\.cookie\s*=(?!=)/.test(
+      /setItem|dispatchEvent|\.(?:value|checked|selectedIndex|selected)\s*[+\-*/%|&^]?=(?!=)|document\.cookie\s*[+\-*/%|&^]?=(?!=)/.test(
         inputText(c.input),
       ),
   );
