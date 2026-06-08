@@ -10,7 +10,7 @@
 
 import type { Scenario, TraceEntry, OracleResult } from "../harness/types.js";
 import { toolPairs } from "../harness/trace.js";
-import { DRIVING_SYSTEM, out, last, mutatedViaEvaluate } from "./_driving-prompts.js";
+import { DRIVING_SYSTEM, out, last, inputText, mutatedViaEvaluate } from "./_driving-prompts.js";
 
 const PROMPT = `The "Display name" field on the page is already filled in with an old value. Change it so the field contains exactly "Grace Hopper" — no more, no less (do not append to what is already there). Then read the field back and report its exact contents.`;
 
@@ -35,7 +35,14 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const filledTarget = c.some(
     (x) => x.tool === "fill" && !x.isError && (x.input as { value?: unknown })?.value === "Grace Hopper",
   );
-  const appendedType = c.some((x) => x.tool === "type_text" && !(x.input as { clear_first?: boolean })?.clear_first);
+  // Scope the append-check to the Display name field — an unrelated type_text
+  // elsewhere must not invalidate a correct fill on this field (Copilot, PR #17).
+  const appendedType = c.some(
+    (x) =>
+      x.tool === "type_text" &&
+      !(x.input as { clear_first?: boolean })?.clear_first &&
+      /display-name|display name/i.test(inputText(x.input)),
+  );
   const exact = readBack === "Grace Hopper" || (readBack === undefined && filledTarget && !appendedType);
   // Lenient answer check — naming the new value is enough; mentioning the old
   // value for context ("replaced 'Old Draft Name' with ...") must NOT fail it.

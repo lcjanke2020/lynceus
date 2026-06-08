@@ -86,10 +86,15 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // MECHANIC — called suggest_locator and then verified a returned candidate
   // with a LocatorSpec-driven tool (locate/wait_for).
   const calledSuggest = !!sg;
+  // The verifying call must actually resolve the candidate to exactly ONE element
+  // — the scenario's whole point is "confirm it resolves to exactly one element".
+  // A structural input match alone (ignoring the result) would let count:0/2 pass
+  // (codex, PR #17).
   const verified = c.some(
     (x) =>
       (x.tool === "locate" || x.tool === "wait_for") &&
       !x.isError &&
+      Number(out(x).count) === 1 &&
       candidates.some((k) => locatorMatchesInput(k.locator, x.input)),
   );
   const noEvalMutation = !mutatedViaEvaluate(c);
@@ -108,8 +113,8 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
 
   const why: string[] = [];
   if (!calledSuggest) why.push("mechanic: never called suggest_locator");
-  if (!verified) why.push("mechanic: did not verify a returned candidate via locate/wait_for");
-  if (!noEvalMutation) why.push("mechanic/correctness: used raw evaluate to query the DOM");
+  if (!verified) why.push("mechanic: did not verify a candidate resolves to exactly one element via locate/wait_for");
+  if (!noEvalMutation) why.push("mechanic/correctness: mutated page state via raw evaluate");
   if (!recommendedUnambig) why.push("correctness: suggest_locator's recommended candidate was not unambiguous");
   if (!faReportsUnambig) why.push("correctness: final answer did not report an unambiguous locator");
 

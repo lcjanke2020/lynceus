@@ -53,7 +53,18 @@ describe("session-resume oracle", () => {
     expect(out.notes).toMatch(/did not affirm resume with user_pref=dark/);
   });
 
-  it("is not xfail-tagged (dropped after passing 3/3 on the 2026-06-08 full run)", () => {
-    expect(sessionResume.xfailCorrectness).toBeFalsy();
+  it("fails mechanic on a cookie-only restore — no proof the localStorage half ran (regression: codex PR #17)", () => {
+    const trace: TraceEntry[] = happyTrace().map((e) =>
+      e.t === "tool_result" && e.tool === "load_storage_state"
+        ? { ...e, output: { loaded: PATH, cookies: 1, origins_restored: [], origins_skipped: ["http://x"] } }
+        : e,
+    );
+    const out = sessionResume.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(0);
+    expect(out.notes).toMatch(/origins_restored empty/);
+  });
+
+  it("is xfail-tagged (re-hedged after PR #17 tightened the localStorage-restore check)", () => {
+    expect(sessionResume.xfailCorrectness).toBe(true);
   });
 });

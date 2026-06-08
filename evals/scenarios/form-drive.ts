@@ -22,8 +22,14 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const c = toolPairs(trace);
   const ok = (t: string) => c.filter((x) => x.tool === t && !x.isError);
 
-  // MECHANIC — the right dedicated tool per control, each succeeding.
-  const filledName = ok("fill").some((x) => out(x).status === "filled");
+  // MECHANIC — the right dedicated tool per control, each succeeding. Require the
+  // fill to carry the requested value: the stock app's only fillable text field
+  // is #name-input (fill rejects the selects/checkbox with wrong_element), so a
+  // successful fill with this exact value provably targeted the name field — and
+  // get_form_state can't read it back (no `name` attr) to verify it otherwise.
+  const filledName = ok("fill").some(
+    (x) => out(x).status === "filled" && (x.input as { value?: unknown })?.value === "Ada Lovelace",
+  );
   const singleFruit = ok("select_option").some((x) => {
     const o = out(x);
     return o.multiple === false && Array.isArray(o.selected) && o.selected.some((s: { value?: string }) => s.value === "banana");

@@ -71,4 +71,37 @@ describe("form-drive oracle", () => {
     expect(out.correctness).toBe(0);
     expect(out.notes).toMatch(/did not report all field values/);
   });
+
+  it("credits a solve that verifies the unnamed name field with a read-only evaluate compare (regression: claude PR #17)", () => {
+    const trace: TraceEntry[] = [
+      ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),
+      ...pair("2", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("3", "fill", { selector: "#name-input", value: "Ada Lovelace" }, { status: "filled", value_length: 12, tag: "input", count: 1 }),
+      ...pair("4", "select_option", { selector: "#fruit", option_label: "Banana" }, { status: "selected", selected: [{ value: "banana", index: 1 }], multiple: false, count: 1 }),
+      ...pair("5", "check", { selector: "#subscribe" }, { status: "checked", checked: true, count: 1 }),
+      ...pair("6", "select_option", { selector: "#fruits-multi", option_index: [0, 2], multiple: true }, { status: "selected", selected: [{ value: "apple", index: 0 }, { value: "cherry", index: 2 }], multiple: true, count: 1 }),
+      // Read-only verify of the unnamed name field — permitted by DRIVING_SYSTEM,
+      // must NOT be flagged as a mutation (the `===` regex false-positive).
+      ...pair("7", "evaluate", { expression: 'document.querySelector("#name-input").value === "Ada Lovelace"' }, { value: true }),
+      ...pair("8", "get_form_state", {}, FORM_STATE),
+    ];
+    const out = formDrive.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(1);
+    expect(out.correctness).toBe(1);
+  });
+
+  it("fails mechanic when the multi-select is incomplete (only apple, missing cherry)", () => {
+    const trace: TraceEntry[] = [
+      ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),
+      ...pair("2", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("3", "fill", { selector: "#name-input", value: "Ada Lovelace" }, { status: "filled", value_length: 12, tag: "input", count: 1 }),
+      ...pair("4", "select_option", { selector: "#fruit", option_label: "Banana" }, { status: "selected", selected: [{ value: "banana", index: 1 }], multiple: false, count: 1 }),
+      ...pair("5", "check", { selector: "#subscribe" }, { status: "checked", checked: true, count: 1 }),
+      ...pair("6", "select_option", { selector: "#fruits-multi", option_index: [0], multiple: true }, { status: "selected", selected: [{ value: "apple", index: 0 }], multiple: true, count: 1 }),
+      ...pair("7", "get_form_state", {}, { ok: true, fields: { fruit: { value: "banana" }, subscribe: { value: true }, "fruits-multi": { value: ["apple"] } }, missing: [] }),
+    ];
+    const out = formDrive.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(0);
+    expect(out.notes).toMatch(/exactly apple\+cherry/);
+  });
 });

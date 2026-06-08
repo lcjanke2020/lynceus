@@ -10,7 +10,7 @@
 
 import type { Scenario, TraceEntry, OracleResult } from "../harness/types.js";
 import { toolPairs } from "../harness/trace.js";
-import { DRIVING_SYSTEM, out, last } from "./_driving-prompts.js";
+import { DRIVING_SYSTEM, out, last, mutatedViaEvaluate } from "./_driving-prompts.js";
 
 const PROMPT = `Set two cookies on this site: one named "session_token" with value "abc123secret", and one named "theme" with value "dark". Then list the cookies with the inspection tool and report, for each of the two, whether the tool redacted its value (and why), and which of the two is safe to print in a log.`;
 
@@ -28,10 +28,13 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const sess = cookies.find((k) => k.name === "session_token");
   const theme = cookies.find((k) => k.name === "theme");
 
-  // MECHANIC — both cookies set + listed, with the redaction applied as designed:
+  // MECHANIC — both cookies set via set_cookies (not document.cookie via raw
+  // evaluate — kimi, PR #17) + listed, with the redaction applied as designed:
   // session_token value hidden (redacted, value_length>0), theme value shown.
+  const noEvalMutation = !mutatedViaEvaluate(c);
   const mechanic: 0 | 1 =
     !!setCookies &&
+    noEvalMutation &&
     !!sess &&
     !!theme &&
     sess.redacted === true &&
@@ -54,6 +57,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
 
   const why: string[] = [];
   if (!setCookies) why.push("mechanic: never set the cookies via set_cookies");
+  if (!noEvalMutation) why.push("mechanic: set cookies via raw evaluate (document.cookie) instead of set_cookies");
   if (!sess || !theme) why.push("mechanic: get_cookies did not return both cookies");
   else {
     if (sess.redacted !== true || sess.value !== undefined) why.push("mechanic: session_token value was not redacted");
