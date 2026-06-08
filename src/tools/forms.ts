@@ -288,7 +288,7 @@ function suggestDefScript(): string {
       if (placeholder) cands.push({ by: "placeholder", placeholder });
       if (nameAttr) cands.push({ by: "name", name: nameAttr });
       cands.push({ by: "css", css: cssPath(el) });
-      // findElements("role"/"text") scans `body *`; cache once since we call it per candidate.
+      // findElements role/text both scan "body *"; cache it once since we call per candidate.
       const bodyEls = Array.from(document.querySelectorAll("body *"));
       const resolveMatches = (locator) => {
         if (locator.by === "text") return bodyEls.filter((e) => leafTextMatches(e, locator.text || locator.name, !!locator.exact));
