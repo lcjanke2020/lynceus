@@ -72,4 +72,26 @@ describe("robust-locator oracle", () => {
     expect(out.mechanic).toBe(0);
     expect(out.notes).toMatch(/exactly one element/);
   });
+
+  it("accepts wait_for verification reading the nested result.count (regression: codex PR #17 r2)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "suggest_locator", { selector: "#go" }, SUGGEST_OUT),
+      ...pair("4", "wait_for", { by: "role", role: "button", name: "Go" }, { state: "visible", elapsed_ms: 5, locator: {}, result: { count: 1, visible_count: 1 } }),
+    ];
+    const out = robustLocator.oracle(trace, 'role=button name="Go" — exactly one match.');
+    expect(out.mechanic).toBe(1);
+    expect(out.correctness).toBe(1);
+  });
+
+  it("does not credit an answer that names no accessible name — 'use a role locator' (regression: Copilot PR #17 r2)", () => {
+    const trace: TraceEntry[] = [
+      ...base(),
+      ...pair("3", "suggest_locator", { selector: "#go" }, SUGGEST_OUT),
+      ...pair("4", "locate", { by: "role", role: "button", name: "Go" }, { count: 1, elements: [{}] }),
+    ];
+    const out = robustLocator.oracle(trace, "I would just use a role locator here.");
+    expect(out.mechanic).toBe(1); // it did suggest + verify a 1-match candidate
+    expect(out.correctness).toBe(0); // but the answer named no unambiguous candidate
+  });
 });

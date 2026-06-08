@@ -52,7 +52,13 @@ function locatorAppearsInText(loc: Locator, text: string): boolean {
   const t = text.toLowerCase();
   switch (loc.by) {
     case "role":
-      return /\brole\b|getbyrole/.test(t) || (!!loc.role && t.includes(loc.role.toLowerCase()) && !!loc.name && t.includes(loc.name.toLowerCase()));
+      // Require the accessible NAME to actually appear — a bare "use a role
+      // locator" must not count (Copilot, PR #17 round 2).
+      return (
+        !!loc.name &&
+        t.includes(loc.name.toLowerCase()) &&
+        (/\brole\b|getbyrole/.test(t) || (!!loc.role && t.includes(loc.role.toLowerCase())))
+      );
     case "text":
       return !!loc.text && t.includes(loc.text.toLowerCase());
     case "test_id":
@@ -90,13 +96,14 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // — the scenario's whole point is "confirm it resolves to exactly one element".
   // A structural input match alone (ignoring the result) would let count:0/2 pass
   // (codex, PR #17).
-  const verified = c.some(
-    (x) =>
-      (x.tool === "locate" || x.tool === "wait_for") &&
-      !x.isError &&
-      Number(out(x).count) === 1 &&
-      candidates.some((k) => locatorMatchesInput(k.locator, x.input)),
-  );
+  const verified = c.some((x) => {
+    if (!(x.tool === "locate" || x.tool === "wait_for") || x.isError) return false;
+    const o = out(x);
+    // locate exposes top-level `count`; wait_for nests it under `result`
+    // (src/tools/dom.ts) — read the right shape per tool (codex, PR #17 round 2).
+    const cnt = x.tool === "wait_for" ? Number((o.result as { count?: unknown } | undefined)?.count) : Number(o.count);
+    return cnt === 1 && candidates.some((k) => locatorMatchesInput(k.locator, x.input));
+  });
   const noEvalMutation = !mutatedViaEvaluate(c);
   const mechanic: 0 | 1 = calledSuggest && verified && noEvalMutation ? 1 : 0;
 

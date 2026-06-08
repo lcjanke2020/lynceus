@@ -44,7 +44,25 @@ describe("session-resume oracle", () => {
     ];
     const out = sessionResume.oracle(trace, GOOD_ANSWER);
     expect(out.mechanic).toBe(0);
-    expect(out.notes).toMatch(/no genuine fresh session/);
+    expect(out.notes).toMatch(/no genuine reset before restore/);
+  });
+
+  it("fails mechanic when close_session happens AFTER the restore (ordering — Copilot PR #17 r2)", () => {
+    // Export → load → verify, THEN close + relaunch. Count-only (close happened +
+    // ≥2 launches) would pass; ordering must not.
+    const trace: TraceEntry[] = [
+      ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),
+      ...pair("2", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("3", "set_cookies", { cookies: [{ name: "session_token", value: "s", url: "http://x" }] }, { set: 1 }),
+      ...pair("4", "export_storage_state", { path: PATH }, { saved: PATH, cookies: 1, origins: 1 }),
+      ...pair("5", "load_storage_state", { path: PATH }, { loaded: PATH, cookies: 1, origins_restored: ["http://x"], origins_skipped: [] }),
+      ...pair("6", "evaluate", { expression: "localStorage.getItem('user_pref')" }, { value: "dark" }),
+      ...pair("7", "close_session", {}, { closed: true }),
+      ...pair("8", "launch_chrome", { headless: true }, { targetId: "T2" }),
+    ];
+    const out = sessionResume.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(0);
+    expect(out.notes).toMatch(/no genuine reset before restore/);
   });
 
   it("fails correctness when the answer doesn't name the restored value", () => {

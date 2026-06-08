@@ -33,8 +33,6 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
 
   const exported = last(ok("export_storage_state"));
   const loaded = last(ok("load_storage_state"));
-  const closed = c.some((x) => x.tool === "close_session" && !x.isError);
-  const launches = c.filter((x) => x.tool === "launch_chrome" && !x.isError).length;
 
   // MECHANIC — a real export → reset → restore → verify cycle.
   // The export must capture BOTH halves (cookies AND the origin's localStorage),
@@ -53,8 +51,14 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const verifyAfterLoad =
     loadIdx >= 0 &&
     c.slice(loadIdx + 1).some((x) => ["get_cookies", "get_form_state", "evaluate"].includes(x.tool) && !x.isError);
-  // ≥2 launch_chrome proves a genuine fresh session (initial + post-close relaunch).
-  const realReset = closed && launches >= 2;
+  // The reset must come BEFORE the restore: a close_session, a relaunch AFTER it,
+  // and the final load AFTER the close. A count-only check (close happened + ≥2
+  // launches) would let an agent load+verify and only THEN close (Copilot, PR #17
+  // round 2).
+  const closeIdx = c.map((x) => x.tool === "close_session" && !x.isError).lastIndexOf(true);
+  const relaunchAfterClose =
+    closeIdx >= 0 && c.slice(closeIdx + 1).some((x) => x.tool === "launch_chrome" && !x.isError);
+  const realReset = closeIdx >= 0 && relaunchAfterClose && loadIdx > closeIdx;
   // Forbid seeding/restoring state through raw evaluate — set_cookies +
   // load_storage_state are the tools under test (kimi, PR #17). Read-only
   // localStorage.getItem / document.cookie reads are not flagged.
@@ -76,7 +80,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const why: string[] = [];
   if (!exported) why.push("mechanic: never called export_storage_state");
   if (!exportHadState) why.push("mechanic: export did not capture both cookies and the origin's localStorage");
-  if (!realReset) why.push("mechanic: no genuine fresh session (need close_session + a 2nd launch_chrome)");
+  if (!realReset) why.push("mechanic: no genuine reset before restore (need close_session → relaunch → load in order)");
   if (!loaded) why.push("mechanic: never called load_storage_state");
   if (!loadRestored) why.push("mechanic: load_storage_state did not restore the origin's localStorage (origins_restored empty)");
   if (!verifyAfterLoad) why.push("mechanic: did not verify state after restoring");

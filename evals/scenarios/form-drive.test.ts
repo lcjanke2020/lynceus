@@ -90,6 +90,35 @@ describe("form-drive oracle", () => {
     expect(out.correctness).toBe(1);
   });
 
+  it("fails correctness when the name fill used the wrong value, even if the answer claims otherwise (regression: codex PR #17 r2)", () => {
+    const trace: TraceEntry[] = [
+      ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),
+      ...pair("2", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("3", "fill", { selector: "#name-input", value: "Adda Lovelace" }, { status: "filled", value_length: 13, tag: "input", count: 1 }),
+      ...pair("4", "select_option", { selector: "#fruit", option_label: "Banana" }, { status: "selected", selected: [{ value: "banana", index: 1 }], multiple: false, count: 1 }),
+      ...pair("5", "check", { selector: "#subscribe" }, { status: "checked", checked: true, count: 1 }),
+      ...pair("6", "select_option", { selector: "#fruits-multi", option_index: [0, 2], multiple: true }, { status: "selected", selected: [{ value: "apple", index: 0 }, { value: "cherry", index: 2 }], multiple: true, count: 1 }),
+      ...pair("7", "get_form_state", {}, FORM_STATE),
+    ];
+    // Answer claims "Ada Lovelace" but the fill carried the wrong value — must not pass.
+    const out = formDrive.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(0);
+    expect(out.correctness).toBe(0);
+  });
+
+  it("flags an evaluate that mutates a <select> via selectedIndex (regression: Copilot PR #17 r2)", () => {
+    const trace: TraceEntry[] = [
+      ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),
+      ...pair("2", "navigate", { url: "http://x" }, { url: "http://x" }),
+      ...pair("3", "evaluate", { expression: "document.querySelector('#fruit').selectedIndex = 1" }, { value: null }),
+      ...pair("4", "get_form_state", {}, FORM_STATE),
+    ];
+    const out = formDrive.oracle(trace, GOOD_ANSWER);
+    expect(out.mechanic).toBe(0);
+    expect(out.correctness).toBe(0);
+    expect(out.notes).toMatch(/raw evaluate/);
+  });
+
   it("fails mechanic when the multi-select is incomplete (only apple, missing cherry)", () => {
     const trace: TraceEntry[] = [
       ...pair("1", "launch_chrome", { headless: true }, { targetId: "T1" }),

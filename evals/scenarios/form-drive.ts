@@ -66,8 +66,12 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
     /(subscrib|true|on\b|checked|yes|enabled)/.test(fa) &&
     /apple/.test(fa) &&
     /cherry/.test(fa);
-  // Anti-cheat: an evaluate-mutation solve does not count, even if the end state is right.
-  const correctness: 0 | 1 = endStateOk && faOk && noEvalMutation ? 1 : 0;
+  // Include filledName in correctness: the CLI exit gate is correctness-only for
+  // non-xfail scenarios, and the unnamed #name-input can't be read back via
+  // get_form_state — so without this, a wrong/absent name fill plus an answer
+  // that merely says "Ada Lovelace" would pass (codex, PR #17 round 2). Anti-
+  // cheat: an evaluate-mutation solve does not count even if the end state is right.
+  const correctness: 0 | 1 = filledName && endStateOk && faOk && noEvalMutation ? 1 : 0;
 
   const why: string[] = [];
   if (!filledName) why.push("mechanic: no successful fill on the name field");

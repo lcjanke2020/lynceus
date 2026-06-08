@@ -88,7 +88,7 @@ export function mutatedViaEvaluate(calls: Pair[]): boolean {
   return calls.some(
     (c) =>
       c.tool === "evaluate" &&
-      /setItem|dispatchEvent|\.value\s*=(?!=)|\.checked\s*=(?!=)|\.selected\s*=(?!=)|document\.cookie\s*=(?!=)/.test(
+      /setItem|dispatchEvent|\.value\s*=(?!=)|\.checked\s*=(?!=)|\.selected\s*=(?!=)|\.selectedIndex\s*=(?!=)|document\.cookie\s*=(?!=)/.test(
         inputText(c.input),
       ),
   );
