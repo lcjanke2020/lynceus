@@ -288,9 +288,16 @@ function suggestDefScript(): string {
       if (placeholder) cands.push({ by: "placeholder", placeholder });
       if (nameAttr) cands.push({ by: "name", name: nameAttr });
       cands.push({ by: "css", css: cssPath(el) });
-      const annotated = cands.map((locator) => {
+      // findElements("role"/"text") scans `body *`; cache once since we call it per candidate.
+      const bodyEls = Array.from(document.querySelectorAll("body *"));
+      const resolveMatches = (locator) => {
+        if (locator.by === "text") return bodyEls.filter((e) => leafTextMatches(e, locator.text || locator.name, !!locator.exact));
+        if (locator.by === "role") return bodyEls.filter((e) => implicitRole(e) === lower(locator.role) && matchesText(accessibleName(e), locator.name, !!locator.exact));
         const found = findElements(locator);
-        const els = found.ok ? found.elements : [];
+        return found.ok ? found.elements : [];
+      };
+      const annotated = cands.map((locator) => {
+        const els = resolveMatches(locator);
         return {
           locator,
           match_count: els.length,
