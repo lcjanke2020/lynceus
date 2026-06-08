@@ -148,6 +148,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
     { tool: "get_console_logs", args: {} },
     { tool: "get_network_requests", args: {} },
     { tool: "query_selector", args: { selector: "#x" } },
+    { tool: "get_cookies", args: {} },
   ];
 
   for (const { tool, args } of noSessionCases) {

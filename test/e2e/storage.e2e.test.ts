@@ -47,25 +47,47 @@ describe("session portability (e2e)", () => {
     }
   });
 
-  it("set_cookies → get_cookies → export captures the cookie", async () => {
+  it("set_cookies → get_cookies → export captures the cookie (incl. HttpOnly round-trip + redaction)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "cdp-cookies-e2e-"));
     try {
-      await call(tools, "set_cookies", { cookies: [{ name: "e2e", value: "yes", url: sampleAppUrl() }] });
+      // `hocookie` is HttpOnly and its name does NOT match the sensitive-name
+      // heuristic, so its redaction below is attributable to HttpOnly alone.
+      // It's the load-bearing claim: an HttpOnly cookie is invisible to
+      // document.cookie, so its value reaching the export proves capture went
+      // through CDP Network.* — and get_cookies must redact it.
+      await call(tools, "set_cookies", {
+        cookies: [
+          { name: "e2e", value: "yes", url: sampleAppUrl() },
+          { name: "hocookie", value: "ho-secret", url: sampleAppUrl(), httpOnly: true },
+        ],
+      });
 
-      const got = await call<{ cookies: Array<{ name: string; value?: string; redacted: boolean }> }>(
-        tools,
-        "get_cookies",
-        { urls: [sampleAppUrl()] },
-      );
+      // The HttpOnly cookie is not readable from page JS.
+      const dom = await call<{ value: string }>(tools, "evaluate", { expression: "document.cookie" });
+      expect(dom.value).not.toContain("hocookie");
+
+      const got = await call<{
+        cookies: Array<{ name: string; value?: string; redacted: boolean; value_length: number }>;
+      }>(tools, "get_cookies", { urls: [sampleAppUrl()] });
+
       const cookie = got.cookies.find((c) => c.name === "e2e");
       expect(cookie).toBeTruthy();
       expect(cookie?.redacted).toBe(false);
       expect(cookie?.value).toBe("yes");
 
+      const ho = got.cookies.find((c) => c.name === "hocookie");
+      expect(ho?.redacted).toBe(true); // HttpOnly -> redacted on inspection
+      expect(ho?.value).toBeUndefined();
+      expect(ho?.value_length).toBe("ho-secret".length);
+
       const f = join(dir, "c.json");
       await call(tools, "export_storage_state", { path: f });
       const state = JSON.parse(await readFile(f, "utf8"));
       expect(state.cookies.some((c: { name: string; value: string }) => c.name === "e2e" && c.value === "yes")).toBe(true);
+      // Full HttpOnly value survives into the export (document.cookie can't see it).
+      const exportedHo = state.cookies.find((c: { name: string }) => c.name === "hocookie");
+      expect(exportedHo?.value).toBe("ho-secret");
+      expect(exportedHo?.httpOnly).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
