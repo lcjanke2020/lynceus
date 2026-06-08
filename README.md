@@ -102,9 +102,9 @@ npm run test:e2e
 ```
 
 Drives the 44 MCP tools against a real headless Chromium attached to a
-built copy of `examples/sample-app/`. Nine specs cover lifecycle, breakpoints,
-stepping, exceptions, console, network, workers, screenshot, and DOM
-interaction. Sequential (one Chrome shared across specs, isolated by a
+built copy of `examples/sample-app/`. Ten specs cover lifecycle, breakpoints,
+stepping, exceptions, console, network, workers, screenshot, DOM
+interaction, and form driving. Sequential (one Chrome shared across specs, isolated by a
 shared `afterEach(close_session)`). Run time is a few seconds on a warm
 machine.
 
