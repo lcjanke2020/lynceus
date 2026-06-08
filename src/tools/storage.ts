@@ -91,7 +91,20 @@ export function registerStorageTools(server: McpServer) {
           ? [{ origin: probed.origin, localStorage: probed.localStorage }]
           : [];
       const state: StorageState = { cookies: cookies.map(cdpCookieToState), origins };
-      await writeFile(input.path, JSON.stringify(state, null, 2));
+      // 0o600: the file holds full cookie values (incl. HttpOnly auth/session
+      // tokens) — the description says "treat it as a secret", so don't write it
+      // world-readable on a shared box.
+      try {
+        await writeFile(input.path, JSON.stringify(state, null, 2), { mode: 0o600 });
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new ToolError(
+            "not_found",
+            `could not write storage-state file (does the parent directory exist?): ${(e as Error).message}`,
+          );
+        }
+        throw e; // EACCES/EISDIR/etc. surface as internal_error via registerJsonTool
+      }
       return { saved: input.path, cookies: state.cookies.length, origins: origins.length };
     },
   );
@@ -99,7 +112,7 @@ export function registerStorageTools(server: McpServer) {
   registerJsonTool(
     server,
     "load_storage_state",
-    "Restore a session from a Playwright-shaped storageState JSON file: sets all cookies (no navigation needed), then restores localStorage for the entries whose origin matches the current page. Origins that don't match the current page are returned in origins_skipped (restoring them would require navigating there first). File read is gated by the same operator rule as screenshot path= / --allow-remote.",
+    "Restore a session from a Playwright-shaped storageState JSON file: sets all cookies (no navigation needed), then restores localStorage for the entries whose origin matches the current page. Cookies are added on top of the existing jar (additive, not a clean-context replace), so prefer a fresh session for Playwright-equivalent semantics. Origins that don't match the current page are returned in origins_skipped (restoring them would require navigating there first). File read is gated by the same operator rule as screenshot path= / --allow-remote.",
     { path: z.string().describe("Absolute path to a storageState JSON file (as written by export_storage_state).") },
     async (input: { path: string }) => {
       const s = requireSession();
@@ -107,7 +120,10 @@ export function registerStorageTools(server: McpServer) {
       try {
         raw = await readFile(input.path, "utf8");
       } catch (e) {
-        throw new ToolError("not_found", `could not read storage-state file: ${(e as Error).message}`);
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new ToolError("not_found", `could not read storage-state file: ${(e as Error).message}`);
+        }
+        throw e; // EACCES/EISDIR/etc. surface as internal_error rather than masquerading as not_found
       }
       let parsed: unknown;
       try {
@@ -171,7 +187,11 @@ export function registerStorageTools(server: McpServer) {
       if (input.cookies.length === 0) throw new ToolError("missing_arg", "cookies array is empty");
       const missing = input.cookies.find((c) => !c.url && !c.domain);
       if (missing) throw new ToolError("missing_arg", `cookie '${missing.name}' needs a url or domain`);
-      await s.client!.send("Network.setCookies", { cookies: input.cookies });
+      // Normalize the session-cookie sentinel the same way load_storage_state
+      // does, so an exported `expires: -1` piped in here isn't sent as a 1969 expiry.
+      await s.client!.send("Network.setCookies", {
+        cookies: input.cookies.map(withSessionExpiryOmitted),
+      });
       return { set: input.cookies.length };
     },
   );
@@ -221,6 +241,20 @@ interface CdpCookieParam {
   expires?: number;
 }
 
+/**
+ * CDP's `Network.setCookies` reads `expires` as an absolute epoch-seconds
+ * timestamp, so the session-cookie sentinel (`-1`, which `export_storage_state`
+ * writes) must be dropped rather than forwarded — otherwise the cookie is set
+ * already-expired (1969) and silently rejected. Shared by `load_storage_state`
+ * and `set_cookies` so both restore paths normalize identically.
+ */
+function withSessionExpiryOmitted<T extends { expires?: number }>(cookie: T): T {
+  if (typeof cookie.expires === "number" && cookie.expires >= 0) return cookie;
+  const copy: T = { ...cookie };
+  delete copy.expires;
+  return copy;
+}
+
 function stateCookieToCdp(c: StateCookie): CdpCookieParam {
   const param: CdpCookieParam = {
     name: c.name,
@@ -229,11 +263,11 @@ function stateCookieToCdp(c: StateCookie): CdpCookieParam {
     path: c.path,
     secure: !!c.secure,
     httpOnly: !!c.httpOnly,
+    expires: c.expires,
   };
   if (c.sameSite) param.sameSite = c.sameSite;
   // -1 / undefined means a session cookie — omit expires entirely.
-  if (typeof c.expires === "number" && c.expires >= 0) param.expires = c.expires;
-  return param;
+  return withSessionExpiryOmitted(param);
 }
 
 function redactForDisplay(c: CdpCookie): Record<string, unknown> {
@@ -262,7 +296,10 @@ const READ_ORIGIN_AND_LOCALSTORAGE = String.raw`(() => {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      items.push({ name: k, value: localStorage.getItem(k) });
+      if (k === null) continue;
+      const v = localStorage.getItem(k);
+      if (v === null) continue;
+      items.push({ name: k, value: v });
     }
   } catch (e) {}
   return { origin: location.origin, localStorage: items };
@@ -279,14 +316,17 @@ function restoreLocalStorageExpr(origins: StorageState["origins"]): string {
     const restored = [];
     const skipped = [];
     for (const o of origins) {
-      if (o.origin === current) {
-        for (const it of o.localStorage) {
-          try { localStorage.setItem(it.name, it.value); } catch (e) {}
-        }
-        restored.push(o.origin);
-      } else {
+      if (o.origin !== current) {
         skipped.push(o.origin);
+        continue;
       }
+      // If any setItem throws (quota exceeded, storage disabled), report the
+      // origin as skipped rather than misleadingly claiming it was restored.
+      let ok = true;
+      for (const it of o.localStorage) {
+        try { localStorage.setItem(it.name, it.value); } catch (e) { ok = false; }
+      }
+      (ok ? restored : skipped).push(o.origin);
     }
     return { restored, skipped };
   })()`;

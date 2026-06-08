@@ -176,4 +176,21 @@ describe("set_cookies", () => {
     expect(r.set).toBe(1);
     expect(fake.sentCalls.some((c) => c.method === "Network.setCookies")).toBe(true);
   });
+
+  it("omits the -1 session sentinel before forwarding to CDP (no 1969 expiry)", async () => {
+    // Same normalization as load_storage_state: an exported `expires: -1` piped
+    // straight into set_cookies must not reach CDP as a past timestamp.
+    const { fake } = setupSession();
+    fake.clearSentCalls();
+    await setCookies.handler({
+      cookies: [
+        { name: "sid", value: "x", url: "https://x", expires: -1 },
+        { name: "keep", value: "y", url: "https://x", expires: 1893456000 },
+      ],
+    });
+    const setCall = fake.sentCalls.find((c) => c.method === "Network.setCookies");
+    const sent = setCall?.params.cookies as Array<Record<string, unknown>>;
+    expect(sent.find((c) => c.name === "sid")!.expires).toBeUndefined(); // -1 session cookie -> omitted
+    expect(sent.find((c) => c.name === "keep")!.expires).toBe(1893456000);
+  });
 });
