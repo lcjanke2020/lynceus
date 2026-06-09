@@ -1,6 +1,6 @@
 # evals/
 
-**Last updated: 2026-06-06**
+**Last updated: 2026-06-09**
 
 L4 of the test pyramid — runs Claude through scripted scenarios that exercise the full MCP tool surface end-to-end against a real browser. For pyramid context see [../docs/ARCHITECTURE.md §Test pyramid](../docs/ARCHITECTURE.md); for the cost model + caching guarantees see [../docs/test-eval-plan.md §L4](../docs/test-eval-plan.md).
 
@@ -84,8 +84,8 @@ sequenceDiagram
     participant R as harness/runner.ts
     participant SS as static-server<br/>(scenario variant)
     participant MCP as dist/index.js<br/>(subprocess)
-    participant A as VendorAdapter<br/>(anthropic / lm-studio)
-    participant Cl as Model<br/>(Claude / LM Studio / future)
+    participant A as VendorAdapter<br/>(anthropic / openai / vertex / deepseek / moonshot / lm-studio)
+    participant Cl as Model<br/>(Claude / GPT / Gemini / DeepSeek / Kimi / LM Studio)
     participant Or as grader (oracle)
 
     CLI->>R: run(scenario, trials, adapter?)
