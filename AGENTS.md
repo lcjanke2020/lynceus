@@ -28,6 +28,7 @@ The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-ve
 | L4 agent evals (scenarios, harness, oracle, cost) | [evals/README.md](./evals/README.md) |
 | The shared test web app | [examples/sample-app/README.md](./examples/sample-app/README.md) |
 | Chromium launch security, `--no-sandbox`, AppArmor, Bubblewrap | [docs/chromium-sandboxing.md](./docs/chromium-sandboxing.md) |
+| Getting local `npm run test:e2e` passing sandbox-on (Playwright Chromium + AppArmor profile) | [docs/local-l3-e2e-setup.md](./docs/local-l3-e2e-setup.md) |
 | Debugging a flaky/failed test | [docs/test-eval-plan.md](./docs/test-eval-plan.md) §Critical gotchas — **mandatory** before debugging any test |
 | A test fails on macOS/Windows but passes on Linux | [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md) |
 | Original design rationale + post-implementation discoveries | [docs/design-notes.md](./docs/design-notes.md) |
@@ -81,6 +82,6 @@ Firefox / Safari, Node.js inspector, `Storage.*`, `Tracing.*`, `HeapProfiler.*`,
 - **`step_over` returns `paused: false` but session is paused** → entry-guard race; see `src/session/pause.ts` `waitForPauseOrResume()` and [docs/test-eval-plan.md](./docs/test-eval-plan.md) §Critical gotchas.
 - **Breakpoint doesn't bind / `no_mapping` error** → call `list_scripts` (which scripts loaded?) and `resolve_source_position` (where does the source map place this line?). The `mapOriginalToGenerated` comment in `src/sourcemap/store.ts` explains why `allGeneratedPositionsFor` is required.
 - **Source map "loaded" but mappings stale after HMR** → known gotcha; `ScriptStore.upsert` preserves the prior `consumer` on re-parse. Workaround: `close_session` + relaunch, or call `attachMap()` after a reload.
-- **Chromium fails with `No usable sandbox!` or you are deciding on `--no-sandbox`** → [docs/chromium-sandboxing.md](./docs/chromium-sandboxing.md) before changing launch defaults.
+- **Chromium fails with `No usable sandbox!` or you are deciding on `--no-sandbox`** → [docs/chromium-sandboxing.md](./docs/chromium-sandboxing.md) before changing launch defaults. To make local `npm run test:e2e` pass sandbox-on instead (install Playwright Chromium + attach the AppArmor profile) → [docs/local-l3-e2e-setup.md](./docs/local-l3-e2e-setup.md).
 - **L4 eval cost spike or model-deprecation alert** → [docs/test-eval-plan.md](./docs/test-eval-plan.md) §L4 (cost gating + model rotation).
 - **A test fails only on Windows / macOS / WSL2** → [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md) before anything else.

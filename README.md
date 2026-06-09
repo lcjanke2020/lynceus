@@ -142,7 +142,10 @@ pretest hook) enforces this.
 `launch_chrome` defaults to `--no-sandbox` for Ubuntu/Playwright-Chromium
 compatibility. See [`docs/chromium-sandboxing.md`](docs/chromium-sandboxing.md)
 before changing that default or relying on `sandbox: true`, AppArmor, snap
-confinement, or Bubblewrap.
+confinement, or Bubblewrap. For the step-by-step setup that gets local
+`npm run test:e2e` passing with the sandbox **on** (install Playwright Chromium
++ attach the AppArmor profile), see
+[`docs/local-l3-e2e-setup.md`](docs/local-l3-e2e-setup.md).
 
 ### L4 — LLM agent evals
 

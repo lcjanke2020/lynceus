@@ -28,6 +28,7 @@ Where to find everything in this repo.
 |---|---|
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Component diagram, layered view, request-flow sequences, session state machine, test-pyramid diagram. |
 | [docs/chromium-sandboxing.md](./docs/chromium-sandboxing.md) | Canonical `--no-sandbox` / `sandbox: true` guidance: Chromium sandbox, AppArmor, unprivileged user namespaces, snap confinement, and Bubblewrap. |
+| [docs/local-l3-e2e-setup.md](./docs/local-l3-e2e-setup.md) | Step-by-step runbook to get local `npm run test:e2e` passing sandbox-on on Ubuntu: install Playwright Chromium, verify the resolver, attach the `cdp-mcp-chromium` AppArmor `userns` profile, with the `CI=1` `--no-sandbox` fallback. |
 | [docs/design-notes.md](./docs/design-notes.md) | Original design plan + a "What the implementation discovered" section (source-map line numbering, CRI typed-send trap, sessionId multi-target complexity). |
 | [docs/launchd-service.md](./docs/launchd-service.md) | macOS launchd user-service setup for running the npm package as a persistent local SSE server. |
 | [docs/systemd-service.md](./docs/systemd-service.md) | Linux systemd user-service setup for running the npm package as a persistent local SSE server. |
