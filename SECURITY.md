@@ -27,8 +27,9 @@ target it is attached to.
   network listener. This is the recommended mode.
 - **SSE transport (`--port`).** Binds to `127.0.0.1` (loopback) by default, and
   on a loopback bind it validates the `Host` and `Origin` headers as a
-  DNS-rebinding defense. Exposing it off-loopback requires the explicit
-  `--allow-remote` gate — which also **drops** the Host/Origin checks, because
+  DNS-rebinding defense. Exposing it off-loopback requires explicit opt-in
+  (the `--allow-remote` flag or `CDP_MCP_ALLOW_REMOTE=1`) — which also **drops**
+  the Host/Origin checks, because
   the hostnames/IPs the server can be reached by cannot be statically
   enumerated. At no point is there built-in authentication: anyone who can reach
   the port gains the full debugger capability described above. Do **not** expose
