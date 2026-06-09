@@ -215,7 +215,7 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     expect(resp.stopReason).toBe("tool_use");
   });
 
-  it("bills cache from prompt_cache_hit_tokens (LEO-233 §3)", async () => {
+  it("bills cache from prompt_cache_hit_tokens (GH #8)", async () => {
     stubFetchOk({
       choices: [
         { message: { role: "assistant", content: "x" }, finish_reason: "stop" },
@@ -309,7 +309,7 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     expect(() => makeDeepseekAdapter()).toThrow(/EVAL_DEEPSEEK_MODEL/);
   });
 
-  // Pre-flight pricing validation (LEO-233 review): an unknown model id must
+  // Pre-flight pricing validation (GH #8 review): an unknown model id must
   // throw at construction — BEFORE any billable request — not later in
   // estimateCostUsd after the first paid call. No fetch should be issued.
   it("throws at construction (no fetch) for a model with no pricing row", () => {

@@ -134,7 +134,7 @@ export interface OpenAIChatResponse {
     prompt_tokens_details?: {
       cached_tokens?: number;
     };
-    /** DeepSeek's context-cache accounting (LEO-233 §3). DeepSeek reports
+    /** DeepSeek's context-cache accounting (GH #8). DeepSeek reports
      *  cache hits via these top-level fields rather than OpenAI's nested
      *  `prompt_tokens_details.cached_tokens` (which Moonshot uses). In both
      *  cases `prompt_tokens` INCLUDES the cached portion. */

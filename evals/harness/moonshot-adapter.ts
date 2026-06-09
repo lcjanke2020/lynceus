@@ -1,4 +1,4 @@
-// Moonshot (Kimi) vendor adapter (LEO-233) — OpenAI-compatible Chat Completions.
+// Moonshot (Kimi) vendor adapter (GH #8) — OpenAI-compatible Chat Completions.
 //
 // Thin wrapper over the shared `makeOpenAICompatAdapter` factory; see
 // `openai-compat-adapter.ts` for the transport and the v1 scope notes.
@@ -23,7 +23,7 @@ export function makeMoonshotAdapter(): VendorAdapter {
     defaultBaseUrl: "https://api.moonshot.ai/v1",
     // No `extraBody`: Kimi K2 Thinking reasons by Moonshot's server-side
     // default — there's no request-side toggle to send. Cache hits come back
-    // OpenAI-style under `prompt_tokens_details.cached_tokens` (LEO-233 §3).
+    // OpenAI-style under `prompt_tokens_details.cached_tokens` (GH #8).
     cacheTokensFrom: (usage) => {
       const hit = usage?.prompt_tokens_details?.cached_tokens ?? 0;
       return hit > 0 ? { cachedTokens: hit } : undefined;

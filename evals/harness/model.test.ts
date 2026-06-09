@@ -153,7 +153,7 @@ describe("estimateCostUsd", () => {
     expect(cost).toBeGreaterThanOrEqual(0);
   });
 
-  it("DeepSeek: bills the cached portion at inputCacheRead, the rest at input (LEO-233 §3)", () => {
+  it("DeepSeek: bills the cached portion at inputCacheRead, the rest at input (GH #8)", () => {
     // DeepSeek's prompt_tokens INCLUDES the cache-hit portion (surfaced as
     // `cachedTokens`); estimateCostUsd subtracts it before billing fresh input.
     const row = PRICING_CATALOG.deepseek["deepseek-v4-pro"]!;
@@ -193,7 +193,7 @@ describe("estimateCostUsd", () => {
     expect(cost).toBeGreaterThanOrEqual(0);
   });
 
-  it("Moonshot: bills the cached portion at inputCacheRead, the rest at input (LEO-233 §3)", () => {
+  it("Moonshot: bills the cached portion at inputCacheRead, the rest at input (GH #8)", () => {
     const row = PRICING_CATALOG.moonshot["kimi-k2.6"]!;
     const cost = estimateCostUsd("moonshot", "kimi-k2.6", {
       inputTokens: 80_000,
@@ -424,7 +424,7 @@ describe("pricingFor", () => {
     expect(row.longContextOutput).toBe(18.0);
   });
 
-  it("returns deepseek v4 rows with a cache-read bucket (LEO-233 §3)", () => {
+  it("returns deepseek v4 rows with a cache-read bucket (GH #8)", () => {
     const pro = pricingFor("deepseek", "deepseek-v4-pro");
     expect(pro.input).toBe(1.74);
     expect(pro.inputCacheRead).toBe(0.0145);
@@ -436,7 +436,7 @@ describe("pricingFor", () => {
     expect(flash.output).toBe(0.28);
   });
 
-  it("returns moonshot kimi rows with a cache-read bucket (LEO-233 §3)", () => {
+  it("returns moonshot kimi rows with a cache-read bucket (GH #8)", () => {
     const k26 = pricingFor("moonshot", "kimi-k2.6");
     expect(k26.input).toBe(0.95);
     expect(k26.inputCacheRead).toBe(0.16);

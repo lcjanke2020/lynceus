@@ -154,7 +154,7 @@ export type NormalizedThinkingBlock =
       // `reasoning_content` on the assistant message (Chat Completions) and
       // HARD-REJECTS a follow-up turn whose assistant tool-call message omits
       // it. The openai-compat adapter captures it here and re-emits it as
-      // `reasoning_content` on the next-turn assistant message (LEO-233). No
+      // `reasoning_content` on the next-turn assistant message (GH #8). No
       // signature/blob — it's plain reasoning text round-tripped verbatim.
       type: "thinking";
       vendor: "moonshot";

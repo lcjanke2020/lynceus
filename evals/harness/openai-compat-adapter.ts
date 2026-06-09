@@ -1,4 +1,4 @@
-// Shared OpenAI-compatible Chat Completions adapter factory (LEO-233).
+// Shared OpenAI-compatible Chat Completions adapter factory (GH #8).
 //
 // DeepSeek and Moonshot (Kimi) both speak the OpenAI Chat Completions wire
 // format — the same shape the LM Studio adapter already drives, but over the
@@ -20,7 +20,7 @@
 // live API — GH #8). Sends `max_tokens` (NOT `max_completion_tokens`),
 // defaulting to DEFAULT_MAX_OUTPUT_TOKENS so a reasoning turn isn't truncated
 // (GH #7). Per-vendor prompt-cache accounting is
-// wired via `cfg.cacheTokensFrom` (LEO-233 §3): DeepSeek's
+// wired via `cfg.cacheTokensFrom` (GH #8): DeepSeek's
 // `prompt_cache_hit_tokens` and Moonshot's `prompt_tokens_details.cached_tokens`
 // flow into `NormalizedMessage.usage.cacheTokens`, which `estimateCostUsd` bills
 // at the cache-read rate.
@@ -70,7 +70,7 @@ export interface OpenAICompatConfig {
     Partial<OpenAIChatRequest>,
     "model" | "messages" | "tools" | "tool_choice" | "max_tokens" | "max_completion_tokens"
   >;
-  /** Per-vendor cache-token extractor (LEO-233 §3). Maps the vendor's native
+  /** Per-vendor cache-token extractor (GH #8). Maps the vendor's native
    *  usage shape to the normalized `cacheTokens` map consumed by
    *  `estimateCostUsd`. DeepSeek reads `prompt_cache_hit_tokens`; Moonshot
    *  reads `prompt_tokens_details.cached_tokens`. Unset = no cache accounting
@@ -117,7 +117,7 @@ export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter 
   // (vendor, model). Otherwise pricingFor() wouldn't throw until
   // estimateCostUsd runs in the runner — i.e. AFTER the first billable
   // request. For a paid remote path, turn that post-spend crash into a
-  // construction-time error (LEO-233 review). Row intentionally discarded.
+  // construction-time error (GH #8 review). Row intentionally discarded.
   pricingFor(cfg.vendor, model);
 
   return {
@@ -187,7 +187,7 @@ export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter 
             );
           }
           const oResp = (await resp.json()) as OpenAIChatResponse;
-          // Per-vendor cache accounting (LEO-233 §3): the extractor maps the
+          // Per-vendor cache accounting (GH #8): the extractor maps the
           // vendor's native usage shape into the normalized cacheTokens map.
           // Unset (e.g. lm-studio) → translator leaves cacheTokens undefined.
           return translateResponse(oResp, cfg.vendor, cfg.cacheTokensFrom);
