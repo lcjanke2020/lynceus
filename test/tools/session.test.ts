@@ -176,6 +176,38 @@ describe("launch_chrome", () => {
     expect(call?.chromeFlags).not.toContain("--no-sandbox");
   });
 
+  it("CDP_SANDBOX=true makes an arg-less launch default to sandbox-on (no --no-sandbox)", async () => {
+    // The L4 eval runner sets CDP_SANDBOX=true (via EVAL_SANDBOX) so a whole
+    // suite runs sandbox-on without the model passing `sandbox` on every call.
+    const prev = process.env.CDP_SANDBOX;
+    process.env.CDP_SANDBOX = "true";
+    try {
+      launchMock.mockResolvedValue({ port: 9999, pid: 1, kill: vi.fn() });
+      cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "x", title: "" }]);
+      await launchChrome.handler({});
+      const call = launchMock.mock.calls[0]?.[0];
+      expect(call?.chromeFlags).not.toContain("--no-sandbox");
+    } finally {
+      if (prev === undefined) delete process.env.CDP_SANDBOX;
+      else process.env.CDP_SANDBOX = prev;
+    }
+  });
+
+  it("explicit sandbox:false forces --no-sandbox even when CDP_SANDBOX=true", async () => {
+    const prev = process.env.CDP_SANDBOX;
+    process.env.CDP_SANDBOX = "true";
+    try {
+      launchMock.mockResolvedValue({ port: 9999, pid: 1, kill: vi.fn() });
+      cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "x", title: "" }]);
+      await launchChrome.handler({ sandbox: false });
+      const call = launchMock.mock.calls[0]?.[0];
+      expect(call?.chromeFlags).toContain("--no-sandbox");
+    } finally {
+      if (prev === undefined) delete process.env.CDP_SANDBOX;
+      else process.env.CDP_SANDBOX = prev;
+    }
+  });
+
   it("already_session error when a session is already active", async () => {
     sessionState.client = makeFakeCdp() as any;
     sessionState.chromePort = 9999;

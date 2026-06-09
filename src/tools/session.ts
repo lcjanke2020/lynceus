@@ -25,7 +25,7 @@ export function registerSessionTools(server: McpServer) {
         .boolean()
         .optional()
         .describe(
-          "Enable Chromium's sandbox. Default false — we add --no-sandbox. On Ubuntu 23.10+ AppArmor restricts the unprivileged user namespace Chromium's sandbox depends on, so unsandboxed launch is the working default for automation. Pass true only on a host with a working sandbox path (AppArmor userns allowance or SUID chrome_sandbox helper).",
+          "Enable Chromium's sandbox. When omitted, defaults from the CDP_SANDBOX env (default false → we add --no-sandbox). On Ubuntu 23.10+ AppArmor restricts the unprivileged user namespace Chromium's sandbox depends on, so unsandboxed launch is the working default for automation. Pass true only on a host with a working sandbox path (AppArmor userns allowance or SUID chrome_sandbox helper).",
         ),
     },
     async (input: {

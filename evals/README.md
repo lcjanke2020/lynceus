@@ -126,6 +126,15 @@ npm run eval:quick                           # compute-step × 1 trial (~$0.50�
 npm run eval                                 # all scenarios × 3 trials (~$4 full pass — first observed on Opus-4.7-medium, the prior default; 4.8 shares its rate card)
 npm run eval -- --scenarios=compute-step --trials=1
 
+# Opt the run into Chromium's sandbox. Default OFF — the model launches
+# Chromium via launch_chrome, whose `sandbox` arg defaults to false
+# (--no-sandbox automation default; see docs/chromium-sandboxing.md). The
+# model normally omits the arg, so to run a whole suite sandbox-on the runner
+# plumbs CDP_SANDBOX=true to the server (which uses it as the launch default).
+# Use ONLY on a host with a working sandbox path (AppArmor userns allowance or
+# SUID chrome_sandbox helper); on a host without one Chromium FATALs at startup.
+EVAL_SANDBOX=true npm run eval
+
 # Swap to the cheaper Sonnet 4.6 baseline (no thinking by default on
 # budget-style models). Per-(vendor, model) pricing via `pricingFor` on
 # the namespaced PRICING_CATALOG keeps the cost estimate correct on

@@ -56,7 +56,14 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
   // (stale) port → ECONNREFUSED on every connect. Don't pass it; let
   // chrome-launcher own port selection. `runningChrome.port` then reflects
   // the actual port Chrome is listening on. (Codex blocker review on PR #11.)
-  const useSandbox = opts.sandbox === true;
+  // Sandbox decision: an explicit `sandbox` arg from the caller always wins.
+  // When the caller omits it, fall back to the CDP_SANDBOX env (default off).
+  // This lets a host with a working sandbox path opt a whole run into
+  // sandbox-on (e.g. the L4 eval runner via EVAL_SANDBOX → CDP_SANDBOX)
+  // without prompt-injecting every launch_chrome call. Unset env → false →
+  // the --no-sandbox automation default (unchanged). Explicit `sandbox: false`
+  // still forces --no-sandbox even if the env is set.
+  const useSandbox = opts.sandbox ?? (process.env.CDP_SANDBOX === "true");
   const userArgs = opts.args ?? [];
   const userAlreadyDisabled = userArgs.includes("--no-sandbox");
   // Snap-confinement auto-profile. When the effective Chrome path (explicit
