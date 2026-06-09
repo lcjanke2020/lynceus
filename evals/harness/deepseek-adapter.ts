@@ -1,4 +1,4 @@
-// DeepSeek vendor adapter (LEO-233 / GH #8) — OpenAI-compatible Chat Completions.
+// DeepSeek vendor adapter (GH #8) — OpenAI-compatible Chat Completions.
 //
 // Thin wrapper over the shared `makeOpenAICompatAdapter` factory; see
 // `openai-compat-adapter.ts` for the transport. DeepSeek-specific bits:

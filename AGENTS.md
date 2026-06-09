@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**Last updated: 2026-06-07**
+**Last updated: 2026-06-09**
 
 Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropped into this repo. Read this end-to-end before doing anything else.
 
 ## What this project is
 
-`cdp-mcp` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 48 tools across 11 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console + network, structured DOM driving, form driving, session-portability (cookies + storage state). Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the three production vendors (Anthropic + OpenAI + Vertex) and the LM Studio reference adapter share one runner.
+`cdp-mcp` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 48 tools across 11 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console + network, structured DOM driving, form driving, session-portability (cookies + storage state). Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
 
 ## Read first
 
@@ -16,7 +16,7 @@ Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropp
 
 ## Project status
 
-The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-vendor end-to-end. The runner sits behind a vendor-agnostic `VendorAdapter` seam, with production adapters for Anthropic, OpenAI (GPT-class), and Google Vertex (Gemini), plus an LM Studio reference adapter for local models — all sharing one runner and a vendor-namespaced pricing catalog. NDJSON traces are `provider`-tagged with vendor-keyed `cacheTokens`. The production MCP server itself has no LLM dependency.
+The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-vendor end-to-end. The runner sits behind a vendor-agnostic `VendorAdapter` seam, with production adapters for Anthropic, OpenAI (GPT-class), Google Vertex (Gemini), DeepSeek, and Moonshot/Kimi, plus an LM Studio reference adapter for local models — all sharing one runner and a vendor-namespaced pricing catalog. NDJSON traces are `provider`-tagged with vendor-keyed `cacheTokens`. The production MCP server itself has no LLM dependency.
 
 ## Where to look
 

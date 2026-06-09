@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated: 2026-05-18**
+**Last updated: 2026-06-09**
 
 How `cdp-mcp` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
@@ -10,7 +10,7 @@ How `cdp-mcp` is put together. For *why* decisions were made the way they were, 
 
 Three big pieces:
 
-- A **tool layer** (`src/tools/`) — 39 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
+- A **tool layer** (`src/tools/`) — 48 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
 - A **state layer** (`src/session/` + `src/sourcemap/`) — owns the singleton Chrome process, the CDP client, the pause tracker, ring buffers, and the script store / source-map indexes.
 - A **CDP transport** (`chrome-remote-interface`) — the WebSocket to Chrome, with flat sessions for the root page + every attached worker/iframe.
 
@@ -20,8 +20,8 @@ Three big pieces:
 flowchart LR
     Agent["AI agent<br/>Claude Code / Copilot CLI"]
     Index["src/index.ts<br/>stdio MCP lifecycle"]
-    Server["src/server.ts<br/>registers 9 tool modules"]
-    Tools["src/tools/<br/>39 tool handlers"]
+    Server["src/server.ts<br/>registers 11 tool modules"]
+    Tools["src/tools/<br/>48 tool handlers"]
     Session["src/session/<br/>state · pause · buffers"]
     Sourcemap["src/sourcemap/<br/>TS↔JS coords"]
     CRI["chrome-remote-interface<br/>(CDP client)"]
@@ -47,7 +47,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph T["Tool layer — src/tools/"]
-        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom"]
+        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage"]
     end
     subgraph S["State layer — src/session/ + src/sourcemap/"]
         SS["sessionState (singleton)<br/>PauseTracker · RingBuffer (console / network)<br/>ScriptStore (sessionId + scriptId)"]
@@ -65,10 +65,10 @@ flowchart TB
 
 | Directory | Files | Responsibility | Component README |
 |---|---|---|---|
-| [`src/`](../src/) | `index.ts`, `server.ts` | Entry + server wiring | — |
+| [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `cdp-mcp/contract` (LocatorSpec) | — |
 | [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `pause.ts`, `buffers.ts` | Singleton lifecycle, pause state, ring buffers | [README](../src/session/README.md) |
 | [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing | [README](../src/sourcemap/README.md) |
-| [`src/tools/`](../src/tools/) | 9 tool files + `_register.ts` | 39 MCP tool implementations | [README](../src/tools/README.md) |
+| [`src/tools/`](../src/tools/) | 11 tool files + `_register.ts` + `_locator_runtime.ts` | 48 MCP tool implementations | [README](../src/tools/README.md) |
 | [`src/util/`](../src/util/) | `errors.ts`, `format.ts`, `log.ts` | `ToolError`, preview/truncate helpers, structured stderr logging | — |
 
 ## Request flow — `set_breakpoint`
@@ -161,7 +161,7 @@ flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
     L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>48 tools · no real browser · npm test"]
     L3["L3 — E2E<br/>test/e2e/*.test.ts vs real headless Chromium<br/>seconds · npm run test:e2e"]
-    L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter seam<br/>(Anthropic SDK + LM Studio adapter today; #50 OpenAI, #51 Vertex)<br/>first observed: $3.97 full pass (Opus-4.7-medium, default) · npm run eval"]
+    L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter seam<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>first observed: $3.97 full pass (Opus-4.7-medium, default) · npm run eval"]
     L1 --> L2 --> L3 --> L4
 ```
 
@@ -173,7 +173,7 @@ What this code talks to:
 - **`chrome-launcher`** — spawns Chrome with `--remote-debugging-port`; cross-platform binary detection (`chrome_path` arg overrides).
 - **File system** — TypeScript source files + source maps. Source maps are loaded **lazily** on `Debugger.scriptParsed` (`src/sourcemap/loader.ts` — browser-first via `Network.loadNetworkResource` to inherit auth/cookies/dev-server middleware, Node `fetch` fallback for plain localhost).
 - **MCP stdio JSON-RPC** — talks to the agent (Claude Code, Copilot CLI). Stdout is reserved for the MCP protocol; logs go to stderr (see `src/util/log.ts`).
-- **`@anthropic-ai/sdk`** — used **only** by the L4 evals, and only by the Anthropic adapter behind the `VendorAdapter` seam (`evals/harness/vendor.ts` defines the interface; `evals/harness/anthropic.ts` implements it; `evals/harness/lm-studio-adapter.ts` is a second adapter against OpenAI-compatible local backends — all merged 2026-05-18 via PR #54). The production server has no LLM dependency.
+- **LLM SDKs (`@anthropic-ai/sdk`, `@google/genai`) + raw-fetch OpenAI-compatible clients** — used **only** by the L4 evals, behind the `VendorAdapter` seam (`evals/harness/vendor.ts` defines the interface). Adapters: `anthropic.ts`, `openai-adapter.ts` / `openai-responses-adapter.ts` / `openai-compat-adapter.ts`, `vertex-adapter.ts` (`@google/genai`), `deepseek-adapter.ts`, `moonshot-adapter.ts`, and the `lm-studio-adapter.ts` local reference. The production server has no LLM dependency.
 
 ## Where to go next
 

@@ -1,5 +1,7 @@
 # Security Policy
 
+**Last updated: 2026-06-09**
+
 ## Reporting a vulnerability
 
 Please report security issues privately rather than opening a public issue.

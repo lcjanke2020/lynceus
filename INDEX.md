@@ -1,6 +1,6 @@
 # INDEX.md
 
-**Last updated: 2026-06-05**
+**Last updated: 2026-06-09**
 
 Where to find everything in this repo.
 
@@ -41,7 +41,7 @@ Where to find everything in this repo.
 |---|---|
 | [src/session/README.md](./src/session/README.md) | `sessionState` singleton, browser lifecycle, `PauseTracker`, ring buffers. |
 | [src/sourcemap/README.md](./src/sourcemap/README.md) | `ScriptStore`, lazy source-map loading, TS↔JS coordinate translation, path normalization. |
-| [src/tools/README.md](./src/tools/README.md) | `registerJsonTool` pattern, structured error envelope, full 39-tool catalog. |
+| [src/tools/README.md](./src/tools/README.md) | `registerJsonTool` pattern, structured error envelope, full 48-tool catalog. |
 | [evals/README.md](./evals/README.md) | L4 LLM-agent eval harness, scenario shape, oracle/grader, cost + caching. |
 | [examples/sample-app/README.md](./examples/sample-app/README.md) | Shared test fixture (Vite + TS), intentional bugs, how to run standalone. |
 
@@ -53,6 +53,7 @@ Entry points:
 |---|---|
 | [`src/index.ts`](./src/index.ts) | Stdio MCP server lifecycle (SIGINT/SIGTERM shutdown). What Claude Code launches. |
 | [`src/server.ts`](./src/server.ts) | `buildServer()` — instantiates `McpServer`, calls each `registerXxxTools(server)`. |
+| [`src/contract.ts`](./src/contract.ts) | Published `cdp-mcp/contract` subpath export — a thin barrel re-exporting the `LocatorSpec` type + Zod `locatorSchema` / `parseLocator` / `serializeLocator` from [`src/locator.ts`](./src/locator.ts) (the source of truth). ESM-only, depends only on `zod`. |
 
 Source tree:
 
@@ -60,9 +61,9 @@ Source tree:
 |---|---|---|
 | `src/session/` | `sessionState` singleton, `launchChrome` / `attachChrome` / `closeSession` / `switchTarget`, `PauseTracker`, `RingBuffer<ConsoleEntry \| NetworkEntry>` | [README](./src/session/README.md) |
 | `src/sourcemap/` | `ScriptStore` (compound key `sessionId+scriptId`), `attachScriptListener` / source-map loader (browser-first via `Network.loadNetworkResource`, Node `fetch` fallback), `mapCdpToOriginal` / `mapOriginalToGenerated`, `normalizeSourcePath` / `pathMatches` | [README](./src/sourcemap/README.md) |
-| `src/tools/` | 39 MCP tools across 9 files: `session`, `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom`. Plus `_register.ts` (helper). | [README](./src/tools/README.md) |
+| `src/tools/` | 48 MCP tools across 11 files: `session`, `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom`, `forms`, `storage`. Plus `_register.ts` and `_locator_runtime.ts` (helpers). | [README](./src/tools/README.md) |
 | `src/util/` | `errors.ts` (`ToolError`, `noSession()`, `notPaused()`, `alreadySession()`), `format.ts` (`previewRemoteObject`, `truncate`, `describeRemote`, `toolJson`, `toolText`), `log.ts` (structured stderr logging). | — |
 | `test/` | L2 contract tests (`test/tools/*.test.ts` against `test/fake-cdp.ts`), L3 e2e (`test/e2e/*.test.ts` against real headless Chromium). | [docs/test-eval-plan.md](./docs/test-eval-plan.md) |
-| `evals/` | L4 harness — `evals/cli.ts` + `evals/harness/{vendor,anthropic,lm-studio-adapter,model,runner,grader,trace,mcp-client,static-server,types}.ts` (multi-vendor seam landed via #47) + scenarios (`evals/scenarios/*.ts`) + per-scenario variants (`evals/sample-app-variants/<name>/`). | [README](./evals/README.md) |
+| `evals/` | L4 harness — `evals/cli.ts` + `evals/harness/` (the `VendorAdapter` seam in `vendor.ts` (#47) + per-vendor adapters `anthropic`, `openai-adapter`/`openai-responses-adapter`/`openai-compat-adapter`, `vertex-adapter`, `deepseek-adapter`, `moonshot-adapter`, `lm-studio-adapter`, plus `model`/`runner`/`grader`/`trace`/`mcp-client`/`static-server`/`types`) + scenarios (`evals/scenarios/*.ts`) + per-scenario variants (`evals/sample-app-variants/<name>/`). | [README](./evals/README.md) |
 | `examples/sample-app/` | Vite + TS web app — the breakpoint-debug fixture. | [README](./examples/sample-app/README.md) |
 | `scripts/` | `smoke.mjs`, `check-chromium-skips.mjs`, `build-variants.mjs`. | — |

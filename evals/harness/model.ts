@@ -428,15 +428,15 @@ export const PRICING_CATALOG: PricingCatalog = {
       longContextOutput: 18.0,
     },
   },
-  // DeepSeek + Moonshot (Kimi) — remote OpenAI-compatible vendors (LEO-233).
+  // DeepSeek + Moonshot (Kimi) — remote OpenAI-compatible vendors (GH #8).
   // Units USD per 1M tokens; standard pricing. Cache accounting is wired
-  // (LEO-233 §3): both vendors auto-apply server-side context caching and their
+  // (GH #8): both vendors auto-apply server-side context caching and their
   // `prompt_tokens` INCLUDES the cached tokens, so `estimateCostUsd` bills the
   // cached portion at `inputCacheRead` and the rest at `input`. `inputCacheWrite`
   // is omitted — neither vendor bills a separate cache-write.
   // ⚠️ Pricing drifts — re-verify against each vendor's published pricing page
   // (platform.deepseek.com, platform.kimi.ai) before any large real-money
-  // run. Rates captured June 2026; see LEO-233 for the source breakdown.
+  // run. Rates captured June 2026; see GH #8 for the source breakdown.
   deepseek: {
     // Use the v4 ids; deepseek-chat/deepseek-reasoner aliases die 2026-07-24.
     "deepseek-v4-flash": { input: 0.14, inputCacheRead: 0.0028, output: 0.28 },
@@ -579,7 +579,7 @@ export function estimateCostUsd(
       break;
     case "deepseek":
     case "moonshot": {
-      // Cache accounting (LEO-233 §3). Both adapters surface their cache-hit
+      // Cache accounting (GH #8). Both adapters surface their cache-hit
       // count under the normalized `cachedTokens` key (deepseek from
       // `prompt_cache_hit_tokens`, moonshot from
       // `prompt_tokens_details.cached_tokens`). Both vendors' `prompt_tokens`

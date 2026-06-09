@@ -98,7 +98,7 @@ function resolveProviderClient(): VendorAdapter | undefined {
     return makeMoonshotAdapter();
   }
   throw new Error(
-    `Unknown EVAL_PROVIDER: '${provider}'. Supported: 'anthropic' (default), 'openai' (#50/#58), 'vertex' (#51), 'deepseek' (LEO-233), 'moonshot' (LEO-233), 'lm-studio' (investigation artifact, issue #45).`,
+    `Unknown EVAL_PROVIDER: '${provider}'. Supported: 'anthropic' (default), 'openai' (#50/#58), 'vertex' (#51), 'deepseek' (GH #8), 'moonshot' (GH #8), 'lm-studio' (investigation artifact, issue #45).`,
   );
 }
 
@@ -228,7 +228,7 @@ Non-default vendor backends (select via EVAL_PROVIDER):
     EVAL_LM_STUDIO_BASE_URL, EVAL_LM_STUDIO_MODEL, EVAL_LM_STUDIO_API_KEY
     All required. Investigation-artifact path (issue #45) — see header
     of evals/harness/lm-studio-adapter.ts.
-  EVAL_PROVIDER=deepseek                                          (LEO-233)
+  EVAL_PROVIDER=deepseek                                          (GH #8)
     EVAL_DEEPSEEK_API_KEY   required.
     EVAL_DEEPSEEK_MODEL     required (e.g. 'deepseek-v4-pro' /
                             'deepseek-v4-flash' — use the v4 ids; the
@@ -242,7 +242,7 @@ Non-default vendor backends (select via EVAL_PROVIDER):
     tool-call turns (DeepSeek V4 requires it echoed back — same as Kimi, NOT the
     mirror opposite). Cache-read discount billed from prompt_cache_hit_tokens.
     Bills real money — set a low EVAL_BUDGET_USD and smoke eval:quick first.
-  EVAL_PROVIDER=moonshot                                          (LEO-233)
+  EVAL_PROVIDER=moonshot                                          (GH #8)
     EVAL_MOONSHOT_API_KEY   required.
     EVAL_MOONSHOT_MODEL     required (e.g. 'kimi-k2.6' / 'kimi-k2.5').
                             PRICING_CATALOG.moonshot must carry a row.
@@ -289,13 +289,13 @@ async function main(): Promise<void> {
       );
     }
     if (provider.vendor === "deepseek") {
-      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233 / GH #8):`);
+      console.error(`[eval]   Caveat on this OpenAI-compat path (GH #8):`);
       console.error(
         `[eval]   - DeepSeek V4 runs WITH reasoning on (the adapter sends thinking:{type:"enabled"} + reasoning_effort:"high"); reasoning_content is captured to the .thinking sidecar AND re-fed on tool-call turns (V4 requires it echoed back — same as Kimi). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to DeepSeek's effort — it's always 'high', so treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
       );
     }
     if (provider.vendor === "moonshot") {
-      console.error(`[eval]   Caveat on this OpenAI-compat path (LEO-233):`);
+      console.error(`[eval]   Caveat on this OpenAI-compat path (GH #8):`);
       console.error(
         `[eval]   - Kimi K2 Thinking runs with Moonshot's DEFAULT thinking on; the adapter captures reasoning_content and round-trips it on tool-call turns (also written to the .thinking sidecar). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to Moonshot's thinking depth — treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
       );

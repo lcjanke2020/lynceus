@@ -40,7 +40,7 @@ Other scenarios use their own copies under `evals/sample-app-variants/<name>/`. 
 | `network-bug` | A fetch that fails silently. |
 | `worker-bug` | A bug that only manifests in the Web Worker. |
 
-Per the [root README](../../README.md), `compute-step` is the shipped scenario — the others land in the follow-up validation wave alongside L4 model-rotation work (PR #12).
+All 14 L4 scenarios are now registered (8 debugger + 6 driving/session-portability from issue #12). `compute-step` is the canonical demo (root [README](../../README.md) + `npm run eval:quick` target); the rest run via `npm run eval`. See [evals/README.md](../../evals/README.md) for the full scenario table.
 
 ## Running standalone
 

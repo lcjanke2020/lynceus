@@ -6,6 +6,8 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE).
 
+**Last updated: 2026-06-09**
+
 ## What it gives an agent
 
 Across 48 tools:
@@ -16,6 +18,8 @@ Across 48 tools:
 - **Buffered console + network** — pull-based, paginated by monotonic `seq`. Bodies are lazy-loaded via `get_request_body` / `get_response_body`.
 - **Light DOM interaction** — `query_selector`, `click`, `type_text`, `press_key`, `screenshot` so the agent can drive a flow to a breakpoint.
 - **Structured DOM querying** — Playwright-inspired `locate` (LocatorSpec: CSS, text, role, test-id, label, placeholder, name), `wait_for` (poll until DOM state), `get_form_state` (read named form fields).
+- **Form driving** — `fill`, `check` / `uncheck`, `select_option`, plus `suggest_locator` to get a robust semantic locator for an element.
+- **Session portability** — `export_storage_state` / `load_storage_state` carry a logged-in session (cookies + localStorage) across runs; `get_cookies` / `set_cookies` read and set cookies directly (`get_cookies` redacts likely-auth / HttpOnly values for safe logging).
 - **Source-map diagnostics** — `list_scripts`, `resolve_source_position`, `get_script_source`.
 
 Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true })`.
@@ -160,8 +164,10 @@ Use `npm run eval` (or `npm run eval:quick`) — NOT `npx tsx evals/cli.ts` dire
 
 Drives the cdp-mcp tool surface through an LLM agent via the
 `VendorAdapter` seam (`evals/harness/vendor.ts`); the Anthropic adapter
-backed by `@anthropic-ai/sdk` is the default and only production path
-today. Each trial spawns a fresh `dist/index.js` MCP subprocess + a
+backed by `@anthropic-ai/sdk` is the default; OpenAI, Vertex, DeepSeek,
+and Moonshot/Kimi are also shipped production adapters (plus an LM Studio
+reference adapter for local models), each selected via `EVAL_PROVIDER`.
+Each trial spawns a fresh `dist/index.js` MCP subprocess + a
 static server for the scenario's sample-app variant; the tool-use loop
 drives the page, sets source-level breakpoints, inspects pauses, and
 produces a natural-language final answer. NDJSON traces land under
@@ -204,23 +210,27 @@ each `t:"usage"` trace entry (the Anthropic adapter populates
 `cacheTokens.cacheReadInputTokens` and `cacheTokens.cacheCreationInputTokens`
 verbatim from the SDK's `cache_read_input_tokens` / `cache_creation_input_tokens`).
 
-Non-Anthropic backends: the OpenAI vendor adapter ships with #50/#58
-(target: GPT-5.5) — `EVAL_PROVIDER=openai` plus `OPENAI_API_KEY`
-+ `EVAL_OPENAI_MODEL` activates it. Reasoning-off trials route to
-`/v1/chat/completions` (#50); reasoning-on trials route to
-`/v1/responses` (#58), the only OpenAI surface that supports tools
-× reasoning_effort on GPT-5.5. An LM Studio investigation artifact
-is wired behind the same seam for issue #45. See
-[evals/README.md](evals/README.md) for full `EVAL_PROVIDER` /
-`EVAL_OPENAI_*` / `EVAL_LM_STUDIO_*` details. Vertex (#51) is the last
-backend adapter still pending.
+Non-Anthropic backends ship behind the same seam, each selected via
+`EVAL_PROVIDER`: OpenAI / GPT-5.5 (#50/#58) — reasoning-off trials route to
+`/v1/chat/completions` (#50), reasoning-on trials to `/v1/responses` (#58),
+the only OpenAI surface that supports tools × reasoning_effort on GPT-5.5;
+Vertex / Gemini (#51); and DeepSeek + Moonshot/Kimi (GH #8), remote
+OpenAI-compatible `/v1` vendors. An LM Studio investigation artifact is
+wired behind the seam for local models (issue #45). See
+[evals/README.md](evals/README.md) for full `EVAL_PROVIDER` / `EVAL_OPENAI_*`
+/ `EVAL_VERTEX_*` / `EVAL_DEEPSEEK_*` / `EVAL_MOONSHOT_*` / `EVAL_LM_STUDIO_*`
+details.
 
-Currently registered scenarios (8): `compute-step` and
-`adversarial-out-of-order` ship against the canonical `examples/sample-app/`;
-`network-bug`, `console-error`, `event-binding`, `deep-source-map`,
-`worker-bug`, and `conditional-bp` have committed per-scenario forks
-under `evals/sample-app-variants/<name>/` and build via
-`npm run sample:build` (`scripts/build-variants.mjs`).
+Currently registered scenarios (14) — 8 **debugger** scenarios
+(`compute-step`, `adversarial-out-of-order`, `network-bug`, `console-error`,
+`event-binding`, `deep-source-map`, `worker-bug`, `conditional-bp`) plus 6
+**driving + session-portability** scenarios from issue #12 (`form-drive`,
+`clearing-fill`, `idempotent-toggle`, `robust-locator`, `session-resume`,
+`cookie-redaction`). `compute-step` is the canonical `npm run eval:quick`
+target; some scenarios run against the stock `examples/sample-app/`, others
+against per-scenario forks under `evals/sample-app-variants/<name>/` built via
+`npm run sample:build` (`scripts/build-variants.mjs`). See
+[evals/README.md](evals/README.md) for the full scenario table.
 
 ## Wire into Claude Code
 

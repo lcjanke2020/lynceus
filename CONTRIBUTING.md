@@ -1,5 +1,7 @@
 # Contributing
 
+**Last updated: 2026-06-09**
+
 Thanks for your interest in cdp-mcp! This is an alpha-stage project; issues and
 PRs are welcome.
 

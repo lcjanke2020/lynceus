@@ -125,7 +125,7 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
     expect(resp.stopReason).toBe("tool_use");
   });
 
-  it("bills cache from prompt_tokens_details.cached_tokens (LEO-233 §3)", async () => {
+  it("bills cache from prompt_tokens_details.cached_tokens (GH #8)", async () => {
     stubFetchOk({
       id: "ks-c",
       choices: [
