@@ -107,6 +107,12 @@ Untrusted browsing:
 - Add host-level confinement such as AppArmor, a container, VM, or Bubblewrap.
 - Do not treat `bwrap + --no-sandbox` as equivalent to Chromium sandboxing.
 
+This outer containment also pairs with the agent-operator threat (prompt-injected
+page content steering the agent into actions or unscoped filesystem writes); see
+the agent-operator threat model and deployment hardening in
+[SECURITY.md](../SECURITY.md). A containerized outer-sandbox run mode that would
+make this contained posture the default is a direction under consideration.
+
 ## Validated hosts
 
 Hosts where `sandbox: true` has been verified working against this project, with the supporting posture:
