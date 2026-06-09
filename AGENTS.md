@@ -56,7 +56,6 @@ Each run dir should carry, in addition to the harness-produced `*-trial-*.ndjson
 
 - L1 + L2 must pass (`npm test`) for any code change.
 - L3 (`npm run test:e2e`) must pass on the primary host (Linux ARM64 + Chromium). Documented host gaps live in [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md).
-- For non-trivial PRs, run `/ultrareview` (multi-agent cloud review) before requesting human review.
 
 ### Adding a new MCP tool
 
