@@ -57,15 +57,23 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
   // chrome-launcher own port selection. `runningChrome.port` then reflects
   // the actual port Chrome is listening on. (Codex blocker review on PR #11.)
   // Sandbox decision: an explicit `sandbox` arg from the caller always wins.
-  // When the caller omits it, fall back to the CDP_SANDBOX env (default off).
+  // When the caller omits it, fall back to the CDP_SANDBOX env (default off);
+  // "true" or "1" enable it (matching the eval runner's EVAL_SANDBOX parsing).
   // This lets a host with a working sandbox path opt a whole run into
   // sandbox-on (e.g. the L4 eval runner via EVAL_SANDBOX → CDP_SANDBOX)
   // without prompt-injecting every launch_chrome call. Unset env → false →
   // the --no-sandbox automation default (unchanged). Explicit `sandbox: false`
   // still forces --no-sandbox even if the env is set.
-  const useSandbox = opts.sandbox ?? (process.env.CDP_SANDBOX === "true");
+  const sandboxEnv = process.env.CDP_SANDBOX;
+  const useSandbox = opts.sandbox ?? (sandboxEnv === "true" || sandboxEnv === "1");
   const userArgs = opts.args ?? [];
   const userAlreadyDisabled = userArgs.includes("--no-sandbox");
+  // A caller can request the sandbox AND still pass --no-sandbox in args; the
+  // userArgs spread re-adds it last, so Chromium ends up unsandboxed despite the
+  // request. Warn rather than silently dropping the sandbox.
+  if (useSandbox && userAlreadyDisabled) {
+    log.warn("launch_chrome: sandbox requested but --no-sandbox is in args; the flag wins and the sandbox stays OFF");
+  }
   // Snap-confinement auto-profile. When the effective Chrome path (explicit
   // chromePath, or CHROME_PATH env that chrome-launcher will pick up) is
   // under /snap/ AND the caller didn't already specify userDataDir, derive
@@ -101,7 +109,7 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
   const chrome = await launch(launchOpts);
   sessionState.chrome = chrome;
   sessionState.chromePort = chrome.port;
-  log.info("launched chrome", { port: chrome.port, pid: chrome.pid });
+  log.info("launched chrome", { port: chrome.port, pid: chrome.pid, sandbox: useSandbox });
 
   // Pick the first page target.
   const targets = await waitForFirstPage(chrome.port);

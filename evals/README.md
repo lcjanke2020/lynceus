@@ -132,7 +132,11 @@ npm run eval -- --scenarios=compute-step --trials=1
 # model normally omits the arg, so to run a whole suite sandbox-on the runner
 # plumbs CDP_SANDBOX=true to the server (which uses it as the launch default).
 # Use ONLY on a host with a working sandbox path (AppArmor userns allowance or
-# SUID chrome_sandbox helper); on a host without one Chromium FATALs at startup.
+# SUID chrome_sandbox helper) that covers the binary you'll actually launch —
+# recent Playwright runs headless via `headless_shell` (in a
+# chromium_headless_shell-<rev>/ dir), a different binary from `chrome`, so the
+# host's AppArmor profile glob must match BOTH or a headless sandbox launch
+# still FATALs with "No usable sandbox!".
 EVAL_SANDBOX=true npm run eval
 
 # Swap to the cheaper Sonnet 4.6 baseline (no thinking by default on
