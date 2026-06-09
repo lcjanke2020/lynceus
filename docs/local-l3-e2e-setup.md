@@ -51,16 +51,20 @@ npx --yes playwright install chromium
 This drops a managed Chromium into the per-user cache:
 
 ```text
-~/.cache/ms-playwright/chromium-<rev>/chrome-linux/chrome
+~/.cache/ms-playwright/chromium-<rev>/chrome-linux*/chrome
 ```
 
+The leaf directory varies by Playwright version and arch — `chrome-linux` on
+ARM64 and older builds, `chrome-linux64` on x86_64 with the newer
+Chrome-for-Testing layout (the resolver and the AppArmor glob below cover both).
 Install it for **each OS user** that will run the suite — the cache is
 per-`$HOME`.
 
 ## 2. Verify the resolver finds it
 
-The launcher resolver (`src/util/browser-resolve.ts`) discovers the bundled
-Chromium from the cache. After a build, confirm it:
+The launcher resolver (`src/util/browser-resolve.ts`) finds Chromium in this
+order: an explicit `CDP_TEST_BROWSER_PATH`, then a system `chromium` on `PATH`,
+then the Playwright cache. After a build, confirm what it picks:
 
 ```sh
 npm run build
@@ -68,21 +72,27 @@ node --input-type=module \
   -e "import('./dist/util/browser-resolve.js').then(m => console.log(JSON.stringify(m.resolveBrowser(), null, 2)))"
 ```
 
-Expect a `playwright-cache` source:
+This runbook targets the **Playwright-cache** binary, so expect
+`source: "playwright-cache"` and a `binaryPath` under `~/.cache/ms-playwright/`:
 
 ```json
 {
+  "binaryPath": "/home/<user>/.cache/ms-playwright/chromium-<rev>/chrome-linux/chrome",
   "choice": "chromium",
   "snapConfined": false,
   "source": "playwright-cache"
 }
 ```
 
-If the resolver doesn't pick it up automatically, you can point the L3 suite at
-an explicit binary instead:
+If you have a system Chromium on `PATH` (apt `/usr/bin/chromium`, snap
+`/snap/bin/chromium`), the resolver returns that first with
+`source: "which-chromium"` — that binary is *not* covered by the AppArmor
+profile below (snap brings its own confinement; apt Chromium is a separate
+sandbox story). To exercise the Playwright binary under this profile, point the
+suite at it explicitly:
 
 ```sh
-export CDP_TEST_BROWSER_PATH="$HOME/.cache/ms-playwright/chromium-<rev>/chrome-linux/chrome"
+export CDP_TEST_BROWSER_PATH="$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome | head -1)"
 ```
 
 ## 3. Attach the AppArmor profile
@@ -105,16 +115,19 @@ This mirrors the shape of Ubuntu's stock `chrome` / `msedge` / `brave` profiles
 abi <abi/4.0>,
 include <tunables/global>
 
-profile cdp-mcp-chromium /home/*/.cache/ms-playwright/chromium-*/chrome-linux/chrome flags=(unconfined) {
+profile cdp-mcp-chromium /home/*/.cache/ms-playwright/chromium-*/chrome-linux*/chrome flags=(unconfined) {
   userns,
 
   include if exists <local/cdp-mcp-chromium>
 }
 ```
 
-The `/home/*/` glob matches any user's Playwright cache. If you prefer to scope
-it to specific accounts, replace `*` with a brace list of usernames, e.g.
-`/home/{alice,bob}/.cache/...`.
+The `chrome-linux*` component matches both the `chrome-linux` (ARM64/older) and
+`chrome-linux64` (x86_64 Chrome-for-Testing) layouts — in AppArmor `*` matches
+within a single path segment, so a too-specific `chrome-linux` would silently
+fail to attach on x86_64. The `/home/*/` glob matches any user's Playwright
+cache; if you prefer to scope it to specific accounts, replace `*` with a brace
+list of usernames, e.g. `/home/{alice,bob}/.cache/...`.
 
 Load it (profiles in `/etc/apparmor.d/` also auto-load at boot):
 
@@ -128,7 +141,7 @@ Launch the bundled Chromium sandbox-on and read its AppArmor label — it must b
 the named profile, not bare `unconfined`:
 
 ```sh
-BIN=$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)
+BIN=$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome | head -1)
 "$BIN" --headless=new --no-startup-window --remote-debugging-port=0 \
        --user-data-dir=$(mktemp -d) about:blank & pid=$!
 sleep 3; cat /proc/$pid/attr/current   # -> cdp-mcp-chromium (unconfined)
