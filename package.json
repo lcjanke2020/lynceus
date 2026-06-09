@@ -44,6 +44,7 @@
     "docs/launchd-service.md",
     "docs/systemd-service.md",
     "docs/chromium-sandboxing.md",
+    "docs/local-l3-e2e-setup.md",
     "docs/known-chromium-gaps.md"
   ],
   "scripts": {
