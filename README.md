@@ -19,7 +19,7 @@ Across 48 tools:
 - **Light DOM interaction** — `query_selector`, `click`, `type_text`, `press_key`, `screenshot` so the agent can drive a flow to a breakpoint.
 - **Structured DOM querying** — Playwright-inspired `locate` (LocatorSpec: CSS, text, role, test-id, label, placeholder, name), `wait_for` (poll until DOM state), `get_form_state` (read named form fields).
 - **Form driving** — `fill`, `check` / `uncheck`, `select_option`, plus `suggest_locator` to get a robust semantic locator for an element.
-- **Session portability** — `export_storage_state` / `load_storage_state` (cookies + localStorage) and `get_cookies` / `set_cookies` to carry a logged-in session across runs.
+- **Session portability** — `export_storage_state` / `load_storage_state` carry a logged-in session (cookies + localStorage) across runs; `get_cookies` / `set_cookies` read and set cookies directly (`get_cookies` redacts likely-auth / HttpOnly values for safe logging).
 - **Source-map diagnostics** — `list_scripts`, `resolve_source_position`, `get_script_source`.
 
 Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true })`.

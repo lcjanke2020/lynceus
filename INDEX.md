@@ -53,7 +53,7 @@ Entry points:
 |---|---|
 | [`src/index.ts`](./src/index.ts) | Stdio MCP server lifecycle (SIGINT/SIGTERM shutdown). What Claude Code launches. |
 | [`src/server.ts`](./src/server.ts) | `buildServer()` — instantiates `McpServer`, calls each `registerXxxTools(server)`. |
-| [`src/contract.ts`](./src/contract.ts) | Published `cdp-mcp/contract` subpath export — `LocatorSpec` type + Zod `locatorSchema` / `parseLocator` / `serializeLocator`, re-exported from [`src/locator.ts`](./src/locator.ts). ESM-only, depends only on `zod`. |
+| [`src/contract.ts`](./src/contract.ts) | Published `cdp-mcp/contract` subpath export — a thin barrel re-exporting the `LocatorSpec` type + Zod `locatorSchema` / `parseLocator` / `serializeLocator` from [`src/locator.ts`](./src/locator.ts) (the source of truth). ESM-only, depends only on `zod`. |
 
 Source tree:
 
