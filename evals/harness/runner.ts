@@ -179,6 +179,19 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
   const extraEnv: Record<string, string> = isChromeLauncherDefault(browser)
     ? {}
     : { CHROME_PATH: browser.binaryPath };
+  // Opt-in: run the model-launched Chromium WITH the sandbox. Default OFF —
+  // the automation default is --no-sandbox (docs/chromium-sandboxing.md). The
+  // model controls launch_chrome's `sandbox` arg and normally omits it, so to
+  // run a whole suite sandbox-on without prompt-injecting every scenario we
+  // plumb CDP_SANDBOX=true to the server, which uses it as the launch default.
+  // Use only on a host with a working sandbox path (AppArmor userns allowance
+  // or SUID chrome_sandbox helper).
+  if (process.env.EVAL_SANDBOX === "true" || process.env.EVAL_SANDBOX === "1") {
+    extraEnv.CDP_SANDBOX = "true";
+    process.stderr.write(
+      `[eval] EVAL_SANDBOX set — launching Chromium with the sandbox on (CDP_SANDBOX=true)\n`,
+    );
+  }
   process.stderr.write(
     `[eval] resolved browser: ${browser.binaryPath} (source=${browser.source})\n`,
   );
