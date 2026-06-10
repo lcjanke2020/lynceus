@@ -21,6 +21,7 @@ Where to find everything in this repo.
 | [AGENTS.md](./AGENTS.md) | Agent on-ramp: mission, current events, conventions, where-to-look. |
 | [INDEX.md](./INDEX.md) | This file. |
 | [README.md](./README.md) | Install, build, wire into Claude Code, smoke test, tool conventions. |
+| [SECURITY.md](./SECURITY.md) | Security model + vulnerability reporting: transport/network exposure, the agent-operator (prompt-injection → action) threat, and deployment hardening. |
 
 ### docs/
 
