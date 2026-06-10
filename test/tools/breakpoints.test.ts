@@ -4,6 +4,7 @@ import { registerBreakpointTools } from "../../src/tools/breakpoints.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 import { seedMappedScript } from "../helpers/source-maps.js";
+import { SourceMapGenerator } from "@jridgewell/source-map";
 
 autoReset();
 
@@ -202,6 +203,97 @@ describe("set_breakpoint", () => {
     const call = fake.sentCalls.find((c) => c.method === "Debugger.setBreakpointByUrl");
     expect(call?.params.url).toBe("http://localhost/main.js");
     expect(call?.params.urlRegex).toBeUndefined();
+  });
+
+  it("duplicate script records (same url, two scriptIds after re-navigation) dedup to one binding — no internal_error (issue #24)", async () => {
+    // Navigating/reloading more than once leaves two ScriptStore records for
+    // the same bundle url (same url, different scriptId), and
+    // findByOriginalSource returns both. Pre-fix: mapOriginalToGenerated
+    // emitted two identical candidates → the second Debugger.setBreakpointByUrl
+    // collided with CDP's "already exists" → a non-recoverable internal_error
+    // that the agent could never retry past. Post-fix: candidates dedup by
+    // (sessionId, url, line, col) → one bind, clean success.
+    const { fake } = setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
+    seedMappedScript({ scriptId: "s2", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
+    // Mirror real CDP: setBreakpointByUrl throws if (url,line,col) already has
+    // a breakpoint — this is what turned the duplicate candidate into an error.
+    const bound = new Set<string>();
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => {
+      const k = `${params.url}:${params.lineNumber}:${params.columnNumber ?? 0}`;
+      if (bound.has(k)) throw new Error("Breakpoint at specified location already exists.");
+      bound.add(k);
+      return { breakpointId: `cdp:${k}`, locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }] };
+    });
+    fake.clearSentCalls();
+    const r = parseOkEnvelope<{ status: string; binding_count: number }>(
+      await setBp.handler({ file: "src/foo.ts", line: 7 }),
+    );
+    expect(r.status).toBe("set");
+    expect(r.binding_count).toBe(1);
+    expect(fake.sentCalls.filter((c) => c.method === "Debugger.setBreakpointByUrl")).toHaveLength(1);
+  });
+
+  it("generated-layer idempotency: two TS lines minifying to one JS location → second call is already-set, CDP hit once (issue #24)", async () => {
+    // Cross-call sibling of the duplicate-record bug: the TS-coordinate
+    // idempotency guard keys on (file,line,col), but two distinct TS lines can
+    // collapse to the SAME generated position after minification. Binding by
+    // `url` then makes the second call collide. set_breakpoint must recognize
+    // the shared compiled location and return the existing breakpoint.
+    const { fake } = setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1",
+      url: "http://x/app.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h-s1",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
+      breakpointId: `cdp:${params.url}:${params.lineNumber}`,
+      locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
+    }));
+    fake.clearSentCalls();
+    const first = parseOkEnvelope<{ id: string; status: string }>(await setBp.handler({ file: "src/foo.ts", line: 7 }));
+    const second = parseOkEnvelope<{ id: string; status: string }>(await setBp.handler({ file: "src/foo.ts", line: 8 }));
+    expect(first.status).toBe("set");
+    expect(second.status).toBe("already-set");
+    expect(second.id).toBe(first.id);
+    expect(fake.sentCalls.filter((c) => c.method === "Debugger.setBreakpointByUrl")).toHaveLength(1);
+  });
+
+  it("generated-layer collision with a different condition → breakpoint_conflict (issue #24)", async () => {
+    // Same shared compiled location as above, but the second call carries a
+    // different condition: it can't silently reuse the existing binding, so it
+    // must surface a recoverable breakpoint_conflict (not internal_error).
+    const { fake } = setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1",
+      url: "http://x/app.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h-s1",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
+      breakpointId: `cdp:${params.url}:${params.lineNumber}`,
+      locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
+    }));
+    await setBp.handler({ file: "src/foo.ts", line: 7 });
+    const r = await setBp.handler({ file: "src/foo.ts", line: 8, condition: "x > 0" });
+    expect(parseErrorEnvelope(r)?.error).toBe("breakpoint_conflict");
   });
 });
 

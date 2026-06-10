@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { requireSession, ROOT_SESSION_KEY, type BreakpointRecord, type BreakpointBinding } from "../session/state.js";
-import { mapOriginalToGenerated, mapCdpToOriginal } from "../sourcemap/store.js";
+import { mapOriginalToGenerated, mapCdpToOriginal, type GeneratedLocation } from "../sourcemap/store.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 
@@ -21,6 +21,13 @@ function findBreakpointAt(
     if (r.file === file && r.line === line && (r.column ?? 0) === column) return r;
   }
   return undefined;
+}
+
+// Physical CDP breakpoint identity for a generated location. A breakpoint is
+// bound by (sessionId, url, line, col), so two candidates with the same key are
+// the same CDP breakpoint. Mirrors the dedup key in mapOriginalToGenerated.
+function genKey(g: GeneratedLocation): string {
+  return `${g.sessionId ?? ""}|${g.scriptUrl}|${g.lineNumber}:${g.columnNumber}`;
 }
 
 function breakpointEnvelope(r: BreakpointRecord, status: "set" | "already-set") {
@@ -72,6 +79,28 @@ export function registerBreakpointTools(server: McpServer) {
         throw new ToolError(
           "no_mapping",
           `No source-mapped script matches '${file}:${line}'. Try list_scripts to confirm what's loaded.`,
+        );
+      }
+      // Generated-layer idempotency. findBreakpointAt() above matches on the
+      // *TS* coordinate, but two different TS lines can minify to the SAME
+      // generated position — and since we bind by `url`, CDP rejects the
+      // second with "Breakpoint at specified location already exists" (a
+      // non-recoverable internal_error, issue #24). If an already-set
+      // breakpoint covers these generated locations, treat this as the same
+      // breakpoint instead of issuing a colliding setBreakpointByUrl.
+      const candKeys = new Set(candidates.map(genKey));
+      for (const r of s.breakpoints.values()) {
+        const overlaps = mapOriginalToGenerated(s.scripts, r.file, r.line, r.column ?? 0).some((g) =>
+          candKeys.has(genKey(g)),
+        );
+        if (!overlaps) continue;
+        if (r.condition === condition && r.logMessage === logMessage) {
+          return breakpointEnvelope(r, "already-set");
+        }
+        const locStr = `${file}:${line}:${column}`;
+        throw new ToolError(
+          "breakpoint_conflict",
+          `Breakpoint ${r.id} (${r.file}:${r.line}) already binds the same compiled location as ${locStr} with a different condition or log_message. Remove it first (remove_breakpoint) before setting a new one.`,
         );
       }
       const id = s.nextBpId();

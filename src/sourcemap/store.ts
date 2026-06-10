@@ -182,6 +182,18 @@ export function mapOriginalToGenerated(
   column: number = 0,
 ): GeneratedLocation[] {
   const out: GeneratedLocation[] = [];
+  // De-dup by the *physical* CDP breakpoint identity — (sessionId, scriptUrl,
+  // generated line/col) — across ALL matching script records, not just within
+  // one. Two ScriptStore records can share a URL after a re-navigation / HMR
+  // re-parse (the same bundle parsed twice → two scriptIds, one url), and
+  // findByOriginalSource returns both. set_breakpoint binds by `url`, so
+  // emitting both would make the second Debugger.setBreakpointByUrl collide
+  // with CDP's "Breakpoint at specified location already exists" — surfaced as
+  // a non-recoverable internal_error (issue #24). Keying on (sessionId, url,
+  // line, col) collapses the duplicates into one binding while still keeping
+  // genuinely distinct locations: different urls, different sessions
+  // (workers/iframes), and column-collapsed mappings on one source line.
+  const seen = new Set<string>();
   for (const script of store.findByOriginalSource(file)) {
     if (!script.consumer) continue;
     const sourceKey = pickSourceKey(script, file);
@@ -198,14 +210,9 @@ export function mapOriginalToGenerated(
       line, // 1-based in
       column,
     });
-    // De-dup by (gen line, gen col) — different originalColumn mappings on
-    // the same source line can collapse to the same generated position
-    // after minification, but we only need one breakpoint binding per
-    // distinct generated location.
-    const seen = new Set<string>();
     for (const gen of positions) {
       if (gen.line == null) continue;
-      const key = `${gen.line}:${gen.column ?? 0}`;
+      const key = `${script.sessionId ?? ""}|${script.url}|${gen.line}:${gen.column ?? 0}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
