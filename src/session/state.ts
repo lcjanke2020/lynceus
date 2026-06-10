@@ -9,6 +9,14 @@ import { noSession, notPaused } from "../util/errors.js";
 export interface BreakpointBinding {
   cdpId: string;
   sessionId?: string;
+  // The physical CDP breakpoint spec this binding requested:
+  // `${sessionId ?? ""}|${url}|${line0}:${col}` (0-based line). V8 keys its
+  // "Breakpoint at specified location already exists" rejection on the
+  // requested url:line:col — NOT the resolved location — so this is what
+  // set_breakpoint compares against to detect a real collision, instead of
+  // re-mapping the (possibly since-changed) ScriptStore. See issue #24 + PR #25
+  // review (false `already-set` from late-loaded code-split scripts).
+  genKey?: string;
 }
 
 export interface BreakpointRecord {

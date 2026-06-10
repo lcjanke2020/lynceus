@@ -212,15 +212,19 @@ export function mapOriginalToGenerated(
     });
     for (const gen of positions) {
       if (gen.line == null) continue;
-      const key = `${script.sessionId ?? ""}|${script.url}|${gen.line}:${gen.column ?? 0}`;
+      const lineNumber = gen.line - 1; // back to 0-based for CDP
+      const columnNumber = gen.column ?? 0;
+      // Key on the same 0-based identity we emit (and that breakpoints.ts'
+      // genKey uses), so the two representations never drift.
+      const key = `${script.sessionId ?? ""}|${script.url}|${lineNumber}:${columnNumber}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
         scriptId: script.scriptId,
         scriptUrl: script.url,
         ...(script.sessionId ? { sessionId: script.sessionId } : {}),
-        lineNumber: gen.line - 1, // back to 0-based for CDP
-        columnNumber: gen.column ?? 0,
+        lineNumber,
+        columnNumber,
       });
     }
   }

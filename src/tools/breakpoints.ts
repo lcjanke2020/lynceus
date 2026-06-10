@@ -44,7 +44,7 @@ export function registerBreakpointTools(server: McpServer) {
   registerJsonTool(
     server,
     "set_breakpoint",
-    'Set a breakpoint in TypeScript source. Resolves matching scripts via source maps (including in workers and iframes) and binds in each one\'s session. Returns the resolved JS->TS locations. Idempotent: re-calling with identical (file, line, column, condition, log_message) returns the existing breakpoint id with status: "already-set". Same location with a different condition/log_message returns error: "breakpoint_conflict" — remove the existing breakpoint first.',
+    'Set a breakpoint in TypeScript source. Resolves matching scripts via source maps (including in workers and iframes) and binds in each one\'s session. Returns the resolved JS->TS locations. Idempotent at the compiled-location level: re-calling at the same source location — or a different source line the source map collapses onto the same compiled JS position — returns the existing breakpoint id with status: "already-set" (when condition/log_message match). A compiled location already bound with a different condition/log_message, or only partially overlapping an existing breakpoint, returns error: "breakpoint_conflict" — remove the existing breakpoint first.',
     {
       file: z.string().describe("TS file path or fragment (e.g. src/foo.ts)"),
       line: z.number().int().positive().describe("1-based"),
@@ -83,24 +83,34 @@ export function registerBreakpointTools(server: McpServer) {
       }
       // Generated-layer idempotency. findBreakpointAt() above matches on the
       // *TS* coordinate, but two different TS lines can minify to the SAME
-      // generated position — and since we bind by `url`, CDP rejects the
+      // compiled position — and since we bind by `url`, CDP would reject the
       // second with "Breakpoint at specified location already exists" (a
-      // non-recoverable internal_error, issue #24). If an already-set
-      // breakpoint covers these generated locations, treat this as the same
-      // breakpoint instead of issuing a colliding setBreakpointByUrl.
-      const candKeys = new Set(candidates.map(genKey));
+      // non-recoverable internal_error, issue #24). We detect that against what
+      // is PHYSICALLY bound — each binding's recorded genKey — not a re-mapping
+      // of the live ScriptStore: a script that loads after a record was set
+      // (dynamic import / code-split) must not make us claim coverage that was
+      // never bound (PR #25 review, finding 1).
+      const candKeys = candidates.map(genKey);
       for (const r of s.breakpoints.values()) {
-        const overlaps = mapOriginalToGenerated(s.scripts, r.file, r.line, r.column ?? 0).some((g) =>
-          candKeys.has(genKey(g)),
+        const boundKeys = new Set(
+          r.bindings.map((b) => b.genKey).filter((k): k is string => k !== undefined),
         );
-        if (!overlaps) continue;
-        if (r.condition === condition && r.logMessage === logMessage) {
+        if (!candKeys.some((k) => boundKeys.has(k))) continue;
+        // Full coverage + same condition/log_message → genuinely the same
+        // breakpoint. Anything else is recoverable conflict, never a silent
+        // partial bind (finding 2): partial overlap means some candidates would
+        // still collide in CDP, and a differing condition can't reuse r.
+        const fullyCovered = candKeys.every((k) => boundKeys.has(k));
+        if (fullyCovered && r.condition === condition && r.logMessage === logMessage) {
           return breakpointEnvelope(r, "already-set");
         }
         const locStr = `${file}:${line}:${column}`;
+        const why = fullyCovered
+          ? "the same compiled location with a different condition or log_message"
+          : "an overlapping compiled location";
         throw new ToolError(
           "breakpoint_conflict",
-          `Breakpoint ${r.id} (${r.file}:${r.line}) already binds the same compiled location as ${locStr} with a different condition or log_message. Remove it first (remove_breakpoint) before setting a new one.`,
+          `Breakpoint ${r.id} (${r.file}:${r.line}) already binds ${why} as ${locStr}. Remove it first (remove_breakpoint) before setting a new one.`,
         );
       }
       const id = s.nextBpId();
@@ -118,7 +128,9 @@ export function registerBreakpointTools(server: McpServer) {
           ...(conditionExpr ? { condition: conditionExpr } : {}),
         };
         const res = await s.client!.send("Debugger.setBreakpointByUrl", params, c.sessionId);
-        bindings.push({ cdpId: res.breakpointId, ...(c.sessionId ? { sessionId: c.sessionId } : {}) });
+        // Record the requested spec (genKey) so a later set_breakpoint can tell
+        // a real CDP collision from a stale ScriptStore recompute (PR #25 review).
+        bindings.push({ cdpId: res.breakpointId, genKey: genKey(c), ...(c.sessionId ? { sessionId: c.sessionId } : {}) });
         for (const loc of res.locations) {
           const orig = mapCdpToOriginal(s.scripts, loc, c.sessionId);
           if (orig) resolved.push(orig);

@@ -268,6 +268,75 @@ describe("set_breakpoint", () => {
     expect(fake.sentCalls.filter((c) => c.method === "Debugger.setBreakpointByUrl")).toHaveLength(1);
   });
 
+  it("late-loaded code-split script does not produce a false already-set (PR #25 review, finding 1)", async () => {
+    // The guard must check what was PHYSICALLY bound, not a recompute of the
+    // live ScriptStore. Pre-review-fix: a script that loads after bp_1 was set
+    // expanded the recompute beyond bp_1's actual bindings → a silent false
+    // "already-set" for a line where no CDP breakpoint exists (worse than #24's
+    // loud error). Here util.ts:8 binds only in the *later* chunk2.
+    const { fake } = setupSession();
+    seedMappedScript({ scriptId: "c1", url: "http://x/chunk1.js", source: "src/util.ts", tsLine: 7, jsLine: 1 });
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
+      breakpointId: `cdp:${params.url}:${params.lineNumber}`,
+      locations: [{ scriptId: "c1", lineNumber: params.lineNumber, columnNumber: 0 }],
+    }));
+    const first = parseOkEnvelope<{ id: string; status: string }>(await setBp.handler({ file: "src/util.ts", line: 7 }));
+    expect(first.status).toBe("set");
+    // chunk2 dynamically imported later; its map collapses util.ts lines 7 AND
+    // 8 onto the same compiled position (gen 1,0) — the exact minify-collapse
+    // shape the guard targets, but in a *different* script than bp_1 bound.
+    sessionState.scripts.upsert({
+      scriptId: "c2",
+      url: "http://x/chunk2.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h-c2",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/chunk2.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/util.ts" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/util.ts" });
+    sessionState.scripts.attachMap("c2", undefined, gen.toString());
+    fake.clearSentCalls();
+    const second = parseOkEnvelope<{ id: string; status: string }>(await setBp.handler({ file: "src/util.ts", line: 8 }));
+    // util.ts:8's only candidate is chunk2:(0,0), where nothing is bound yet —
+    // it must actually bind, not report a phantom already-set.
+    expect(second.status).toBe("set");
+    expect(second.id).not.toBe(first.id);
+    expect(fake.sentCalls.filter((c) => c.method === "Debugger.setBreakpointByUrl")).toHaveLength(1);
+  });
+
+  it("partial generated-location overlap → recoverable breakpoint_conflict, not silent under-coverage (PR #25 review, finding 2)", async () => {
+    // foo.ts:8 maps to TWO compiled positions; only one is already bound (by
+    // foo.ts:7). The .some() short-circuit used to return already-set and drop
+    // the uncovered (2,0) binding silently. It must surface a conflict instead.
+    const { fake } = setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1",
+      url: "http://x/app.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "h-s1",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 2, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
+      breakpointId: `cdp:${params.url}:${params.lineNumber}`,
+      locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
+    }));
+    await setBp.handler({ file: "src/foo.ts", line: 7 }); // binds gen (1,0) only
+    const r = await setBp.handler({ file: "src/foo.ts", line: 8 }); // candidates (1,0)+(2,0)
+    expect(parseErrorEnvelope(r)?.error).toBe("breakpoint_conflict");
+  });
+
   it("generated-layer collision with a different condition → breakpoint_conflict (issue #24)", async () => {
     // Same shared compiled location as above, but the second call carries a
     // different condition: it can't silently reuse the existing binding, so it
