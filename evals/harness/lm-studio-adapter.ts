@@ -71,6 +71,21 @@ export function makeLmStudioAdapter(): VendorAdapter {
   const baseUrl = readEnv("EVAL_LM_STUDIO_BASE_URL").replace(/\/+$/, "");
   const model = readEnv("EVAL_LM_STUDIO_MODEL");
   const apiKey = readEnv("EVAL_LM_STUDIO_API_KEY");
+  // Reasoning models served by LM Studio (e.g. gpt-oss) reason at a LOW default
+  // effort unless told otherwise. EVAL_LM_STUDIO_REASONING_EFFORT forwards the
+  // OpenAI-compat `reasoning_effort` knob so a run can request more analysis;
+  // unset = the server's default (back-compat). EVAL_LM_STUDIO_MAX_TOKENS lets a
+  // high-effort run buy output headroom (reasoning tokens count toward output).
+  const reasoningEffort = process.env.EVAL_LM_STUDIO_REASONING_EFFORT as
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max"
+    | undefined;
+  const maxTokensEnv = process.env.EVAL_LM_STUDIO_MAX_TOKENS
+    ? Number(process.env.EVAL_LM_STUDIO_MAX_TOKENS)
+    : undefined;
 
   return {
     vendor: "lm-studio",
@@ -80,7 +95,7 @@ export function makeLmStudioAdapter(): VendorAdapter {
       // `max_tokens` semantics for thinking-bearing models. Use the
       // caller's value when supplied; otherwise default to 4096 (matches
       // the no-thinking branch of the Anthropic adapter for parity).
-      const maxTokens = req.maxTokens ?? 4096;
+      const maxTokens = req.maxTokens ?? maxTokensEnv ?? 4096;
       const oReq: OpenAIChatRequest = {
         model,
         messages: translateMessages(req.system, req.messages),
@@ -88,6 +103,7 @@ export function makeLmStudioAdapter(): VendorAdapter {
           ? { tools: translateTools(req.tools), tool_choice: "auto" }
           : {}),
         ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         max_tokens: maxTokens,
       };
       // req.thinking is dropped — LM Studio has no first-class thinking
