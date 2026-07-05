@@ -1,6 +1,6 @@
 # Security Policy
 
-**Last updated: 2026-06-09**
+**Last updated: 2026-07-05**
 
 ## Reporting a vulnerability
 
@@ -17,10 +17,11 @@ basis — there is no formal SLA, but credible reports will be taken seriously.
 ## Security model — read before deploying
 
 `cdp-mcp` is a debugger. By design it can launch and attach to a Chromium
-browser, set breakpoints, evaluate arbitrary expressions in page/runtime
-contexts, read the DOM, and capture console + network traffic. Treat access to
-this server as **equivalent to code execution and full read access** on every
-target it is attached to.
+browser **or a Node.js process**, set breakpoints, evaluate arbitrary
+expressions in page/runtime contexts, read the DOM, and capture console +
+network traffic. Treat access to this server as **equivalent to code execution
+and full read access** on every target it is attached to — and, via
+`launch_node`, on the host itself (see the agent-operator threat model below).
 
 - **stdio transport (default).** The server speaks MCP over stdin/stdout and is
   launched as a child process by the host (e.g. Claude Code). It exposes no
@@ -59,6 +60,15 @@ both **ingests page content** and **takes actions**, and the page can drive both
   JavaScript), DOM/form drivers (`click`, `type_text`, `press_key`, `fill`,
   `select_option`, `check`/`uncheck`), navigation (`navigate`, `reload`), and
   `launch_chrome` (which accepts arbitrary Chrome args).
+- **Host code execution (`launch_node`).** `launch_node` is a stronger surface
+  than the page-scoped actions above: it spawns an agent-chosen script — with
+  agent-chosen args and working directory — as a real OS child process under the
+  Node inspector, and that child inherits the server process's **full
+  environment** (any secrets in it included) and runs **unsandboxed**. A steered
+  agent able to call `launch_node` therefore has arbitrary local code execution
+  with the server's privileges, not merely page-scoped execution. (`attach_node`
+  only connects to an already-running process, but still grants full debugger
+  control — including `evaluate` — over it.)
 - **Filesystem reach.** Three tools take a caller-supplied path that is **not**
   validated, normalized, or scoped: `screenshot path=` and
   `export_storage_state path=` write, and `load_storage_state path=` reads. A
@@ -89,7 +99,8 @@ These are deployment-side controls; the server does not apply them for you.
 - **Throwaway browser profile.** Use a disposable `userDataDir` rather than a
   real browser profile.
 - **No ambient credentials.** Do not run the server where its process env or
-  instance role carries cloud/API credentials the agent shouldn't have; block the
+  instance role carries cloud/API credentials the agent shouldn't have — doubly
+  load-bearing because a `launch_node` child inherits that env directly. Block the
   cloud metadata endpoint (169.254.169.254) and apply an egress allowlist at the
   network layer.
 - **Authenticated front door for remote SSE.** Any non-loopback deployment
