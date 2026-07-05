@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { requireSession } from "../session/state.js";
+import { requireSession, requireCapable } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 import { locatorShape, type LocatorSpec } from "../locator.js";
@@ -39,6 +39,8 @@ export function registerFormTools(server: McpServer) {
       session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page."),
     },
     async (input: SelectOptionInput) => {
+      const s = requireSession();
+      requireCapable(s, "select_option");
       const values = toArray(input.option_value);
       const labels = toArray(input.option_label);
       const indexes = toArray(input.option_index);
@@ -101,6 +103,8 @@ export function registerFormTools(server: McpServer) {
       session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page."),
     },
     async (input: LocatorSpec & { value: string; session_id?: string }) => {
+      const s = requireSession();
+      requireCapable(s, "fill");
       const locator = normalizeLocator(input);
       const body = String.raw`
         // fill writes free text, so restrict to text-like controls. Many other
@@ -141,6 +145,7 @@ export function registerFormTools(server: McpServer) {
     },
     async (input: { node_id?: number; selector?: string; session_id?: string }) => {
       const s = requireSession();
+      requireCapable(s, "suggest_locator");
       if (input.node_id === undefined && !input.selector) {
         throw new ToolError("missing_arg", "node_id or selector required");
       }
@@ -241,6 +246,8 @@ function registerToggle(server: McpServer, name: "check" | "uncheck") {
     description,
     { ...locatorShape, session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page.") },
     async (input: LocatorSpec & { session_id?: string }) => {
+      const s = requireSession();
+      requireCapable(s, name);
       const locator = normalizeLocator(input);
       const body = String.raw`
         if (!(el instanceof HTMLInputElement) || (el.type !== "checkbox" && el.type !== "radio"))

@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { readFile, writeFile, rename, rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { requireSession } from "../session/state.js";
+import { requireSession, requireCapable } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 
@@ -119,6 +119,7 @@ export function registerStorageTools(server: McpServer) {
     { path: z.string().describe("Absolute path to write the storageState JSON to.") },
     async (input: { path: string }) => {
       const s = requireSession();
+      requireCapable(s, "export_storage_state");
       const { cookies } = (await s.client!.send("Network.getAllCookies")) as { cookies: CdpCookie[] };
       const probe = await s.client!.send("Runtime.evaluate", {
         expression: READ_ORIGIN_AND_LOCALSTORAGE,
@@ -158,6 +159,7 @@ export function registerStorageTools(server: McpServer) {
     { path: z.string().describe("Absolute path to a storageState JSON file (as written by export_storage_state).") },
     async (input: { path: string }) => {
       const s = requireSession();
+      requireCapable(s, "load_storage_state");
       let raw: string;
       try {
         raw = await readFile(input.path, "utf8");
@@ -210,6 +212,7 @@ export function registerStorageTools(server: McpServer) {
     },
     async (input: { urls?: string[] }) => {
       const s = requireSession();
+      requireCapable(s, "get_cookies");
       const res = (
         input.urls && input.urls.length > 0
           ? await s.client!.send("Network.getCookies", { urls: input.urls })
@@ -226,6 +229,7 @@ export function registerStorageTools(server: McpServer) {
     { cookies: z.array(cookieParamSchema).describe("Cookies to set.") },
     async (input: { cookies: Array<z.infer<typeof cookieParamSchema>> }) => {
       const s = requireSession();
+      requireCapable(s, "set_cookies");
       if (input.cookies.length === 0) throw new ToolError("missing_arg", "cookies array is empty");
       const missing = input.cookies.find((c) => !c.url && !c.domain);
       if (missing) throw new ToolError("missing_arg", `cookie '${missing.name}' needs a url or domain`);

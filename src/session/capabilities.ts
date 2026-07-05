@@ -42,6 +42,21 @@ export const TOOL_KIND_SUPPORT: Partial<Record<string, ReadonlySet<SessionKind>>
   get_network_requests: BROWSER_ONLY,
   get_request_body: BROWSER_ONLY,
   get_response_body: BROWSER_ONLY,
+  // Form controls — same DOM / Input / `document` dependency as the dom.ts
+  // tools above: option selection dispatches change events, checkbox/radio
+  // toggling and LocatorSpec resolution all assume a live page DOM.
+  select_option: BROWSER_ONLY,
+  check: BROWSER_ONLY,
+  uncheck: BROWSER_ONLY,
+  fill: BROWSER_ONLY,
+  suggest_locator: BROWSER_ONLY,
+  // Storage state — cookies live in the browser's Network/Storage domains and
+  // localStorage is a page-origin `window` global; a Node inspector session
+  // exposes neither.
+  export_storage_state: BROWSER_ONLY,
+  load_storage_state: BROWSER_ONLY,
+  get_cookies: BROWSER_ONLY,
+  set_cookies: BROWSER_ONLY,
   // Node-only output buffer. The browser-session equivalent (Chrome stdio)
   // isn't exposed by cdp-mcp at all, so calling get_node_output against a
   // browser session is a category error, not a "wrong session" mistake.
