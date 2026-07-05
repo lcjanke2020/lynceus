@@ -74,9 +74,9 @@ export class PauseTracker {
   // Promise.all([send, resumed]) can drop the waiter cleanly if send
   // throws — symmetric with how waitForPauseOrResume's waiter is removed
   // on its own timeout path. Without cancel(), a send rejection leaves
-  // the waiter pending in resumeWaiters until its 2s timer fires, at
-  // which point it rejects with no awaiter and surfaces as an unhandled
-  // rejection (~2s after the tool already returned). (PR #76 review.)
+  // the waiter pending in resumeWaiters with its 2s timer still armed,
+  // firing pointlessly ~2s after the tool already returned. (upstream
+  // review.)
   waitForResumed(timeoutMs: number): { promise: Promise<void>; cancel: () => void } {
     let waiter: ResumeWaiter;
     const promise = new Promise<void>((resolve, reject) => {

@@ -191,7 +191,7 @@ describe("buildScriptParsedHandler — node tier", () => {
 
   it("refuses file:// reads when chromeHost is non-loopback (security gate)", async () => {
     // Without this gate a remote attach_node could trick the loader into
-    // reading attacker-chosen local paths. Copilot PR-review on #70.
+    // reading attacker-chosen local paths. Upstream Copilot review.
     // Put a real file at /etc/hostname (or anywhere we know exists) to make
     // the test prove the refusal isn't just an ENOENT — the read must be
     // skipped, not fail.

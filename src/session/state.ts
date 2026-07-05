@@ -76,7 +76,7 @@ class SessionState {
   // Cross-session guard. Bumped on every `reset()`. Output-capture
   // listeners snapshot this at attach time and silently no-op if it has
   // moved on, so stale 'close' / 'data' events from a dead child can't
-  // contaminate a subsequent session's `nodeOutput`. Covers two PR #81
+  // contaminate a subsequent session's `nodeOutput`. Covers two upstream
   // review races: (1) `launch_node` whose `waitForInspector` fails leaves
   // listeners attached on the dying child, and (2) `close_session`'s
   // reset can run before the child's 'close' event drains.
@@ -200,12 +200,15 @@ export async function killNodeChild(
     return; // already exited — nothing to send
   }
   let exited = false;
+  let resolveExited: () => void = () => {};
   const exitedPromise = new Promise<void>((resolve) => {
-    child.once("exit", () => {
-      exited = true;
-      resolve();
-    });
+    resolveExited = resolve;
   });
+  const onExit = () => {
+    exited = true;
+    resolveExited();
+  };
+  child.once("exit", onExit);
   let sigtermSent = false;
   try {
     sigtermSent = child.kill("SIGTERM");
@@ -213,7 +216,11 @@ export async function killNodeChild(
     /* fall through with sigtermSent = false (e.g. ESRCH) */
   }
   if (!sigtermSent) {
-    return; // signal couldn't be delivered — treat as already gone
+    // Signal couldn't be delivered — treat as already gone. Remove the
+    // exit listener registered above so it doesn't linger on the
+    // ChildProcess for the rest of its lifetime.
+    child.removeListener("exit", onExit);
+    return;
   }
   let graceTimer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([

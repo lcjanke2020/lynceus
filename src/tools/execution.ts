@@ -27,21 +27,21 @@ export function registerExecutionTools(server: McpServer) {
       // actually bounds this command even if the send hangs, and so a
       // send rejection (stale session, target detach, concurrent resume)
       // surfaces before the waiter's own timeout. cancel() in `finally`
-      // drops the waiter cleanly when send throws — without it, the
-      // waiter sits in resumeWaiters until its timer fires and rejects
-      // with no awaiter, surfacing as an unhandled rejection long after
-      // the tool returned an error. (PR #76 review.)
+      // is cleanup: it clears the waiter's 2s timer and removes it from
+      // resumeWaiters (resolving it, not rejecting) so a send rejection
+      // doesn't leave a pending waiter ticking after the tool returned.
+      // (upstream review.)
       const { promise: resumed, cancel } = s.pause.waitForResumed(2000);
       try {
-        // The send promise is intentionally NOT catch-guarded. If
-        // Promise.all rejects via the resumed-waiter timeout while send
-        // is still pending and send later rejects, that late rejection
-        // has no awaiter — a known unobserved-reject, accepted because a
-        // CDP send rejecting >2s after the resume timeout means the
-        // session is already in a pathological state (network dead or
-        // target gone) and surfacing two errors for one tool call would
-        // be noisier than letting the late reject get swallowed by
-        // Node's default unhandledRejection handler. (PR #76 review.)
+        // The send promise is intentionally NOT catch-guarded. If the
+        // resumed-waiter times out first (Promise.all rejects) while send
+        // is still pending and send rejects later, that late rejection is
+        // still observed by the rejection reaction Promise.all attached to
+        // the send promise — so it's harmlessly ignored, NOT an unhandled
+        // rejection. We accept dropping it: a CDP send rejecting >2s after
+        // the resume timeout means the session is already pathological
+        // (network dead or target gone), and emitting a second error for
+        // one tool call would be noise. (upstream review.)
         await Promise.all([
           s.client!.send("Debugger.resume", undefined, sid),
           resumed,

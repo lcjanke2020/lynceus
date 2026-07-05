@@ -152,7 +152,7 @@ export function registerSessionTools(server: McpServer) {
   registerJsonTool(
     server,
     "list_targets",
-    "List all debuggable targets on the current browser (pages, workers, iframes).",
+    "List all debuggable targets: on a browser session, the pages, workers, and iframes; on a Node session, the single root target.",
     undefined,
     async () => {
       const s = requireSession();

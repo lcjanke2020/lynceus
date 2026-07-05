@@ -149,7 +149,7 @@ describe("PauseTracker", () => {
   });
 
   it("cancel() drops the waiter so a later timer fire doesn't unhandled-reject", async () => {
-    // PR #76 review: when the resume tool's Promise.all rejects on a
+    // Upstream review: when the resume tool's Promise.all rejects on a
     // failed Debugger.resume send, cancel() must remove the waiter from
     // resumeWaiters AND clear its timer — otherwise the timer fires ~2s
     // later with no awaiter and surfaces as an unhandled rejection.

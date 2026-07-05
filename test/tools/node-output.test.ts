@@ -190,7 +190,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     return child;
   }
 
-  it("captures startup stderr (PR #81 fix-up #1: capture is installed BEFORE waitForInspector)", async () => {
+  it("captures startup stderr (upstream fix-up #1: capture is installed BEFORE waitForInspector)", async () => {
     // Regression for the original landing of get_node_output, which installed
     // attachOutputCapture AFTER waitForInspector. waitForInspector
     // attaches its own 'data' listeners that consume the startup
@@ -246,7 +246,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     expect(r.items.map((i) => i.text)).toEqual(["part-one"]);
   });
 
-  it("on process 'close', trailing unterminated content is flushed (PR #81 fix-up #4: 'close' not 'exit')", async () => {
+  it("on process 'close', trailing unterminated content is flushed (upstream fix-up #4: 'close' not 'exit')", async () => {
     // Regression for the original landing of get_node_output, which flushed on
     // 'exit'. 'exit' fires when the process terminates but pending
     // 'data' chunks may still be queued on stdout/stderr; the
@@ -264,7 +264,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     expect(r.items.map((i) => i.text)).toEqual(["final-without-newline"]);
   });
 
-  it("on 'close', trailing partial line strips a final '\\r' the same way the newline path does (PR #81 Copilot inline)", async () => {
+  it("on 'close', trailing partial line strips a final '\\r' the same way the newline path does (upstream Copilot review)", async () => {
     // An unterminated CRLF fragment arriving as '...\r' (with '\n' lost
     // or never sent) would otherwise yield a line ending in '\r'.
     const child = arrangeLaunchedNode();
@@ -279,7 +279,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     expect(r.items.map((i) => i.text)).toEqual(["partial-cr"]);
   });
 
-  it("over-cap line with no newline preserves all bytes across adjacent cap-sized entries (PR #81 fix-up #2)", async () => {
+  it("over-cap line with no newline preserves all bytes across adjacent cap-sized entries (upstream fix-up #2)", async () => {
     // Regression for the original landing: a 2500-char no-newline write
     // sliced the first 1000 chars and discarded the rest. Fix: loop,
     // emitting one cap-sized entry per window — preserves all bytes;
@@ -319,7 +319,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     expect(r.items).toEqual([]);
   });
 
-  it("post-inspector launch failure also clears nodeOutput (PR #81 re-review round 2 — Codex P2)", async () => {
+  it("post-inspector launch failure also clears nodeOutput (upstream re-review round 2 — Codex P2)", async () => {
     // Codex re-review caught that my first fix-up only handled the
     // waitForInspector failure path. connectNodeInspector has THREE
     // failure modes that throw BEFORE its inner Runtime/Debugger init
@@ -356,7 +356,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     expect(out.items).toEqual([]);
   });
 
-  it("failed launch_node followed by attach_node leaves nodeOutput empty (PR #81 re-review — Codex P2 race 1)", async () => {
+  it("failed launch_node followed by attach_node leaves nodeOutput empty (upstream re-review — Codex P2 race 1)", async () => {
     // Regression for cross-session contamination on failed launch. The
     // failed attempt's stderr (e.g., an ESM-loader error or any startup
     // noise) would otherwise sit in sessionState.nodeOutput and be
@@ -386,7 +386,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     expect(r.items).toEqual([]);
   });
 
-  it("late 'close' on a previous child does not contaminate a subsequent session (PR #81 re-review — Codex P2 race 2)", async () => {
+  it("late 'close' on a previous child does not contaminate a subsequent session (upstream re-review — Codex P2 race 2)", async () => {
     // Regression for the close-vs-reset race. close_session calls
     // sessionState.reset(), but the previous child's 'close' event can
     // fire later — the SIGTERM/SIGKILL escalation only waits

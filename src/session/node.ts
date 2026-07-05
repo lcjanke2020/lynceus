@@ -92,7 +92,7 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   // buffer and never reach nodeOutput — exactly the diagnostics an agent
   // needs when triaging "why did my Node child fail to come up?". Both
   // listeners coexist fine on the same 'data' event (Node streams
-  // multicast). (PR #81 review.)
+  // multicast). (upstream review.)
   //
   // Side effect: attachOutputCapture's listeners drain the pipes, so the
   // prior explicit resume() that launch_node once needed is no longer required.
@@ -109,7 +109,7 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   // Runtime/Debugger init block. Earlier failures in
   // connectNodeInspector (CDP.List reject, no node-type targets, CDP()
   // reject before sessionState.client is assigned) escape directly to
-  // this catch with state still un-reset. (PR #81 re-review round 2 —
+  // this catch with state still un-reset. (upstream re-review round 2 —
   // Codex P2.)
   let startup: InspectorStartup;
   try {
@@ -356,14 +356,14 @@ function attachOutputCapture(child: ChildProcess): void {
   // has moved on (close_session ran, or a failed launch_node was
   // cleared), the listener silently no-ops rather than pushing into a
   // subsequent session's nodeOutput. See SessionState.ownedProcessGeneration.
-  // (PR #81 re-review — Codex P2.)
+  // (upstream re-review — Codex P2.)
   const myGeneration = sessionState.ownedProcessGeneration;
 
   // pushLine splits over-cap text into adjacent cap-sized entries —
   // preserves all bytes; continuation is implicit via adjacent `seq` on
   // the same `stream`. Symmetric for the two callers: a 2000-char single
   // line ending in '\n' splits the same way as a 2000-char no-newline
-  // chunk being flushed mid-stream. (PR #81 review fix-up #2 — the
+  // chunk being flushed mid-stream. (upstream review fix-up #2 — the
   // previous version sliced 1000 chars and discarded the remainder.)
   //
   // Empty text is preserved (a bare '\n' produces an empty entry, since
@@ -416,7 +416,7 @@ function attachOutputCapture(child: ChildProcess): void {
   // 'data' chunks may still be in flight on stdout/stderr — flushing too
   // early would either split the final line or miss buffered output.
   // ChildProcess 'close' is guaranteed to fire AFTER all stdio streams
-  // have closed, so by then every chunk has been processed. (PR #81
+  // have closed, so by then every chunk has been processed. (upstream
   // review fix-up #4 — Copilot inline.)
   //
   // Also strips trailing '\r' to mirror the newline-splitting path —

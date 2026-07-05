@@ -118,8 +118,8 @@ async function fetchMapNode(s: Session, url: string): Promise<string> {
     // is the path on the remote machine — it almost certainly doesn't exist
     // locally, and a malicious remote could choose paths that DO (e.g.
     // /etc/passwd) and trick us into reading them. Copy build artifacts
-    // locally or use a tunnel for remote Node debugging. (Copilot PR-review
-    // on #70.)
+    // locally or use a tunnel for remote Node debugging. (upstream Copilot
+    // review.)
     if (!isLoopbackHost(s.chromeHost)) {
       throw new Error(
         `Refusing to read file:// source map for remote Node session (host=${s.chromeHost}). ` +

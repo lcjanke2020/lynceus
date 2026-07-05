@@ -453,7 +453,7 @@ describe("waitForConsumer (source-map wait race 2 primitive)", () => {
   // Direct contract tests for the helper that both mapOriginalToGenerated
   // (set_breakpoint path) and formatFrameForPause (pause-frame path) rely
   // on. Three exit conditions: predicate true, no maps in flight,
-  // deadline expired. PR #76 review.
+  // deadline expired. Upstream review.
 
   it("returns immediately when the predicate is already true", async () => {
     // Caller checks predicate via store state synchronously, but if the
