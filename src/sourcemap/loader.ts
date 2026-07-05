@@ -1,15 +1,22 @@
 import type CDP from "chrome-remote-interface";
-import { ScriptStore } from "./store.js";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import type { Session } from "../session/state.js";
 import { log } from "../util/log.js";
 
-// Wire up Debugger.scriptParsed to populate the store and lazily load source maps.
-// Returns the registered handler so the caller can later `client.removeListener("Debugger.scriptParsed", handler)`.
-export function attachScriptListener(
-  client: CDP.Client,
-  store: ScriptStore,
+// Build a Debugger.scriptParsed handler that populates the store and lazily
+// loads source maps. Pure factory: does NOT call client.on — the caller wires
+// it via the unified registerHandler() (which attaches + tracks in one shot).
+//
+// Takes the whole Session (not just the ScriptStore) so loadSourceMap can
+// dispatch fetch-tier by session kind — Node sessions resolve file:// maps
+// from disk; browser sessions go through Network.loadNetworkResource. (See the
+// session-kind design notes.)
+export function buildScriptParsedHandler(
+  s: Session,
   sessionId: string | undefined,
 ): (params: any, eventSessionId?: string) => void {
-  const handler = (params: any, eventSessionId?: string) => {
+  return (params: any, eventSessionId?: string) => {
     // Each session sees its own events; gate strictly so root and children
     // don't process each other's. (Strict equality — `if (sessionId && …)`
     // was the original bug: sessionId=undefined made the gate vacuously
@@ -19,7 +26,7 @@ export function attachScriptListener(
       // anonymous inline scripts — skip; nothing to debug by file path
       return;
     }
-    store.upsert({
+    s.scripts.upsert({
       scriptId: params.scriptId,
       url: params.url,
       sourceMapURL: params.sourceMapURL || undefined,
@@ -33,16 +40,13 @@ export function attachScriptListener(
       ...(sessionId ? { sessionId } : {}),
     });
     if (params.sourceMapURL) {
-      void loadSourceMap(client, store, params.scriptId, params.url, params.sourceMapURL, sessionId);
+      void loadSourceMap(s, params.scriptId, params.url, params.sourceMapURL, sessionId);
     }
   };
-  client.on("Debugger.scriptParsed", handler);
-  return handler;
 }
 
 async function loadSourceMap(
-  client: CDP.Client,
-  store: ScriptStore,
+  s: Session,
   scriptId: string,
   scriptUrl: string,
   sourceMapURL: string,
@@ -57,12 +61,12 @@ async function loadSourceMap(
     } else {
       const resolved = new URL(sourceMapURL, scriptUrl).toString();
       mapUrl = resolved;
-      raw = await fetchMap(client, resolved, sessionId);
+      raw = await fetchMap(s, resolved, sessionId);
     }
-    store.attachMap(scriptId, sessionId, raw, mapUrl);
+    s.scripts.attachMap(scriptId, sessionId, raw, mapUrl);
     log.debug("source-map loaded", { scriptUrl, mapUrl });
   } catch (e) {
-    store.setLoadError(scriptId, sessionId, `fetch failed: ${String(e)}`);
+    s.scripts.setLoadError(scriptId, sessionId, `fetch failed: ${String(e)}`);
     log.warn("source-map fetch failed", { scriptUrl, sourceMapURL, error: String(e) });
   }
 }
@@ -85,7 +89,58 @@ export function decodeDataUri(uri: string): string {
   return decodeURIComponent(payload);
 }
 
+// Kind-aware dispatch. Browser sessions hit the page's network stack so
+// auth/cookies/dev-server middleware apply; Node sessions skip that entirely
+// (the Network domain doesn't exist there) and read file:// URLs from disk.
+// (See the session-kind design notes.)
 async function fetchMap(
+  s: Session,
+  url: string,
+  sessionId: string | undefined,
+): Promise<string> {
+  if (s.kind === "node") return await fetchMapNode(s, url);
+  // s.kind === "browser" — client is always set when a scriptParsed event
+  // fires, since the handler was wired AFTER CDP attach.
+  return await fetchMapBrowser(s.client!, url, sessionId);
+}
+
+// chromeHost=null means default-to-localhost (per state.ts comment).
+// attach_node always sets it explicitly to one of these strings or the
+// user-provided host. Conservative exact-match: 127.0.0.2 etc. would also
+// be loopback but require deliberate opt-in we can't reasonably guess at.
+function isLoopbackHost(host: string | null): boolean {
+  return host === null || host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+async function fetchMapNode(s: Session, url: string): Promise<string> {
+  if (url.startsWith("file://")) {
+    // Refuse file:// reads for non-loopback Node sessions. The script URL
+    // is the path on the remote machine — it almost certainly doesn't exist
+    // locally, and a malicious remote could choose paths that DO (e.g.
+    // /etc/passwd) and trick us into reading them. Copy build artifacts
+    // locally or use a tunnel for remote Node debugging. (Copilot PR-review
+    // on #70.)
+    if (!isLoopbackHost(s.chromeHost)) {
+      throw new Error(
+        `Refusing to read file:// source map for remote Node session (host=${s.chromeHost}). ` +
+          `Remote file:// source maps aren't supported — the path is on the remote machine and ` +
+          `reading it locally would either fail or load the wrong file. Copy the build artifacts ` +
+          `to this host or run an SSH tunnel.`,
+      );
+    }
+    // Probe (Node v24.13.1, 2026-05-20): tsc --sourceMap emits a relative
+    // sourceMappingURL ("index.js.map") that new URL() resolves against the
+    // file:// scriptUrl. fileURLToPath then gives the on-disk path.
+    return await readFile(fileURLToPath(url), "utf8");
+  }
+  // Rare: Node process whose sourceMappingURL points at a dev-server bundle.
+  // Plain fetch — no browser context to inherit.
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+  return await res.text();
+}
+
+async function fetchMapBrowser(
   client: CDP.Client,
   url: string,
   sessionId: string | undefined,

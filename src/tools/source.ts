@@ -69,7 +69,7 @@ export function registerSourceTools(server: McpServer) {
     },
     async (input: { file: string; line: number; column?: number }) => {
       const s = requireSession();
-      const candidates = mapOriginalToGenerated(s.scripts, input.file, input.line, input.column ?? 0);
+      const candidates = await mapOriginalToGenerated(s.scripts, input.file, input.line, input.column ?? 0);
       return {
         query: { file: input.file, line: input.line, column: input.column ?? 0 },
         candidates: candidates.map((c) => ({

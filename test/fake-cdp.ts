@@ -83,9 +83,9 @@ export interface FakeCdp extends EventEmitter {
   close(): Promise<void>;
 
   // Domain shorthands. Each delegates to send() so tests can override via
-  // respond() and the production wireDomainHandlers code paths run
-  // unchanged. Call signatures match what production actually invokes
-  // (some methods take only sessionId; others take params first).
+  // respond() and the production connectDebugger / enableBrowserDomains code
+  // paths run unchanged. Call signatures match what production actually
+  // invokes (some methods take only sessionId; others take params first).
   Runtime: {
     enable(sessionId?: string): Promise<void>;
     evaluate(params: any, sessionId?: string): Promise<any>;
@@ -171,8 +171,11 @@ export function makeFakeCdp(): FakeCdp {
   let pauseStateSeed = 0;
 
   // Sensible defaults so tests don't have to register a responder for every
-  // method production calls during enableDomains/wireDomainHandlers.
+  // method production calls during enableBrowserDomains/connectDebugger.
   responders.set("Runtime.enable", () => undefined);
+  // Node --inspect-brk entry-pause trigger. Production attach_node sends
+  // this after Debugger.enable; the Node attach L2 tests assert it was called.
+  responders.set("Runtime.runIfWaitingForDebugger", () => undefined);
   responders.set("Debugger.enable", () => ({ debuggerId: "fake-debugger" }));
   responders.set("Page.enable", () => undefined);
   responders.set("DOM.enable", () => undefined);
@@ -239,6 +242,7 @@ export function makeFakeCdp(): FakeCdp {
   // To handle a method not in this set, register a responder via fake.respond().
   const KNOWN_VOID_METHODS = new Set<string>([
     "Runtime.enable",
+    "Runtime.runIfWaitingForDebugger",
     "Page.enable",
     "DOM.enable",
     "Network.enable",
@@ -374,7 +378,7 @@ export function makeFakeCdp(): FakeCdp {
 
     seedScript(opts: SeedScriptOpts) {
       // Match the Protocol.Debugger.ScriptParsedEvent shape that
-      // attachScriptListener (src/sourcemap/loader.ts:12) destructures.
+      // buildScriptParsedHandler (src/sourcemap/loader.ts:14) destructures.
       const params = {
         scriptId: opts.scriptId,
         url: opts.url,

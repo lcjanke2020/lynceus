@@ -194,7 +194,7 @@ describe("makeFakeCdp — seedScript", () => {
     expect(capturedSession).toBe("SW1");
   });
 
-  it("defaults sourceMapURL to '' so attachScriptListener skips map loading", () => {
+  it("defaults sourceMapURL to '' so buildScriptParsedHandler skips map loading", () => {
     const fake = makeFakeCdp();
     let captured: any = null;
     fake.on("Debugger.scriptParsed", (params: any) => { captured = params; });

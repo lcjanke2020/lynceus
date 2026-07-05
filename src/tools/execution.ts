@@ -2,7 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Protocol } from "devtools-protocol";
 import { requireSession, requirePaused } from "../session/state.js";
-import { mapCdpToOriginal } from "../sourcemap/store.js";
+import {
+  mapCdpToOriginal,
+  waitForConsumer,
+  MAP_LOAD_WAIT_MS,
+} from "../sourcemap/store.js";
 import { registerJsonTool } from "./_register.js";
 
 export function registerExecutionTools(server: McpServer) {
@@ -14,7 +18,37 @@ export function registerExecutionTools(server: McpServer) {
     async () => {
       const s = requirePaused();
       const sid = s.pause.current()!.sessionId;
-      await s.client!.send("Debugger.resume", undefined, sid);
+      // Install the resumed-event listener BEFORE sending Debugger.resume.
+      // CRI emits events synchronously, so the Debugger.resumed event can
+      // land in the same WebSocket batch as the send response — racing the
+      // send completion. (Resume/resumed race 1.)
+      //
+      // Promise.all (not sequential await) so the 2s waiter timeout
+      // actually bounds this command even if the send hangs, and so a
+      // send rejection (stale session, target detach, concurrent resume)
+      // surfaces before the waiter's own timeout. cancel() in `finally`
+      // drops the waiter cleanly when send throws — without it, the
+      // waiter sits in resumeWaiters until its timer fires and rejects
+      // with no awaiter, surfacing as an unhandled rejection long after
+      // the tool returned an error. (PR #76 review.)
+      const { promise: resumed, cancel } = s.pause.waitForResumed(2000);
+      try {
+        // The send promise is intentionally NOT catch-guarded. If
+        // Promise.all rejects via the resumed-waiter timeout while send
+        // is still pending and send later rejects, that late rejection
+        // has no awaiter — a known unobserved-reject, accepted because a
+        // CDP send rejecting >2s after the resume timeout means the
+        // session is already in a pathological state (network dead or
+        // target gone) and surfacing two errors for one tool call would
+        // be noisier than letting the late reject get swallowed by
+        // Node's default unhandledRejection handler. (PR #76 review.)
+        await Promise.all([
+          s.client!.send("Debugger.resume", undefined, sid),
+          resumed,
+        ]);
+      } finally {
+        cancel();
+      }
       return "resumed";
     },
   );
@@ -69,7 +103,7 @@ export function registerExecutionTools(server: McpServer) {
     async (input: { timeout_ms?: number }) => {
       const s = requireSession();
       const state = await s.pause.waitForPause(input.timeout_ms ?? 30000);
-      return summarizePause(s, state.reason, state.hitBreakpoints, state.data, state.callFrames, state.sessionId);
+      return await summarizePause(s, state.reason, state.hitBreakpoints, state.data, state.callFrames, state.sessionId);
     },
   );
 }
@@ -88,11 +122,11 @@ async function stepThen(
   if (!next) return { paused: false, message: "execution did not pause within timeout" };
   return {
     paused: true,
-    ...summarizePause(s, next.reason, next.hitBreakpoints, next.data, next.callFrames, next.sessionId),
+    ...(await summarizePause(s, next.reason, next.hitBreakpoints, next.data, next.callFrames, next.sessionId)),
   };
 }
 
-export function summarizePause(
+export async function summarizePause(
   s: ReturnType<typeof requireSession>,
   reason: Protocol.Debugger.PausedEvent["reason"],
   hitBreakpoints: string[] | undefined,
@@ -101,21 +135,48 @@ export function summarizePause(
   sessionId: string | undefined,
 ) {
   const userBreakpointIds = matchUserBreakpoints(s, hitBreakpoints ?? [], sessionId);
+  // One source-map deadline shared across every frame in this pause: a
+  // 10-frame stack should burn one 500ms budget total, not 10×500ms.
+  // (Source-map wait race 2.)
+  const deadline = Date.now() + MAP_LOAD_WAIT_MS;
+  const call_stack = await Promise.all(
+    callFrames.map((cf, i) => formatFrameForPause(s, cf, i, sessionId, deadline)),
+  );
   return {
     reason,
     hit_breakpoint_ids: userBreakpointIds,
     session_id: sessionId ?? null,
     data: data ?? null,
-    call_stack: callFrames.map((cf, i) => formatFrameForPause(s, cf, i, sessionId)),
+    call_stack,
   };
 }
 
-function formatFrameForPause(
+async function formatFrameForPause(
   s: ReturnType<typeof requireSession>,
   cf: Protocol.Debugger.CallFrame,
   index: number,
   sessionId: string | undefined,
+  deadline: number,
 ) {
+  // Bounded wait for this frame's source-map consumer to attach. The script
+  // itself lands synchronously via Debugger.scriptParsed, but loadSourceMap
+  // is fire-and-forget (sourcemap/loader.ts), so the entry pause from
+  // attach_node can format frames before the consumer parses — yielding a
+  // raw file:// URL in `file`. Waiting closes the gap for the realistic
+  // single-script entry pause. (Source-map wait race 2.)
+  //
+  // Two ways the wait exits before `deadline`: this frame's predicate
+  // becomes true (the typical case — consumer attached), or
+  // !store.hasPendingMaps() flips because every in-flight load resolved.
+  // The latter is a GLOBAL check, not per-frame: in a multi-frame pause
+  // where one frame's script has no source map and another frame's map
+  // is in flight, the first frame still waits on the unrelated load
+  // until that load settles. Bounded by deadline, so worst-case 500ms.
+  await waitForConsumer(
+    s.scripts,
+    () => s.scripts.get(cf.location.scriptId, sessionId)?.consumer != null,
+    deadline,
+  );
   const mapped = mapCdpToOriginal(s.scripts, cf.location, sessionId);
   const script = s.scripts.get(cf.location.scriptId, sessionId);
   return {

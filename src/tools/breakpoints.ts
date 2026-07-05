@@ -74,7 +74,7 @@ export function registerBreakpointTools(server: McpServer) {
           `Breakpoint already exists at ${locStr} (id ${existing.id}) with a different condition or log_message. Remove it first (remove_breakpoint) before setting a new one.`,
         );
       }
-      const candidates = mapOriginalToGenerated(s.scripts, file, line, column);
+      const candidates = await mapOriginalToGenerated(s.scripts, file, line, column);
       if (candidates.length === 0) {
         throw new ToolError(
           "no_mapping",

@@ -28,10 +28,90 @@ describe("resume", () => {
   it("issues Debugger.resume against the paused session's id", async () => {
     const { fake } = setupSession({ paused: true, pausedSessionId: "SW1" });
     fake.clearSentCalls();
+    // Fire onResumed inside the send hook so the waitForResumed promise
+    // resolves — required since `resume` now blocks on the
+    // Debugger.resumed event before returning.
+    fake.onSend("Debugger.resume", () => {
+      sessionState.pause.onResumed();
+    });
     expect(parseOkEnvelope(await resume.handler({}))).toBe("resumed");
     const call = fake.sentCalls.find((c) => c.method === "Debugger.resume");
     // Critical: routed to the SAME session that paused, not the root.
     expect(call?.sessionId).toBe("SW1");
+  });
+
+  it("resume/resumed race 1: resumed event fires synchronously inside Debugger.resume send (same-batch case)", async () => {
+    // Reproduces the same-WebSocket-batch race: CRI delivers the response
+    // and the Debugger.resumed event back-to-back. Resume must observe the
+    // event despite the listener being registered before send returns —
+    // because waitForResumed installs the listener BEFORE send, the
+    // synchronous onResumed call drains the resume waiter and the promise
+    // resolves on this microtask.
+    const { fake } = setupSession({ paused: true });
+    let resumedFired = false;
+    fake.onSend("Debugger.resume", () => {
+      sessionState.pause.onResumed();
+      resumedFired = true;
+    });
+    expect(parseOkEnvelope(await resume.handler({}))).toBe("resumed");
+    expect(resumedFired).toBe(true);
+    // Post-condition: state cleared, so a follow-up wait_for_pause would
+    // block for the NEXT pause rather than return the stale entry pause.
+    expect(sessionState.pause.isPaused()).toBe(false);
+  });
+
+  it("resume/resumed race 1: resumed event arrives async after Debugger.resume send returns", async () => {
+    // The other ordering: send returns first, the resumed event lands a
+    // tick later. resume must wait for it before returning.
+    const { fake } = setupSession({ paused: true });
+    let resumedFiredAt = 0;
+    let resumeReturnedAt = 0;
+    fake.onSend("Debugger.resume", () => {
+      // Defer onResumed past the send's microtask. setImmediate runs after
+      // the send promise resolves, so resume's await on the resumed
+      // promise actually has to suspend.
+      setImmediate(() => {
+        sessionState.pause.onResumed();
+        resumedFiredAt = performance.now();
+      });
+    });
+    const r = await resume.handler({});
+    resumeReturnedAt = performance.now();
+    expect(parseOkEnvelope(r)).toBe("resumed");
+    // resume cannot have returned before the resumed event fired.
+    expect(resumeReturnedAt).toBeGreaterThanOrEqual(resumedFiredAt);
+    expect(sessionState.pause.isPaused()).toBe(false);
+  });
+
+  it("resume/resumed race 1: PauseTracker.waitForResumed rejects on timeout (no resumed event)", async () => {
+    // Bypasses the resume tool (which hard-codes 2s) and tests the
+    // primitive directly so the timeout fires in <100ms.
+    setupSession({ paused: true });
+    await expect(sessionState.pause.waitForResumed(30).promise).rejects.toThrow(
+      /Timed out.*Debugger\.resumed/,
+    );
+    // State unchanged because no resumed event landed.
+    expect(sessionState.pause.isPaused()).toBe(true);
+  });
+
+  it("resume failure path: Debugger.resume throws — tool surfaces error, no dangling waiter", async () => {
+    // Regression for the failure-path race the first reviewer flagged.
+    // If Debugger.resume rejects, the resumed waiter must be cancelled in
+    // the resume tool's finally — otherwise it sits in resumeWaiters
+    // until its 2s timer fires and rejects with no awaiter, producing an
+    // unhandled rejection long after the tool already returned.
+    const { fake } = setupSession({ paused: true });
+    fake.respond("Debugger.resume", () => {
+      throw new Error("boom — stale session / target detached");
+    });
+    const err = parseErrorEnvelope(await resume.handler({}));
+    expect(err?.message).toMatch(/boom/);
+    // The cancellation invariant: no leftover entries in resumeWaiters
+    // after the tool returned with an error. Reaching into the private
+    // state because the contract IS that no waiter is left behind —
+    // there's no public observable for "resumeWaiters is empty" short of
+    // waiting 2s for the would-be timer to either fire or not.
+    expect((sessionState.pause as any).resumeWaiters).toHaveLength(0);
   });
 });
 
@@ -53,13 +133,14 @@ describe("step_over / step_into / step_out", () => {
     // the stepOver responder. The waitForPauseOrResume call must still
     // resolve with the new pause state, not return null after timeout.
     const { fake } = setupSession({ paused: true });
-    // Wire a Debugger.paused subscriber so wireDomainHandlers' production
+    // Wire a Debugger.paused subscriber so connectDebugger's production
     // gate is mirrored — sessionState.pause.onPaused is called by the
     // production handler, but here we drive it directly via the hook.
     fake.onSend("Debugger.stepOver", () => {
       // Production's onResumed has already been called by stepThen before
       // stepOver fires. We need to push the new pause state via the
-      // PauseTracker directly because we're bypassing wireDomainHandlers.
+      // PauseTracker directly because we're bypassing connectDebugger's
+      // Debugger.paused handler.
       sessionState.pause.onPaused(fake.makePauseState({ reason: "step", sessionId: undefined }));
     });
     const r = parseOkEnvelope<{ paused: boolean; reason: string }>(

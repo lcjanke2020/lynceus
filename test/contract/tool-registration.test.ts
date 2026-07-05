@@ -7,7 +7,7 @@
 //   - The structured {error, message} envelope survives the full round trip
 //     through the SDK's content/result framing — not just the inner handler's
 //     direct return.
-//   - The exact total tool count matches the documented surface (48 tools).
+//   - The exact total tool count matches the documented surface (51 tools).
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -32,9 +32,9 @@ afterAll(async () => {
 });
 
 describe("tools/list", () => {
-  it("returns exactly 48 tools (the documented surface)", async () => {
+  it("returns exactly 51 tools (the documented surface)", async () => {
     const r = await client.listTools();
-    expect(r.tools).toHaveLength(48);
+    expect(r.tools).toHaveLength(51);
   });
 
   it("every tool has a non-empty description", async () => {
@@ -48,7 +48,7 @@ describe("tools/list", () => {
     const names = new Set(r.tools.map((t) => t.name));
     const expected = [
       // session
-      "launch_chrome", "attach_chrome", "close_session", "list_targets", "select_target",
+      "launch_chrome", "attach_chrome", "attach_node", "launch_node", "close_session", "list_targets", "select_target",
       // nav
       "navigate", "reload", "get_url",
       // source
@@ -70,9 +70,11 @@ describe("tools/list", () => {
       "select_option", "check", "uncheck", "fill", "suggest_locator",
       // storage
       "export_storage_state", "load_storage_state", "get_cookies", "set_cookies",
+      // node-output
+      "get_node_output",
     ];
     // Bidirectional check: every expected name is present AND no unexpected
-    // name is registered. The "exactly 48 tools" count check above catches
+    // name is registered. The "exactly 51 tools" count check above catches
     // accidental additions, but a renamed tool could still pass `has(name)`
     // for one expected entry while a stale entry remains in `expected`.
     // Set equality catches both directions in one assertion.
@@ -137,7 +139,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
   // payload through the SDK's content/result framing — not just the inner
   // handler's direct return shape.
   //
-  // Using a representative subset (one per category) rather than all 48 to
+  // Using a representative subset (one per category) rather than all 51 to
   // keep the contract test fast.
   const noSessionCases: Array<{ tool: string; args: Record<string, unknown> }> = [
     { tool: "navigate", args: { url: "http://x" } },

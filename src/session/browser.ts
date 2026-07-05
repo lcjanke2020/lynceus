@@ -2,11 +2,9 @@ import { mkdirSync } from "node:fs";
 import CDP from "chrome-remote-interface";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import type { Protocol } from "devtools-protocol";
-import { sessionState, ROOT_SESSION_KEY, type Session, type HandlerEntry } from "./state.js";
-import { attachScriptListener } from "../sourcemap/loader.js";
-import { mapCdpToOriginal } from "../sourcemap/store.js";
+import { sessionState, registerHandler } from "./state.js";
+import { connectDebugger } from "./debugger.js";
 import { alreadySession } from "../util/errors.js";
-import { previewRemoteObject } from "../util/format.js";
 import { log } from "../util/log.js";
 import { snapUserDataDir } from "../util/browser-resolve.js";
 
@@ -107,8 +105,9 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
     ...(opts.chromePath ? { chromePath: opts.chromePath } : {}),
   };
   const chrome = await launch(launchOpts);
-  sessionState.chrome = chrome;
+  sessionState.ownedProcess = { kind: "chrome", handle: chrome };
   sessionState.chromePort = chrome.port;
+  sessionState.chromeHost = "127.0.0.1"; // chrome-launcher always binds localhost
   log.info("launched chrome", { port: chrome.port, pid: chrome.pid, sandbox: useSandbox });
 
   // Pick the first page target.
@@ -125,6 +124,7 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
   if (sessionState.client) throw alreadySession();
   const port = opts.port ?? DEFAULT_PORT;
   sessionState.chromePort = port;
+  sessionState.chromeHost = opts.host ?? "127.0.0.1";
   sessionState.attached = true;
 
   const targets = await CDP.List({ port, host: opts.host });
@@ -172,11 +172,22 @@ async function connectToTarget(port: number, targetId: string, host?: string) {
   sessionState.client = client;
   sessionState.currentTargetId = targetId;
 
-  // Wire root-target handlers and Target.attachedToTarget BEFORE setAutoAttach
-  // — Chrome immediately enumerates pre-existing eligible children (workers,
-  // OOPIFs, service workers) inline with the setAutoAttach response. If the
-  // listener is registered after, those attachedToTarget events are dropped.
-  wireDomainHandlers(client, undefined);
+  // Wire Target.attachedToTarget BEFORE setAutoAttach — Chrome immediately
+  // enumerates pre-existing eligible children (workers, OOPIFs, service
+  // workers) inline with the setAutoAttach response. If the listener is
+  // registered after, those attachedToTarget events are dropped.
+  try {
+    await connectDebugger(client, undefined);
+    await enableBrowserDomains(client, undefined);
+  } catch (e) {
+    // Required Runtime/Debugger enable failed: tear down so a follow-up
+    // launch/attach isn't blocked by already_session against a broken
+    // session. (Ultrareview round 2 — Codex Medium #1, symmetric with
+    // attach_node's post-init guard.)
+    log.warn("connectToTarget init failed; tearing down", { error: String(e) });
+    await sessionState.close();
+    throw e;
+  }
   const onAttached = (params: Protocol.Target.AttachedToTargetEvent) => {
     void onChildAttached(client, params);
   };
@@ -186,8 +197,6 @@ async function connectToTarget(port: number, targetId: string, host?: string) {
   client.on("Target.attachedToTarget", onAttached);
   client.on("Target.detachedFromTarget", onDetached);
   client.on("disconnect", () => log.warn("CDP disconnect"));
-
-  await enableDomains(client, undefined);
   try {
     await client.Target.setAutoAttach({
       autoAttach: true,
@@ -206,8 +215,8 @@ async function onChildAttached(
   const sessionId = params.sessionId;
   log.debug("child target attached", { sessionId, type: params.targetInfo.type, url: params.targetInfo.url });
   try {
-    wireDomainHandlers(client, sessionId);
-    await enableDomains(client, sessionId);
+    await connectDebugger(client, sessionId);
+    await enableBrowserDomains(client, sessionId);
     await client.Target.setAutoAttach(
       { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
       sessionId,
@@ -246,70 +255,15 @@ function detachSession(
   }
 }
 
-async function enableDomains(
+// Browser-only domain enable + Network ring-buffer wiring. The Runtime +
+// Debugger half (target-agnostic) lives in src/session/debugger.ts and is
+// invoked separately from connectToTarget so Node sessions can reuse it.
+// (See the session-kind design notes.)
+async function enableBrowserDomains(
   client: import("chrome-remote-interface").Client,
   sessionId: string | undefined,
-) {
-  // The full debugger surface needs these. Some are no-ops on workers but harmless.
-  const swallow = (p: Promise<unknown>) => p.then(() => {}, () => {});
-  await swallow(client.Runtime.enable(sessionId));
-  await swallow(client.Debugger.enable({}, sessionId));
-  await swallow(client.Page.enable(sessionId));
-  await swallow(client.DOM.enable({}, sessionId));
-  await swallow(client.Network.enable({}, sessionId));
-}
-
-function wireDomainHandlers(
-  client: import("chrome-remote-interface").Client,
-  sessionId: string | undefined,
-): void {
-  // The strict gate: only process events from THIS session. The original
-  // implementation used `if (sessionId && eventSessionId !== sessionId)`,
-  // which is vacuously false when sessionId is undefined (the root) —
-  // making the root handler process every child session's events too.
+): Promise<void> {
   const own = (eventSessionId: string | undefined) => eventSessionId === sessionId;
-  const registered: HandlerEntry[] = [];
-  const reg = (event: string, handler: (...args: any[]) => void) => {
-    client.on(event as any, handler as any);
-    registered.push({ event, handler });
-  };
-
-  // Source-map / Debugger.scriptParsed
-  const scriptHandler = attachScriptListener(client, sessionState.scripts, sessionId);
-  registered.push({ event: "Debugger.scriptParsed", handler: scriptHandler });
-
-  const onPaused = (params: Protocol.Debugger.PausedEvent, eventSessionId?: string) => {
-    if (!own(eventSessionId)) return;
-    sessionState.pause.onPaused({
-      reason: params.reason,
-      data: params.data,
-      hitBreakpoints: params.hitBreakpoints,
-      callFrames: params.callFrames,
-      asyncStackTrace: params.asyncStackTrace,
-      sessionId: eventSessionId,
-      pausedAt: Date.now(),
-    });
-    log.debug("paused", { reason: params.reason, hit: params.hitBreakpoints });
-  };
-  reg("Debugger.paused", onPaused);
-
-  const onResumed = (_p: unknown, eventSessionId?: string) => {
-    if (!own(eventSessionId)) return;
-    sessionState.pause.onResumed();
-  };
-  reg("Debugger.resumed", onResumed);
-
-  const onConsoleApi = (params: Protocol.Runtime.ConsoleAPICalledEvent, eventSessionId?: string) => {
-    if (!own(eventSessionId)) return;
-    pushConsoleFromApi(sessionState, params, eventSessionId);
-  };
-  reg("Runtime.consoleAPICalled", onConsoleApi);
-
-  const onException = (params: Protocol.Runtime.ExceptionThrownEvent, eventSessionId?: string) => {
-    if (!own(eventSessionId)) return;
-    pushConsoleFromException(sessionState, params, eventSessionId);
-  };
-  reg("Runtime.exceptionThrown", onException);
 
   // Predicate that matches an entry by (requestId, sessionId). CDP requestIds
   // are scoped per Network agent — two iframes can both emit requestId="123" —
@@ -318,7 +272,10 @@ function wireDomainHandlers(
   const matchEntry = (requestId: string) => (e: { requestId: string; sessionId?: string }) =>
     e.requestId === requestId && e.sessionId === sessionId;
 
-  const onRequest = (params: Protocol.Network.RequestWillBeSentEvent, eventSessionId?: string) => {
+  registerHandler(sessionState, client, sessionId, "Network.requestWillBeSent", (
+    params: Protocol.Network.RequestWillBeSentEvent,
+    eventSessionId?: string,
+  ) => {
     if (!own(eventSessionId)) return;
     sessionState.network.push({
       requestId: params.requestId,
@@ -328,10 +285,12 @@ function wireDomainHandlers(
       resourceType: params.type,
       ...(sessionId ? { sessionId } : {}),
     });
-  };
-  reg("Network.requestWillBeSent", onRequest);
+  });
 
-  const onResponse = (params: Protocol.Network.ResponseReceivedEvent, eventSessionId?: string) => {
+  registerHandler(sessionState, client, sessionId, "Network.responseReceived", (
+    params: Protocol.Network.ResponseReceivedEvent,
+    eventSessionId?: string,
+  ) => {
     if (!own(eventSessionId)) return;
     sessionState.network.update(matchEntry(params.requestId), {
       status: params.response.status,
@@ -339,10 +298,12 @@ function wireDomainHandlers(
       mimeType: params.response.mimeType,
       fromCache: params.response.fromDiskCache || params.response.fromPrefetchCache,
     });
-  };
-  reg("Network.responseReceived", onResponse);
+  });
 
-  const onLoadingFinished = (params: Protocol.Network.LoadingFinishedEvent, eventSessionId?: string) => {
+  registerHandler(sessionState, client, sessionId, "Network.loadingFinished", (
+    params: Protocol.Network.LoadingFinishedEvent,
+    eventSessionId?: string,
+  ) => {
     if (!own(eventSessionId)) return;
     // Use the entry's own ts (set at requestWillBeSent) to compute duration.
     const existing = sessionState.network.query({ filter: matchEntry(params.requestId), limit: 1 }).pop();
@@ -350,10 +311,12 @@ function wireDomainHandlers(
       ...(existing ? { durationMs: Date.now() - existing.ts } : {}),
       finished: true,
     });
-  };
-  reg("Network.loadingFinished", onLoadingFinished);
+  });
 
-  const onLoadingFailed = (params: Protocol.Network.LoadingFailedEvent, eventSessionId?: string) => {
+  registerHandler(sessionState, client, sessionId, "Network.loadingFailed", (
+    params: Protocol.Network.LoadingFailedEvent,
+    eventSessionId?: string,
+  ) => {
     if (!own(eventSessionId)) return;
     // Symmetric with onLoadingFinished: time-to-failure (DNS error, connect
     // refused, RST, abort, …) is useful for latency/anomaly analysis. Without
@@ -365,83 +328,12 @@ function wireDomainHandlers(
       failureReason: params.errorText,
       finished: true,
     });
-  };
-  reg("Network.loadingFailed", onLoadingFailed);
-
-  sessionState.sessionHandlers.set(sessionId ?? ROOT_SESSION_KEY, registered);
-}
-
-function pushConsoleFromApi(s: Session, params: Protocol.Runtime.ConsoleAPICalledEvent, sessionId: string | undefined) {
-  // Two formatting modes:
-  //   - String args render as raw text (no surrounding quotes, no \n→\\n
-  //     escapes) — matches how DevTools / Node / every log shipper renders
-  //     console.log("Server started"). previewRemoteObject would
-  //     JSON.stringify them, which is right for REPL/evaluate output but
-  //     wrong for console buffering.
-  //   - Everything else (numbers, objects, arrays, functions, …) goes
-  //     through previewRemoteObject so {foo:1} keeps its shape.
-  const renderArg = (a: Protocol.Runtime.RemoteObject) =>
-    a.type === "string" ? (a.value ?? "") : previewRemoteObject(a);
-  const text =
-    params.args.length === 0
-      ? "(no args)"
-      : params.args.map(renderArg).join(" ");
-  const top = params.stackTrace?.callFrames?.[0];
-  const mapped = top ? mapCdpToOriginal(s.scripts, {
-    scriptId: top.scriptId,
-    lineNumber: top.lineNumber,
-    columnNumber: top.columnNumber,
-  }, sessionId) : null;
-  s.console.push({
-    ts: Date.now(),
-    level: mapApiLevel(params.type),
-    text,
-    source: "console-api",
-    ...(top?.url ? { url: top.url } : {}),
-    ...(top ? { lineNumber: top.lineNumber, columnNumber: top.columnNumber } : {}),
-    ...(mapped ? { mappedFile: mapped.file, mappedLine: mapped.line, mappedColumn: mapped.column } : {}),
-    ...(params.stackTrace ? { stack: params.stackTrace } : {}),
   });
-}
 
-function pushConsoleFromException(s: Session, params: Protocol.Runtime.ExceptionThrownEvent, sessionId: string | undefined) {
-  const det = params.exceptionDetails;
-  const top = det.stackTrace?.callFrames?.[0];
-  const mapped = top ? mapCdpToOriginal(s.scripts, {
-    scriptId: top.scriptId,
-    lineNumber: top.lineNumber,
-    columnNumber: top.columnNumber,
-  }, sessionId) : null;
-  const text =
-    (det.exception?.description ?? det.exception?.value ?? det.text) + "";
-  s.console.push({
-    ts: Date.now(),
-    level: "error",
-    text,
-    source: "runtime-exception",
-    ...(top?.url ? { url: top.url } : { url: det.url }),
-    ...(top ? { lineNumber: top.lineNumber, columnNumber: top.columnNumber } : { lineNumber: det.lineNumber, columnNumber: det.columnNumber }),
-    ...(mapped ? { mappedFile: mapped.file, mappedLine: mapped.line, mappedColumn: mapped.column } : {}),
-    ...(det.stackTrace ? { stack: det.stackTrace } : {}),
-  });
-}
-
-function mapApiLevel(t: Protocol.Runtime.ConsoleAPICalledEvent["type"]): import("./buffers.js").ConsoleEntry["level"] {
-  switch (t) {
-    case "warning":
-      return "warn";
-    case "error":
-      return "error";
-    case "debug":
-      return "debug";
-    case "info":
-      return "info";
-    case "trace":
-      return "trace";
-    case "log":
-    default:
-      return "log";
-  }
+  const swallow = (p: Promise<unknown>) => p.then(() => {}, () => {});
+  await swallow(client.Page.enable(sessionId));
+  await swallow(client.DOM.enable({}, sessionId));
+  await swallow(client.Network.enable({}, sessionId));
 }
 
 export async function closeSession(): Promise<void> {
@@ -453,8 +345,9 @@ export async function closeSession(): Promise<void> {
 export async function switchTarget(targetId: string): Promise<{ targetId: string; url: string }> {
   if (!sessionState.client) throw new Error("No active session");
   const port = sessionState.chromePort!;
+  const host = sessionState.chromeHost ?? undefined;
   const attached = sessionState.attached;
-  const chrome = sessionState.chrome;
+  const ownedProcess = sessionState.ownedProcess;
   try {
     await sessionState.client.close().catch(() => {});
   } catch {
@@ -467,10 +360,11 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   sessionState.breakpoints.clear();
   sessionState.sessionHandlers.clear();
   sessionState.chromePort = port;
+  sessionState.chromeHost = host ?? null;
   sessionState.attached = attached;
-  sessionState.chrome = chrome;
-  await connectToTarget(port, targetId);
-  const list = await CDP.List({ port });
+  sessionState.ownedProcess = ownedProcess;
+  await connectToTarget(port, targetId, host);
+  const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
   return { targetId, url: t?.url ?? "" };
 }

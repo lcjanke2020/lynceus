@@ -16,6 +16,19 @@ export interface ConsoleEntry {
   stack?: Protocol.Runtime.StackTrace;
 }
 
+// Buffered stdout/stderr lines from a cdp-mcp-owned Node child
+// (launch_node). Deliberately SEPARATE from ConsoleEntry: that buffer is for
+// `Runtime.consoleAPICalled` events captured via the V8 inspector, while
+// NodeOutputEntry holds raw process stdio that the inspector never sees.
+// Mixing them would lose the "is this from the JS runtime or the process
+// surroundings" signal an agent uses to triage a launch failure.
+export interface NodeOutputEntry {
+  seq: number;
+  ts: number;
+  stream: "stdout" | "stderr";
+  text: string;
+}
+
 export interface NetworkEntry {
   seq: number;
   requestId: string;
