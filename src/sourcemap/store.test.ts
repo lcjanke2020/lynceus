@@ -4,6 +4,7 @@ import {
   ScriptStore,
   mapCdpToOriginal,
   mapOriginalToGenerated,
+  waitForConsumer,
   cdpToPublic,
   publicToCdp,
 } from "./store.js";
@@ -54,7 +55,7 @@ describe("ScriptStore + bidirectional translation", () => {
     expect(result).toEqual({ file: "src/foo.ts", line: 3, column: 2 });
   });
 
-  it("maps TS coord -> all generated coords across scripts", () => {
+  it("maps TS coord -> all generated coords across scripts", async () => {
     const store = new ScriptStore();
     store.upsert({
       scriptId: "s1",
@@ -79,7 +80,7 @@ describe("ScriptStore + bidirectional translation", () => {
     store.attachMap("s1", undefined, buildMap("src/foo.ts"));
     store.attachMap("s2", undefined, buildMap("src/bar.ts"));
 
-    const fooLocs = mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
+    const fooLocs = await mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
     expect(fooLocs).toHaveLength(1);
     expect(fooLocs[0]).toMatchObject({
       scriptId: "s1",
@@ -89,12 +90,12 @@ describe("ScriptStore + bidirectional translation", () => {
     });
 
     // bar.ts only matches s2.
-    const barLocs = mapOriginalToGenerated(store, "src/bar.ts", 6);
+    const barLocs = await mapOriginalToGenerated(store, "src/bar.ts", 6);
     expect(barLocs).toHaveLength(1);
     expect(barLocs[0]?.scriptId).toBe("s2");
   });
 
-  it("finds scripts by source-path suffix match (webpack:/// prefix)", () => {
+  it("finds scripts by source-path suffix match (webpack:/// prefix)", async () => {
     const store = new ScriptStore();
     store.upsert({
       scriptId: "s1",
@@ -110,7 +111,7 @@ describe("ScriptStore + bidirectional translation", () => {
     store.attachMap("s1", undefined, buildMap("webpack:///./src/foo.ts"));
 
     // User passes a clean suffix.
-    const locs = mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
+    const locs = await mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
     expect(locs).toHaveLength(1);
     expect(locs[0]?.scriptId).toBe("s1");
 
@@ -119,7 +120,7 @@ describe("ScriptStore + bidirectional translation", () => {
     expect(reverse).toEqual({ file: "src/foo.ts", line: 3, column: 2 });
   });
 
-  it("returns null for unmapped scripts and no candidates for unknown sources", () => {
+  it("returns null for unmapped scripts and no candidates for unknown sources", async () => {
     const store = new ScriptStore();
     store.upsert({
       scriptId: "s1",
@@ -133,7 +134,7 @@ describe("ScriptStore + bidirectional translation", () => {
     });
     // No attachMap → no consumer.
     expect(mapCdpToOriginal(store, { scriptId: "s1", lineNumber: 0, columnNumber: 0 }, undefined)).toBeNull();
-    expect(mapOriginalToGenerated(store, "no/such/file.ts", 1)).toHaveLength(0);
+    expect(await mapOriginalToGenerated(store, "no/such/file.ts", 1)).toHaveLength(0);
   });
 
   it("compound key: same scriptId in two sessions does NOT collide", () => {
@@ -195,7 +196,7 @@ describe("ScriptStore + bidirectional translation", () => {
     expect(new Set(matches.map((m) => m.scriptId))).toEqual(new Set(["s1", "s2"]));
   });
 
-  it("mapOriginalToGenerated finds the line even when caller passes col 0 (regression: PR #11 e2e)", () => {
+  it("mapOriginalToGenerated finds the line even when caller passes col 0 (regression: PR #11 e2e)", async () => {
     // The real bug: vite/esbuild emit source maps where the only mapping
     // on `return 2;` (handlers.ts:12) is at originalColumn 2 (the indent).
     // The earlier impl called generatedPositionFor({line:12, column:0})
@@ -225,7 +226,7 @@ describe("ScriptStore + bidirectional translation", () => {
     store.attachMap("s1", undefined, gen.toString());
 
     // Default column (0) — the failing case before the fix.
-    const locs = mapOriginalToGenerated(store, "src/handlers.ts", 3);
+    const locs = await mapOriginalToGenerated(store, "src/handlers.ts", 3);
     expect(locs).toHaveLength(1);
     expect(locs[0]).toMatchObject({
       scriptId: "s1",
@@ -234,7 +235,7 @@ describe("ScriptStore + bidirectional translation", () => {
     });
   });
 
-  it("mapOriginalToGenerated honors an explicitly-supplied column", () => {
+  it("mapOriginalToGenerated honors an explicitly-supplied column", async () => {
     // Codex/Opus PR #11 round-2: the column parameter was silently ignored
     // (hard-coded to 0 in the lookup), regressing the explicit-column
     // contract. With two mappings on the same source line at different
@@ -265,17 +266,17 @@ describe("ScriptStore + bidirectional translation", () => {
     store.attachMap("s1", undefined, gen.toString());
 
     // column 0 (default) → first mapping on the line.
-    const broad = mapOriginalToGenerated(store, "src/foo.ts", 3);
+    const broad = await mapOriginalToGenerated(store, "src/foo.ts", 3);
     expect(broad).toHaveLength(1);
     expect(broad[0]?.columnNumber).toBe(100);
 
     // explicit column 8 → the mapping at that original column.
-    const precise = mapOriginalToGenerated(store, "src/foo.ts", 3, 8);
+    const precise = await mapOriginalToGenerated(store, "src/foo.ts", 3, 8);
     expect(precise).toHaveLength(1);
     expect(precise[0]?.columnNumber).toBe(200);
   });
 
-  it("mapOriginalToGenerated de-dups when multiple originalColumns collapse to one generated position", () => {
+  it("mapOriginalToGenerated de-dups when multiple originalColumns collapse to one generated position", async () => {
     // After heavy minification, multiple originalColumn entries on the
     // same source line can compress to the same (genLine, genCol) — we
     // want exactly one breakpoint binding per distinct generated location.
@@ -302,7 +303,7 @@ describe("ScriptStore + bidirectional translation", () => {
       hash: "h",
     });
     store.attachMap("s1", undefined, gen.toString());
-    const locs = mapOriginalToGenerated(store, "src/foo.ts", 3);
+    const locs = await mapOriginalToGenerated(store, "src/foo.ts", 3);
     expect(locs).toHaveLength(1);
   });
 
@@ -359,6 +360,62 @@ describe("ScriptStore + bidirectional translation", () => {
     expect(store.all()).toEqual([]);
   });
 
+  it("mapOriginalToGenerated waits for an in-flight source map (entry-pause race)", async () => {
+    // Race: Debugger.scriptParsed lands the script synchronously, but
+    // loadSourceMap is fire-and-forget. An immediate set_breakpoint after
+    // the entry pause returns can hit no_mapping a few ms before the map
+    // parses. On the browser side this is masked by navigate(wait:"load")
+    // blocking past map loads; on Node, attach_node's entry pause has no
+    // such barrier. mapOriginalToGenerated should poll briefly when a
+    // pending sourceMapURL exists and resolve once attachMap completes.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      sourceMapURL: "out.js.map", // signals "map load in flight"
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+    expect(store.hasPendingMaps()).toBe(true);
+
+    // Kick off the lookup BEFORE attaching the map.
+    const lookup = mapOriginalToGenerated(store, "src/foo.ts", 3, 2);
+
+    // Attach the map mid-wait (50 ms in, well under the 500 ms cap).
+    await new Promise((r) => setTimeout(r, 50));
+    store.attachMap("s1", undefined, buildMap("src/foo.ts"));
+
+    const locs = await lookup;
+    expect(locs).toHaveLength(1);
+    expect(locs[0]).toMatchObject({ scriptId: "s1", lineNumber: 0, columnNumber: 22 });
+  });
+
+  it("mapOriginalToGenerated returns empty once every pending map has settled (no-match case)", async () => {
+    // Symmetric corner: a script has a pending map, but when it loads the
+    // map doesn't reference the file we asked for. The poll loop should
+    // give up at the hasPendingMaps()==false check, not hold the caller
+    // for the full 500 ms.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      sourceMapURL: "out.js.map",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+
+    const t0 = Date.now();
+    const lookup = mapOriginalToGenerated(store, "src/missing.ts", 1);
+    // Resolve the map fast — to something that DOESN'T match src/missing.ts.
+    await new Promise((r) => setTimeout(r, 30));
+    store.attachMap("s1", undefined, buildMap("src/other.ts"));
+
+    const locs = await lookup;
+    expect(locs).toEqual([]);
+    // Loose upper bound — give up promptly, not after the full 500 ms cap.
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
+
   it("HMR upsert: re-parsed script preserves consumer when no map is re-attached", () => {
     // Documents the behavior the new src/sourcemap/store.ts comment calls
     // out: upsert's Object.assign does NOT clear consumer/sources because
@@ -389,5 +446,102 @@ describe("ScriptStore + bidirectional translation", () => {
     // BUT consumer + sources survived — the documented HMR leak.
     expect(after.consumer).toBeDefined();
     expect(after.sources).toEqual(["src/main.ts"]);
+  });
+});
+
+describe("waitForConsumer (source-map wait race 2 primitive)", () => {
+  // Direct contract tests for the helper that both mapOriginalToGenerated
+  // (set_breakpoint path) and formatFrameForPause (pause-frame path) rely
+  // on. Three exit conditions: predicate true, no maps in flight,
+  // deadline expired. Upstream review.
+
+  it("returns immediately when the predicate is already true", async () => {
+    // Caller checks predicate via store state synchronously, but if the
+    // condition is already met, waitForConsumer must not even schedule
+    // its first timer.
+    const store = new ScriptStore();
+    const t0 = Date.now();
+    await waitForConsumer(store, () => true, Date.now() + 500);
+    expect(Date.now() - t0).toBeLessThan(10);
+  });
+
+  it("returns immediately when no source maps are pending (nothing to wait on)", async () => {
+    // Empty store: hasPendingMaps()==false. waitForConsumer should give
+    // up before its first poll tick rather than burning the full deadline.
+    const store = new ScriptStore();
+    const t0 = Date.now();
+    await waitForConsumer(store, () => false, Date.now() + 500);
+    expect(Date.now() - t0).toBeLessThan(10);
+  });
+
+  it("polls until predicate becomes true (consumer attaches mid-wait)", async () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      sourceMapURL: "out.js.map",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+    expect(store.hasPendingMaps()).toBe(true);
+    expect(store.get("s1")?.consumer).toBeUndefined();
+
+    const lookup = waitForConsumer(
+      store,
+      () => store.get("s1")?.consumer != null,
+      Date.now() + 500,
+    );
+
+    // Attach mid-wait. The next poll tick (≤25 ms later) flips the predicate.
+    setTimeout(() => store.attachMap("s1", undefined, buildMap("src/foo.ts")), 30);
+    await lookup;
+    expect(store.get("s1")?.consumer).toBeDefined();
+  });
+
+  it("gives up at the deadline rather than hanging when predicate never trips", async () => {
+    // Pending map that never settles AND a predicate that's never true:
+    // the deadline must bound the wait. Use a short deadline (50 ms) so
+    // the test doesn't spend the full production 500 ms cap.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      sourceMapURL: "out.js.map",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+    expect(store.hasPendingMaps()).toBe(true);
+
+    const t0 = Date.now();
+    await waitForConsumer(store, () => false, Date.now() + 50);
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeGreaterThanOrEqual(45);
+    expect(elapsed).toBeLessThan(150);
+  });
+
+  it("exits early when hasPendingMaps() flips false (load settled but no match)", async () => {
+    // The "global no-pending" early-exit path. Predicate is never true
+    // (we're waiting for a consumer on a script that doesn't exist),
+    // but once the in-flight map settles via attachMap, hasPendingMaps
+    // returns false and waitForConsumer bails immediately rather than
+    // waiting out the full deadline.
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1",
+      url: "http://localhost/out.js",
+      sourceMapURL: "out.js.map",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h",
+    });
+    const t0 = Date.now();
+    const wait = waitForConsumer(
+      store,
+      () => store.get("s99")?.consumer != null, // never trips
+      Date.now() + 500,
+    );
+    setTimeout(() => store.attachMap("s1", undefined, buildMap("src/other.ts")), 30);
+    await wait;
+    // Way under the 500 ms cap — proves the hasPendingMaps short-circuit fired.
+    expect(Date.now() - t0).toBeLessThan(200);
   });
 });

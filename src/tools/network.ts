@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { requireSession } from "../session/state.js";
+import { requireSession, requireCapable } from "../session/state.js";
 import { truncate } from "../util/format.js";
 import { registerJsonTool } from "./_register.js";
 
@@ -19,6 +19,7 @@ export function registerNetworkTools(server: McpServer) {
     },
     async (input: { since?: number; status?: number; type?: string; url_match?: string; finished?: boolean; limit?: number }) => {
       const s = requireSession();
+      requireCapable(s, "get_network_requests");
       const match = input.url_match;
       const items = s.network.query({
         since: input.since ?? 0,
@@ -71,6 +72,7 @@ export function registerNetworkTools(server: McpServer) {
     },
     async (input: { request_id: string; session_id?: string | null; max_chars?: number }) => {
       const s = requireSession();
+      requireCapable(s, "get_request_body");
       const max = input.max_chars ?? 4000;
       // Normalize null→undefined for CDP. After normalization, sid is the
       // session the agent intends (undefined = root, string = child).
@@ -106,6 +108,7 @@ export function registerNetworkTools(server: McpServer) {
     },
     async (input: { request_id: string; session_id?: string | null; max_chars?: number }) => {
       const s = requireSession();
+      requireCapable(s, "get_response_body");
       const max = input.max_chars ?? 4000;
       const sid = input.session_id ?? undefined;
       const entry = findEntry(s, input.request_id, sid);

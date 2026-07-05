@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeFile } from "node:fs/promises";
-import { requireSession } from "../session/state.js";
+import { requireSession, requireCapable } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 import { locatorShape, type LocatorSpec } from "../locator.js";
@@ -44,6 +44,7 @@ export function registerDomTools(server: McpServer) {
     { selector: z.string() },
     async (input: { selector: string }) => {
       const s = requireSession();
+      requireCapable(s, "query_selector");
       const doc = await s.client!.send("DOM.getDocument", { depth: 1 });
       const found = await s.client!.send("DOM.querySelector", {
         nodeId: doc.root.nodeId,
@@ -73,6 +74,7 @@ export function registerDomTools(server: McpServer) {
     },
     async (input: { selector?: string; node_id?: number; outer?: boolean }) => {
       const s = requireSession();
+      requireCapable(s, "get_element_html");
       let nodeId = input.node_id;
       if (!nodeId) {
         if (!input.selector) throw new ToolError("missing_arg", "selector or node_id required");
@@ -103,6 +105,8 @@ export function registerDomTools(server: McpServer) {
       limit: z.number().int().positive().max(100).optional().describe("Default 20."),
     },
     async (input: LocateInput) => {
+      const s = requireSession();
+      requireCapable(s, "locate");
       const locator = normalizeLocator(input);
       const result = await evaluateLocator(locator, {
         includeHidden: input.include_hidden ?? false,
@@ -124,6 +128,8 @@ export function registerDomTools(server: McpServer) {
       interval_ms: z.number().int().positive().optional().describe("Default 100."),
     },
     async (input: WaitForInput) => {
+      const s = requireSession();
+      requireCapable(s, "wait_for");
       const locator = normalizeLocator(input);
       const state = input.state ?? "visible";
       const timeoutMs = input.timeout_ms ?? 5000;
@@ -162,6 +168,7 @@ export function registerDomTools(server: McpServer) {
     },
     async (input: FormStateInput) => {
       const s = requireSession();
+      requireCapable(s, "get_form_state");
       const res = await s.client!.send("Runtime.evaluate", {
         expression: buildFormStateExpression(input),
         returnByValue: true,
@@ -179,6 +186,7 @@ export function registerDomTools(server: McpServer) {
     { selector: z.string() },
     async (input: { selector: string }) => {
       const s = requireSession();
+      requireCapable(s, "click");
       const expr = `(() => {
         const el = document.querySelector(${JSON.stringify(input.selector)});
         if (!el) return { ok: false, error: "no match" };
@@ -208,6 +216,7 @@ export function registerDomTools(server: McpServer) {
     { selector: z.string(), text: z.string(), clear_first: z.boolean().optional() },
     async (input: { selector: string; text: string; clear_first?: boolean }) => {
       const s = requireSession();
+      requireCapable(s, "type_text");
       const focus = await s.client!.send("Runtime.evaluate", {
         expression: `(() => {
           const el = document.querySelector(${JSON.stringify(input.selector)});
@@ -231,6 +240,7 @@ export function registerDomTools(server: McpServer) {
     { key: z.string() },
     async (input: { key: string }) => {
       const s = requireSession();
+      requireCapable(s, "press_key");
       await s.client!.send("Input.dispatchKeyEvent", { type: "keyDown", key: input.key });
       await s.client!.send("Input.dispatchKeyEvent", { type: "keyUp", key: input.key });
       return { pressed: input.key };
@@ -249,6 +259,7 @@ export function registerDomTools(server: McpServer) {
     },
     async (input: { full_page?: boolean; path?: string; format?: "png" | "jpeg"; quality?: number }) => {
       const s = requireSession();
+      requireCapable(s, "screenshot");
       const r = await s.client!.send("Page.captureScreenshot", {
         format: input.format ?? "png",
         ...(input.quality && input.format === "jpeg" ? { quality: input.quality } : {}),

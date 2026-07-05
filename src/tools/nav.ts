@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Protocol } from "devtools-protocol";
-import { requireSession } from "../session/state.js";
+import { requireSession, requireCapable } from "../session/state.js";
 import { registerJsonTool } from "./_register.js";
 
 type WaitMode = "load" | "domcontentloaded" | "networkidle" | "none";
@@ -19,6 +19,7 @@ export function registerNavTools(server: McpServer) {
     },
     async (input: { url: string; wait?: WaitMode; timeout_ms?: number }) => {
       const s = requireSession();
+      requireCapable(s, "navigate");
       const wait = input.wait ?? "load";
       const timeout = input.timeout_ms ?? 30000;
       const loadPromise = waitForLoad(s.client!, wait, timeout);
@@ -36,6 +37,7 @@ export function registerNavTools(server: McpServer) {
     { hard: z.boolean().optional().describe("Bypass cache") },
     async (input: { hard?: boolean }) => {
       const s = requireSession();
+      requireCapable(s, "reload");
       await s.client!.send("Page.reload", { ignoreCache: !!input.hard });
       return "reloaded";
     },
@@ -48,6 +50,7 @@ export function registerNavTools(server: McpServer) {
     undefined,
     async () => {
       const s = requireSession();
+      requireCapable(s, "get_url");
       const { frameTree } = await s.client!.send("Page.getFrameTree");
       return { url: frameTree.frame.url };
     },

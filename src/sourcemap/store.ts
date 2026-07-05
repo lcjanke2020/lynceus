@@ -108,6 +108,18 @@ export class ScriptStore {
     const s = this.byKey.get(keyFor(scriptId, sessionId));
     if (s) s.loadError = err;
   }
+
+  // True iff at least one script has a sourceMapURL whose load hasn't
+  // resolved either way yet (no consumer attached, no loadError recorded).
+  // Used by mapOriginalToGenerated's bounded internal wait to know whether
+  // it's worth polling — if every map has settled, we can give up early
+  // instead of sleeping out the full timeout.
+  hasPendingMaps(): boolean {
+    for (const s of this.byKey.values()) {
+      if (s.sourceMapURL && !s.consumer && !s.loadError) return true;
+    }
+    return false;
+  }
 }
 
 // Helpers for converting CDP <-> source-map line numbering.
@@ -157,6 +169,40 @@ export interface GeneratedLocation {
   columnNumber: number;
 }
 
+// Bounded internal wait when a script is in ScriptStore but its source map
+// hasn't finished loading yet. The race fires the moment attach_node returns
+// the entry pause — Debugger.scriptParsed lands the script synchronously but
+// loadSourceMap is fire-and-forget (see loader.ts buildScriptParsedHandler),
+// so an immediate set_breakpoint can hit no_mapping a few ms before the map
+// parses. The browser side masks this incidentally via navigate(wait:"load")
+// blocking past map loads; Node's entry pause has no analogous barrier.
+// (See the session-kind design notes.)
+export const MAP_LOAD_WAIT_MS = 500;
+const MAP_LOAD_POLL_MS = 25;
+
+// Poll until `predicate()` returns true, the store no longer reports any
+// pending source-map loads, or `deadline` (absolute ms timestamp) elapses —
+// whichever fires first. Returns when one of those is true. Used by both
+// directions of the source-map translation: mapOriginalToGenerated waits for
+// a script matching a TS file to appear (set_breakpoint's slow path), and
+// the pause-frame formatter waits for a specific script's consumer to
+// attach (source-map wait race 2). The `deadline` parameter is an absolute
+// timestamp rather than a duration so multiple frames in one pause can
+// share a single 500ms budget instead of compounding it per frame.
+export async function waitForConsumer(
+  store: ScriptStore,
+  predicate: () => boolean,
+  deadline: number,
+): Promise<void> {
+  if (predicate()) return;
+  if (!store.hasPendingMaps()) return;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, MAP_LOAD_POLL_MS));
+    if (predicate()) return;
+    if (!store.hasPendingMaps()) return;
+  }
+}
+
 // Translate a public TS coord to one or more CDP coords for setBreakpointByUrl.
 //
 // Uses `allGeneratedPositionsFor` (NOT `generatedPositionFor`) because the
@@ -175,12 +221,21 @@ export interface GeneratedLocation {
 // minification splits or with classic webpack), each is emitted as its
 // own GeneratedLocation — Debugger.setBreakpointByUrl ends up binding at
 // each, which is what users intuitively expect.
-export function mapOriginalToGenerated(
+export async function mapOriginalToGenerated(
   store: ScriptStore,
   file: string,
   line: number, // 1-based
   column: number = 0,
-): GeneratedLocation[] {
+): Promise<GeneratedLocation[]> {
+  // Fast path: source maps already loaded (the common browser-side case).
+  // Slow path: a map matching `file` may still be in flight — waitForConsumer
+  // polls up to MAP_LOAD_WAIT_MS, giving up early if no map is pending.
+  await waitForConsumer(
+    store,
+    () => store.findByOriginalSource(file).length > 0,
+    Date.now() + MAP_LOAD_WAIT_MS,
+  );
+  const matches = store.findByOriginalSource(file);
   const out: GeneratedLocation[] = [];
   // De-dup by the *physical* CDP breakpoint identity — (sessionId, scriptUrl,
   // generated line/col) — across ALL matching script records, not just within
@@ -194,7 +249,7 @@ export function mapOriginalToGenerated(
   // genuinely distinct locations: different urls, different sessions
   // (workers/iframes), and column-collapsed mappings on one source line.
   const seen = new Set<string>();
-  for (const script of store.findByOriginalSource(file)) {
+  for (const script of matches) {
     if (!script.consumer) continue;
     const sourceKey = pickSourceKey(script, file);
     if (!sourceKey) continue;
