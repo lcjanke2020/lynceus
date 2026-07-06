@@ -36,14 +36,14 @@ describe("node exceptions (e2e)", () => {
     }>(tools, "wait_for_pause", { timeout_ms: 10_000 });
     expect(entry.hit_breakpoint_ids).toEqual([]);
 
-    const sope = await call<{
+    const pauseOnExceptions = await call<{
       state: string;
       sessions_applied: number;
       failures: unknown[];
     }>(tools, "set_pause_on_exceptions", { state: "all" });
-    expect(sope.state).toBe("all");
-    expect(sope.sessions_applied).toBeGreaterThanOrEqual(1);
-    expect(sope.failures).toEqual([]);
+    expect(pauseOnExceptions.state).toBe("all");
+    expect(pauseOnExceptions.sessions_applied).toBeGreaterThanOrEqual(1);
+    expect(pauseOnExceptions.failures).toEqual([]);
 
     await call(tools, "resume");
 

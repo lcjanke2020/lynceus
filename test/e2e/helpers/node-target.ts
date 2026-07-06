@@ -57,7 +57,12 @@ export async function spawnInspectorTarget(opts: {
   const child = spawn(
     process.execPath,
     ["--inspect-brk=127.0.0.1:0", "--enable-source-maps", FIXTURE_ENTRY],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    // stdin + stdout ignored; only stderr is piped (we read the "Debugger
+    // listening" port line from it). We never consume stdout, so piping it
+    // would risk a full-pipe stall that hangs the child if a fixture printed
+    // enough — and attach-based specs read the debuggee's console via
+    // get_console_logs (Runtime.consoleAPICalled), not this stdout.
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
 
   let killed = false;
