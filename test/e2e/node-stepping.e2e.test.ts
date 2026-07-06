@@ -1,8 +1,9 @@
 // L3 Node stepping: launch_node against compute-step.ts, set a bp on the
 // tick() call site, then step_into computeStep / step_over within it /
-// step_out back to tick. Asserts directional progress (line moved) and
-// frame depth transitions rather than hard-coded line numbers — same
-// pattern as the browser-side stepping.e2e.test.ts.
+// step_out back to tick. Assertions mix fixture-specific line numbers (the
+// bp line and computeStep's body range) with structural checks — directional
+// line movement plus frame-depth grow/steady/shrink across step_into /
+// step_over / step_out — in the spirit of the browser-side stepping.e2e.test.ts.
 
 import { describe, it, expect } from "vitest";
 import { buildToolMap, call } from "./helpers/build-tools.js";

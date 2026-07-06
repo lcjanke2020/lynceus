@@ -5,10 +5,10 @@
 // landed the pause on the right TS line.
 //
 // The fixture is intentionally tiny (one ESM import, one exported greet
-// function — see docs/node-session-design.md §9 fourth bullet for the
-// disk-backed-tsc-output contract this spec is the acceptance gate for).
+// function), compiled to disk by tsc so this spec's source-map round trip
+// has real .js + .js.map files to resolve.
 //
-// What this test does NOT assert (deliberate, per design §7):
+// What this test does NOT assert (deliberate):
 //   - The exact `reason` string on the entry pause. V8 emits values
 //     outside the Chromium devtools-protocol union ("Break on start"
 //     observed empirically on Node v24.13.1). Implementers must drive
@@ -60,7 +60,7 @@ describe("node breakpoint flow (e2e)", () => {
     );
     expect(attached.targetId).toBeTruthy();
     // Node's inspector exposes the entry script as a file:// URL — confirmed
-    // empirically and aligned with design §7 step 1's transcript.
+    // empirically on Node v24.13.1.
     expect(attached.url).toMatch(/^file:\/\/.*\/sample-node-app\/dist\/index\.js$/);
 
     // Step 2 — wait_for_pause picks up the entry pause that V8 fires after
@@ -133,7 +133,7 @@ describe("node breakpoint flow (e2e)", () => {
     // The entry pause has to be drained before set_breakpoint can run —
     // mapOriginalToGenerated requires the script's source-map consumer to
     // be in ScriptStore, which lands on (or shortly after) the entry
-    // pause arriving (design §9 fifth bullet).
+    // pause arriving.
     await call(tools, "wait_for_pause", { timeout_ms: 10_000 });
 
     // First prove handlers.ts IS mapped — otherwise a no_mapping result on

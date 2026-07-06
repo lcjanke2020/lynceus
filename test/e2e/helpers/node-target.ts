@@ -6,9 +6,7 @@
 //
 // Port discovery: Node prints `Debugger listening on ws://<host>:<port>/<uuid>`
 // to stderr immediately after binding. We parse the line — deterministic and
-// matches the manual-driver shape validated against Node
-// v24.13.1. See docs/node-session-design.md §9 for the disk-backed-tsc
-// contract this enables.
+// matches the manual-driver shape validated against Node v24.13.1.
 
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -50,7 +48,7 @@ export async function spawnInspectorTarget(opts: {
 
   // --inspect-brk parks the V8 isolate at the first executable line — the
   // attach_node tool's Runtime.runIfWaitingForDebugger is what releases it
-  // into the entry pause (design §7). --enable-source-maps is unnecessary
+  // into the entry pause. --enable-source-maps is unnecessary
   // here (Node's flag only affects its OWN error-trace remapping; cdp-mcp's
   // loader is independent) but harmless and keeps stderr noise consistent
   // with how a user would actually run a TS-compiled app.
@@ -94,20 +92,32 @@ export async function spawnInspectorTarget(opts: {
     }, timeoutMs);
     timer.unref();
 
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      stderrBuf += chunk.toString("utf8");
+    // Scan the buffered stderr for the listening banner; resolve if found.
+    const tryResolve = (): boolean => {
       const m = LISTENING_RE.exec(stderrBuf);
-      if (!m) return;
+      if (!m) return false;
       const port = Number(m[1]);
-      if (!Number.isFinite(port) || port <= 0) return;
+      if (!Number.isFinite(port) || port <= 0) return false;
       settled = true;
       clearTimeout(timer);
       resolve({ port, kill });
+      return true;
+    };
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      stderrBuf += chunk.toString("utf8");
+      tryResolve();
     });
 
     child.on("exit", (code, signal) => {
       if (settled) return;
+      // The banner may have been written to stderr in the same tick as this
+      // 'exit' fired, before the 'data' handler processed it — do a final
+      // scan before treating exit as a startup failure, so a child that
+      // printed the inspector URL and then died isn't misreported as
+      // "never listened".
+      if (tryResolve()) return;
       settled = true;
       clearTimeout(timer);
       reject(

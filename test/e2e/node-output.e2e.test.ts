@@ -37,7 +37,7 @@ describe("node output (e2e)", () => {
       { describe: "get_node_output 'total: 20' appears" },
     );
 
-    const totalLine = out.items.find((i) => /total: 20/.test(i.text));
+    const totalLine = out.items.find((i) => /^total: 20$/.test(i.text));
     expect(
       totalLine,
       `expected 'total: 20'; got [${out.items.map((i) => i.text.trim()).join(" | ")}]`,
