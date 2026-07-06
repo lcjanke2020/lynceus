@@ -3,6 +3,9 @@
 // Responsibilities:
 //   - Verify the sample-app dist exists (built by `npm run pretest:e2e` or
 //     manually via `npm run sample:build`).
+//   - Verify the sample-node-app dist entry exists (built by the same
+//     `pretest:e2e` chain via `npm run sample-node:build`) — the Node L3
+//     specs need it, so this preflight fails fast if it's missing.
 //   - Start a static server on port 0 serving the sample-app dist.
 //   - Resolve the Chromium binary via test/e2e/setup/browser-path.ts.
 //   - Launch a single headless Chromium via chrome-launcher (which manages
@@ -37,6 +40,13 @@ const SAMPLE_APP_DIST = join(
   "sample-app",
   "dist",
 );
+const SAMPLE_NODE_APP_ENTRY = join(
+  process.cwd(),
+  "examples",
+  "sample-node-app",
+  "dist",
+  "index.js",
+);
 const CACHE_DIR = join(process.cwd(), ".vitest-cache");
 export const CONFIG_FILE = join(CACHE_DIR, "e2e-config.json");
 
@@ -55,6 +65,11 @@ export async function setup(): Promise<void> {
   if (!existsSync(SAMPLE_APP_DIST)) {
     throw new Error(
       `e2e globalSetup: ${SAMPLE_APP_DIST} not found. Run 'npm run sample:build' first.`,
+    );
+  }
+  if (!existsSync(SAMPLE_NODE_APP_ENTRY)) {
+    throw new Error(
+      `e2e globalSetup: ${SAMPLE_NODE_APP_ENTRY} not found. Run 'npm run sample-node:build' first.`,
     );
   }
   if (!existsSync(CACHE_DIR)) {
