@@ -58,10 +58,10 @@ export interface SpawnOpts {
   onStderr?: (chunk: Buffer) => void;
 }
 
-// Vendor/eval credentials that must NEVER reach the spawned cdp-mcp
+// Vendor/eval credentials that must NEVER reach the spawned lynceus
 // subprocess. The threat model has two layers:
 //
-//   1. Log/blast-radius widening: cdp-mcp's server has no need for any
+//   1. Log/blast-radius widening: lynceus's server has no need for any
 //      of these. Forwarding them grows the surface area for an
 //      accidental log dump (the original concern from an upstream review).
 //   2. Debuggee exfiltration (raised by an upstream Codex high-severity review):
@@ -95,7 +95,7 @@ function isCredentialEnvName(name: string): boolean {
   return ENV_DENYLIST_EXPLICIT.has(name) || ENV_DENYLIST_PATTERN.test(name);
 }
 
-/** Pure helper: build the env map the cdp-mcp subprocess will receive.
+/** Pure helper: build the env map the lynceus subprocess will receive.
  *
  *  - Drops any value that's not a string (process.env can carry
  *    `undefined`; StdioClientTransport's env type is
@@ -145,7 +145,7 @@ export async function spawnMcpServer(opts: SpawnOpts = {}): Promise<McpSubproces
   }
 
   const client = new Client(
-    { name: "cdp-mcp-evals", version: "0.1.0" },
+    { name: "lynceus-evals", version: "0.1.0" },
     { capabilities: {} },
   );
   await client.connect(transport);
@@ -172,7 +172,7 @@ export async function spawnMcpServer(opts: SpawnOpts = {}): Promise<McpSubproces
 
 /** Convert MCP tool definitions to Anthropic's tools shape + tag the
  *  LAST entry with cache_control so the full tool catalog (~5K tokens
- *  measured on cdp-mcp's current 45 tools — was estimated at ~40K but
+ *  measured on lynceus's current 45 tools — was estimated at ~40K but
  *  measured from a real trace) hits the cache on every trial after the
  *  first. Comfortably above Anthropic's ~1024-token cache breakpoint
  *  minimum, so this marker IS effective even when paired with a short
@@ -204,7 +204,7 @@ export async function callMcpTool(
     arguments: (input ?? {}) as Record<string, unknown>,
   });
   const content = (res.content as Array<{ type: string; text?: string }> | undefined) ?? [];
-  // The cdp-mcp tool envelope is JSON in the first text block.
+  // The lynceus tool envelope is JSON in the first text block.
   const first = content[0];
   let parsed: unknown = first?.text;
   if (first?.type === "text" && typeof first.text === "string") {

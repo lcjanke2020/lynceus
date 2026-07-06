@@ -5,7 +5,7 @@ import { sessionResume } from "./session-resume.js";
 import { pair } from "./_test-helpers.js";
 import type { TraceEntry } from "../harness/types.js";
 
-const PATH = "/tmp/cdp-mcp-eval-session.json";
+const PATH = "/tmp/lynceus-eval-session.json";
 
 function happyTrace(): TraceEntry[] {
   return [

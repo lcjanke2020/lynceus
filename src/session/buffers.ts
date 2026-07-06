@@ -16,7 +16,7 @@ export interface ConsoleEntry {
   stack?: Protocol.Runtime.StackTrace;
 }
 
-// Buffered stdout/stderr lines from a cdp-mcp-owned Node child
+// Buffered stdout/stderr lines from a lynceus-owned Node child
 // (launch_node). Deliberately SEPARATE from ConsoleEntry: that buffer is for
 // `Runtime.consoleAPICalled` events captured via the V8 inspector, while
 // NodeOutputEntry holds raw process stdio that the inspector never sees.

@@ -1,7 +1,7 @@
 // L4 trial runner — orchestrates one (scenario, trial) end-to-end:
 //   1. Start a static server for the scenario's sample-app variant.
-//   2. Spawn dist/index.js (the cdp-mcp server) as an MCP subprocess.
-//   3. Run the Anthropic tool-use loop with the cdp-mcp tool list:
+//   2. Spawn dist/index.js (the lynceus server) as an MCP subprocess.
+//   3. Run the Anthropic tool-use loop with the lynceus tool list:
 //        - send messages → assistant response → invoke tool_uses → repeat
 //        - until end_turn / iteration cap / token cap.
 //   4. Log every meaningful event to NDJSON via the trace writer.
@@ -17,7 +17,7 @@
 //
 // Cache control: the system prompt block AND the tool list's last entry
 // are marked `cache_control: { type: "ephemeral" }` so the static prefix
-// hits cache on every trial after the first. Measured size on cdp-mcp's
+// hits cache on every trial after the first. Measured size on lynceus's
 // current tool surface (45 tools, terse descriptions): the system block
 // is ~280 tokens and the tools array is ~5K tokens. Anthropic's cache
 // breakpoint minimum is ~1024 tokens, so the system-block marker is

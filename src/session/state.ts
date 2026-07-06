@@ -69,7 +69,7 @@ class SessionState {
   readonly pause = new PauseTracker();
   readonly console = new RingBuffer<ConsoleEntry>(1000);
   readonly network = new RingBuffer<NetworkEntry>(1000);
-  // Buffered stdout/stderr from cdp-mcp-owned Node children.
+  // Buffered stdout/stderr from lynceus-owned Node children.
   // Populated by launch_node; attach_node leaves it empty (we never see the
   // process stdio in attach mode). Exposed via the get_node_output tool.
   readonly nodeOutput = new RingBuffer<NodeOutputEntry>(1000);

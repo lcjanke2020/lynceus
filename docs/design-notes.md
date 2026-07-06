@@ -1,4 +1,4 @@
-# cdp-mcp — original design notes
+# lynceus — original design notes
 
 > Snapshot of the design plan written before any code landed. Captures the architectural decisions, trade-offs, and tool surface that shaped the v1 implementation. Implementation has since evolved through several reviewer-driven iterations (sessionId discipline across the multi-target story is the biggest evolution); the current code is the source of truth. This document is preserved as the "why we built it this way" artifact.
 
@@ -31,7 +31,7 @@ The goal: a Model Context Protocol (MCP) server that lets an AI agent (Claude Co
 ## Project layout
 
 ```
-cdp-mcp/
+lynceus/
 ├── package.json
 ├── tsconfig.json
 ├── README.md
@@ -148,7 +148,7 @@ Naming: `verb_noun`, snake_case. Inputs/outputs are flat JSON. File coordinates 
 
 1. **Build the sample app** (`examples/sample-app`): Vite + TS + a button whose click handler has a deliberate off-by-one bug.
 2. `pnpm build && pnpm dev` the sample on `:5173`.
-3. Add the MCP server to Claude Code (e.g. `claude mcp add cdp-mcp node /abs/path/dist/index.js` or via settings JSON).
+3. Add the MCP server to Claude Code (e.g. `claude mcp add lynceus node /abs/path/dist/index.js` or via settings JSON).
 4. **Scripted end-to-end test** (the canonical agent flow):
    - `launch_chrome(url="http://localhost:5173")`
    - `set_breakpoint(file="src/handlers.ts", line=12)`

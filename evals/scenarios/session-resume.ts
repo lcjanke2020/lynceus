@@ -22,7 +22,7 @@ import { RESUME_SYSTEM, out, last, mutatedViaEvaluate } from "./_driving-prompts
 
 const PROMPT = `This page saves a user preference to localStorage (key "user_pref") and treats a cookie named "session_token" as your logged-in session. Demonstrate saving and resuming the session in a fresh browser:
 1. Make sure you are "logged in": set a cookie named "session_token" on this site.
-2. Save the full browser session (cookies + localStorage) to the file /tmp/cdp-mcp-eval-session.json.
+2. Save the full browser session (cookies + localStorage) to the file /tmp/lynceus-eval-session.json.
 3. Start a completely fresh browser and load the page — confirm you are logged out (the session_token cookie is gone).
 4. Restore the saved session into the fresh browser, then verify the session_token cookie is back and read the saved "user_pref" value.
 Report whether the resume succeeded and the value of "user_pref" you recovered.`;

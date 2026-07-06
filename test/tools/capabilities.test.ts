@@ -60,8 +60,8 @@ const cases: Case[] = [
   { tool: "fill", handler: formTools.get("fill")!, args: { selector: "#x", value: "hi" } },
   { tool: "suggest_locator", handler: formTools.get("suggest_locator")!, args: { selector: "#x" } },
   // storage.ts
-  { tool: "export_storage_state", handler: storageTools.get("export_storage_state")!, args: { path: "/nonexistent-cdp-mcp-test-dir/x.json" } },
-  { tool: "load_storage_state", handler: storageTools.get("load_storage_state")!, args: { path: "/nonexistent-cdp-mcp-test-dir/x.json" } },
+  { tool: "export_storage_state", handler: storageTools.get("export_storage_state")!, args: { path: "/nonexistent-lynceus-test-dir/x.json" } },
+  { tool: "load_storage_state", handler: storageTools.get("load_storage_state")!, args: { path: "/nonexistent-lynceus-test-dir/x.json" } },
   { tool: "get_cookies", handler: storageTools.get("get_cookies")!, args: {} },
   { tool: "set_cookies", handler: storageTools.get("set_cookies")!, args: { cookies: [] } },
 ];

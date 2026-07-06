@@ -151,7 +151,7 @@ export interface ToolResultEntry {
   toolUseId: string;
   tool: string;
   isError: boolean;
-  /** Parsed-out error code from the cdp-mcp error envelope (when isError),
+  /** Parsed-out error code from the lynceus error envelope (when isError),
    *  or undefined for success / unparseable errors. */
   errorCode?: string;
   output: unknown;

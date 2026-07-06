@@ -26,7 +26,7 @@
 // per-trial messages (scenario prompt + running tool_call/tool_result
 // transcript) are NOT marked — they're per-trial and shouldn't waste
 // cache budget. With this wiring the system + tools (~5K input tokens
-// for the cdp-mcp tool surface) hit cache on every trial after the first.
+// for the lynceus tool surface) hit cache on every trial after the first.
 // Verify post-deploy via the `cacheCreationInputTokens` /
 // `cacheReadInputTokens` keys on `NormalizedMessage.usage.cacheTokens`.
 //

@@ -1,12 +1,12 @@
-# Publish cdp-mcp to npm when a GitHub Release is published.
+# Publish lynceus to npm when a GitHub Release is published.
 #
 # Auth: npm "trusted publishing" via GitHub OIDC — NO long-lived token is
 # stored in the repo. npm also attaches a provenance attestation linking the
 # published tarball to this commit + workflow run.
 #
 # One-time setup (after the first manual `npm publish` claims the name):
-#   npmjs.com → the cdp-mcp package → Settings → "Trusted Publisher" →
-#   GitHub Actions → org/repo: lcjanke2020/cdp-mcp, workflow: publish.yml.
+#   npmjs.com → the lynceus package → Settings → "Trusted Publisher" →
+#   GitHub Actions → org/repo: lcjanke2020/lynceus, workflow: publish.yml.
 # Until that trusted publisher is configured, this workflow will fail at the
 # publish step (by design) — it only runs when you publish a GitHub Release.
 name: Publish to npm

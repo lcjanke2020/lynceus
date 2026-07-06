@@ -3,7 +3,7 @@
  *
  * The canonical LocatorSpec contract lives in `../locator.ts` (zod-only, public).
  * This module adds the parts that are specific to running locators *inside the
- * page* and to the cdp-mcp tool error envelope:
+ * page* and to the lynceus tool error envelope:
  *   - `normalizeLocator` — the contract normalizer, re-wrapping `LocatorError`
  *     as the repo's structured `ToolError` (preserving its error code).
  *   - `locatorHelpersScript()` — the in-page helper library (accessibility

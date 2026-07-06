@@ -111,14 +111,14 @@ This mirrors the shape of Ubuntu's stock `chrome` / `msedge` / `brave` profiles
 (a named-unconfined profile that opts into user namespaces):
 
 ```apparmor
-# /etc/apparmor.d/cdp-mcp-chromium
+# /etc/apparmor.d/lynceus-chromium
 abi <abi/4.0>,
 include <tunables/global>
 
-profile cdp-mcp-chromium /home/*/.cache/ms-playwright/chromium-*/chrome-linux*/chrome flags=(unconfined) {
+profile lynceus-chromium /home/*/.cache/ms-playwright/chromium-*/chrome-linux*/chrome flags=(unconfined) {
   userns,
 
-  include if exists <local/cdp-mcp-chromium>
+  include if exists <local/lynceus-chromium>
 }
 ```
 
@@ -132,7 +132,7 @@ list of usernames, e.g. `/home/{alice,bob}/.cache/...`.
 Load it (profiles in `/etc/apparmor.d/` also auto-load at boot):
 
 ```sh
-sudo apparmor_parser -r /etc/apparmor.d/cdp-mcp-chromium
+sudo apparmor_parser -r /etc/apparmor.d/lynceus-chromium
 ```
 
 ## 4. Verify the label attaches
@@ -144,11 +144,11 @@ the named profile, not bare `unconfined`:
 BIN=$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome | head -1)
 "$BIN" --headless=new --no-startup-window --remote-debugging-port=0 \
        --user-data-dir=$(mktemp -d) about:blank & pid=$!
-sleep 3; cat /proc/$pid/attr/current   # -> cdp-mcp-chromium (unconfined)
+sleep 3; cat /proc/$pid/attr/current   # -> lynceus-chromium (unconfined)
 kill $pid
 ```
 
-If this prints `cdp-mcp-chromium (unconfined)`, the profile is attached. A bare
+If this prints `lynceus-chromium (unconfined)`, the profile is attached. A bare
 `unconfined` means the binary path didn't match the profile's glob — re-check
 the cache path against the profile.
 

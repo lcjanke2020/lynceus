@@ -144,11 +144,11 @@ describe("launch_chrome", () => {
     await launchChrome.handler({ chrome_path: "/snap/bin/chromium" });
     const call = launchMock.mock.calls[0]?.[0];
     expect(call?.chromePath).toBe("/snap/bin/chromium");
-    expect(call?.userDataDir).toMatch(/[/\\]snap[/\\]chromium[/\\]current[/\\]cdp-mcp-test-profile$/);
+    expect(call?.userDataDir).toMatch(/[/\\]snap[/\\]chromium[/\\]current[/\\]lynceus-test-profile$/);
     // mkdirSync(udd, { recursive: true }) ran so the dir exists before chrome
     // tries to write its first-run lock + chrome-out.log into it. (Issue #13.)
     expect(mkdirSyncMock).toHaveBeenCalledWith(
-      expect.stringMatching(/[/\\]snap[/\\]chromium[/\\]current[/\\]cdp-mcp-test-profile$/),
+      expect.stringMatching(/[/\\]snap[/\\]chromium[/\\]current[/\\]lynceus-test-profile$/),
       { recursive: true },
     );
   });
@@ -176,7 +176,7 @@ describe("launch_chrome", () => {
     cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "about:blank", title: "" }]);
     await launchChrome.handler({});
     const call = launchMock.mock.calls[0]?.[0];
-    expect(call?.userDataDir).toMatch(/[/\\]snap[/\\]chromium[/\\]current[/\\]cdp-mcp-test-profile$/);
+    expect(call?.userDataDir).toMatch(/[/\\]snap[/\\]chromium[/\\]current[/\\]lynceus-test-profile$/);
     expect(mkdirSyncMock).toHaveBeenCalled();
   });
 
@@ -524,7 +524,7 @@ describe("launch_node", () => {
       script: "node-launch-entry.js",
       args: ["one", "two"],
       cwd,
-      env: { CDP_MCP_TEST_VALUE: "yes" },
+      env: { LYNCEUS_TEST_VALUE: "yes" },
       inspect_mode: "inspect",
       inspect_port: 9333,
     });
@@ -537,7 +537,7 @@ describe("launch_node", () => {
       "two",
     ]);
     expect(opts.cwd).toBe(cwd);
-    expect(opts.env.CDP_MCP_TEST_VALUE).toBe("yes");
+    expect(opts.env.LYNCEUS_TEST_VALUE).toBe("yes");
   });
 
   it("already_session error runs before spawning a child", async () => {
@@ -590,7 +590,7 @@ describe("launch_node", () => {
     expect(sessionState.kind).toBe("browser");
   });
 
-  it("close_session kills a launched Node child because cdp-mcp owns it", async () => {
+  it("close_session kills a launched Node child because lynceus owns it", async () => {
     const child = mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
 

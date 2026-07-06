@@ -1,31 +1,33 @@
 {
-  "name": "cdp-mcp",
-  "version": "0.2.2",
-  "description": "Chrome DevTools Protocol MCP server — a TypeScript-aware frontend debugger for AI agents.",
+  "name": "lynceus",
+  "version": "0.3.0",
+  "description": "Chrome DevTools Protocol + Node.js Inspector MCP server — a TypeScript-aware runtime debugger for AI agents (formerly cdp-mcp).",
   "license": "MIT",
   "author": "Leonard Janke",
-  "homepage": "https://github.com/lcjanke2020/cdp-mcp#readme",
+  "homepage": "https://github.com/lcjanke2020/lynceus#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lcjanke2020/cdp-mcp.git"
+    "url": "git+https://github.com/lcjanke2020/lynceus.git"
   },
   "bugs": {
-    "url": "https://github.com/lcjanke2020/cdp-mcp/issues"
+    "url": "https://github.com/lcjanke2020/lynceus/issues"
   },
   "keywords": [
     "mcp",
     "model-context-protocol",
     "chrome-devtools-protocol",
     "cdp",
+    "node-inspector",
     "debugger",
     "devtools",
     "ai-agents",
     "typescript",
-    "source-maps"
+    "source-maps",
+    "cdp-mcp"
   ],
   "type": "module",
   "bin": {
-    "cdp-mcp": "dist/index.js"
+    "lynceus": "dist/index.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

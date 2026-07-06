@@ -29,7 +29,7 @@ Where to find everything in this repo.
 |---|---|
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Component diagram, layered view, request-flow sequences, session state machine, test-pyramid diagram. |
 | [docs/chromium-sandboxing.md](./docs/chromium-sandboxing.md) | Canonical `--no-sandbox` / `sandbox: true` guidance: Chromium sandbox, AppArmor, unprivileged user namespaces, snap confinement, and Bubblewrap. |
-| [docs/local-l3-e2e-setup.md](./docs/local-l3-e2e-setup.md) | Step-by-step runbook to get local `npm run test:e2e` passing sandbox-on on Ubuntu: install Playwright Chromium, verify the resolver, attach the `cdp-mcp-chromium` AppArmor `userns` profile, with the `CI=1` `--no-sandbox` fallback. |
+| [docs/local-l3-e2e-setup.md](./docs/local-l3-e2e-setup.md) | Step-by-step runbook to get local `npm run test:e2e` passing sandbox-on on Ubuntu: install Playwright Chromium, verify the resolver, attach the `lynceus-chromium` AppArmor `userns` profile, with the `CI=1` `--no-sandbox` fallback. |
 | [docs/design-notes.md](./docs/design-notes.md) | Original design plan + a "What the implementation discovered" section (source-map line numbering, CRI typed-send trap, sessionId multi-target complexity). |
 | [docs/node-session-design.md](./docs/node-session-design.md) | Design doc for adding Node.js Inspector support: `SessionState.kind`, the shared `debugger.ts` module split, the capability-gating mechanism (`unsupported_target`), the Node source-map loader tier, and a worked end-to-end example. Locks the browser/Node session-kind contract. |
 | [docs/node-test-coverage-proposal.md](./docs/node-test-coverage-proposal.md) | Proposal for the Node test-coverage epic: the new L3 Node e2e specs, the 4 L4 Node scenarios (`node-compute-step`, `node-stdio-bug`, `node-conditional-bp`, `node-uncaught-throw`), the harness Node-target seam (`Scenario.target` discriminator + runner branch + `cli.ts` / `RunTrialOpts` / `ScenarioStartEntry` contract extensions), and the `eval:quick:node` smoke hook. Implemented; the text is preserved for the design rationale and cost/sequencing plan. |
@@ -57,7 +57,7 @@ Entry points:
 |---|---|
 | [`src/index.ts`](./src/index.ts) | Stdio MCP server lifecycle (SIGINT/SIGTERM shutdown). What Claude Code launches. |
 | [`src/server.ts`](./src/server.ts) | `buildServer()` — instantiates `McpServer`, calls each `registerXxxTools(server)`. |
-| [`src/contract.ts`](./src/contract.ts) | Published `cdp-mcp/contract` subpath export — a thin barrel re-exporting the `LocatorSpec` type + Zod `locatorSchema` / `parseLocator` / `serializeLocator` from [`src/locator.ts`](./src/locator.ts) (the source of truth). ESM-only, depends only on `zod`. |
+| [`src/contract.ts`](./src/contract.ts) | Published `lynceus/contract` subpath export — a thin barrel re-exporting the `LocatorSpec` type + Zod `locatorSchema` / `parseLocator` / `serializeLocator` from [`src/locator.ts`](./src/locator.ts) (the source of truth). ESM-only, depends only on `zod`. |
 
 Source tree:
 

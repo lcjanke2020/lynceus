@@ -160,7 +160,7 @@ describe("new-shape UsageEntry round-trip", () => {
 describe("readTraceFile legacy-shape fold", () => {
   let tmp: string;
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "cdp-mcp-trace-test-"));
+    tmp = mkdtempSync(join(tmpdir(), "lynceus-trace-test-"));
   });
   afterEach(() => {
     rmSync(tmp, { recursive: true, force: true });

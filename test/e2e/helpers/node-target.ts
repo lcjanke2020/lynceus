@@ -49,7 +49,7 @@ export async function spawnInspectorTarget(opts: {
   // --inspect-brk parks the V8 isolate at the first executable line — the
   // attach_node tool's Runtime.runIfWaitingForDebugger is what releases it
   // into the entry pause. --enable-source-maps is unnecessary
-  // here (Node's flag only affects its OWN error-trace remapping; cdp-mcp's
+  // here (Node's flag only affects its OWN error-trace remapping; lynceus's
   // loader is independent) but harmless and keeps stderr noise consistent
   // with how a user would actually run a TS-compiled app.
   const child = spawn(

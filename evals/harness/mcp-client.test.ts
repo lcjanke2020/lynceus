@@ -7,7 +7,7 @@
 // Background: an upstream Codex high-severity review flagged that the
 // previous denylist had ANTHROPIC_API_KEY only, so a Node eval trial
 // running under, e.g., EVAL_PROVIDER=openai would forward
-// OPENAI_API_KEY into the spawned cdp-mcp subprocess; from there a
+// OPENAI_API_KEY into the spawned lynceus subprocess; from there a
 // `launch_node` debuggee could `evaluate` process.env.OPENAI_API_KEY
 // and the value would land in the trace via tool_result. These tests
 // pin the expanded scrubber so that regression can't reappear silently.

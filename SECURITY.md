@@ -5,7 +5,7 @@
 ## Reporting a vulnerability
 
 Please report security issues privately rather than opening a public issue.
-Use GitHub's [private vulnerability reporting](https://github.com/lcjanke2020/cdp-mcp/security/advisories/new)
+Use GitHub's [private vulnerability reporting](https://github.com/lcjanke2020/lynceus/security/advisories/new)
 (Security → Advisories → "Report a vulnerability") so the report stays
 confidential until a fix is available.
 
@@ -16,7 +16,7 @@ basis — there is no formal SLA, but credible reports will be taken seriously.
 
 ## Security model — read before deploying
 
-`cdp-mcp` is a debugger. By design it can launch and attach to a Chromium
+`lynceus` is a debugger. By design it can launch and attach to a Chromium
 browser **or a Node.js process**, set breakpoints, evaluate arbitrary
 expressions in page/runtime contexts, read the DOM, and capture console +
 network traffic. Treat access to this server as **equivalent to code execution
@@ -29,7 +29,7 @@ and full read access** on every target it is attached to — and, via
 - **SSE transport (`--port`).** Binds to `127.0.0.1` (loopback) by default, and
   on a loopback bind it validates the `Host` and `Origin` headers as a
   DNS-rebinding defense. Exposing it off-loopback requires explicit opt-in
-  (the `--allow-remote` flag or `CDP_MCP_ALLOW_REMOTE=1`) — which also **drops**
+  (the `--allow-remote` flag or `LYNCEUS_ALLOW_REMOTE=1`) — which also **drops**
   the Host/Origin checks, because
   the hostnames/IPs the server can be reached by cannot be statically
   enumerated. At no point is there built-in authentication: anyone who can reach
@@ -46,7 +46,7 @@ and full read access** on every target it is attached to — and, via
 
 ## Agent-operator threat model — prompt injection → action
 
-`cdp-mcp` is operated by an LLM agent, which changes the threat model. The agent
+`lynceus` is operated by an LLM agent, which changes the threat model. The agent
 both **ingests page content** and **takes actions**, and the page can drive both:
 
 - **Ingestion (where injected instructions enter).** The agent reads page-derived

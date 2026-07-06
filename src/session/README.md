@@ -33,7 +33,7 @@ stateDiagram-v2
 
 `closeSession()` kills Chrome or Node only if we launched it ourselves (`sessionState.attached === false`); attach-mode sessions leave the user's process alive.
 
-`launch_node` captures child stdout/stderr into a durable pull-based buffer (`sessionState.nodeOutput`) exposed via the `get_node_output` MCP tool. The buffer is deliberately separate from the V8-inspector console (`get_console_logs`), which captures `Runtime.consoleAPICalled` events from inside the debuggee process. `attach_node` sessions leave the buffer empty — cdp-mcp doesn't own the stdio of a pre-existing process.
+`launch_node` captures child stdout/stderr into a durable pull-based buffer (`sessionState.nodeOutput`) exposed via the `get_node_output` MCP tool. The buffer is deliberately separate from the V8-inspector console (`get_console_logs`), which captures `Runtime.consoleAPICalled` events from inside the debuggee process. `attach_node` sessions leave the buffer empty — lynceus doesn't own the stdio of a pre-existing process.
 
 ## Public surface tools rely on
 

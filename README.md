@@ -1,6 +1,8 @@
-# cdp-mcp
+# lynceus
 
-A Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**.
+> **lynceus** — formerly **cdp-mcp** (renamed in 0.3.0). Named for the Argonauts' sharp-eyed lookout who could see beneath the earth: the server now debugs **both** the browser (Chrome DevTools Protocol) and **Node.js** (the V8 Inspector), so "CDP" undersold it. The old `github.com/lcjanke2020/cdp-mcp` links redirect here, and the deprecated `CDP_MCP_*` environment variables still work (see below).
+
+A Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) and the Node.js Inspector to AI agents as a **TypeScript-aware runtime debugger**.
 
 Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have local source + source-map access. Coordinates flow in TS terms; the server translates to JS for CDP under the hood.
 
@@ -32,23 +34,23 @@ Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true }
 Requires Node.js 20+ and a local Chrome/Chromium browser.
 
 ```sh
-npm install -g cdp-mcp
-cdp-mcp                           # stdio MCP transport
-cdp-mcp --port 9719               # SSE MCP transport on 127.0.0.1:9719
-cdp-mcp --host 0.0.0.0 --port 9719 --allow-remote
+npm install -g lynceus
+lynceus                           # stdio MCP transport
+lynceus --port 9719               # SSE MCP transport on 127.0.0.1:9719
+lynceus --host 0.0.0.0 --port 9719 --allow-remote
 ```
 
 The npm package ships prebuilt `dist/`, so there is no build step for runtime
 use. If `launch_chrome` cannot find Chrome/Chromium automatically, set
 `CHROME_PATH` to the browser binary.
 
-For MCP clients that support SSE, you can run `cdp-mcp` as a persistent local
+For MCP clients that support SSE, you can run `lynceus` as a persistent local
 service:
 
 - [macOS launchd user service](docs/launchd-service.md)
 - [Linux systemd user service](docs/systemd-service.md)
 
-Persistent service mode keeps the `cdp-mcp` process and current browser/CDP
+Persistent service mode keeps the `lynceus` process and current browser/CDP
 session alive across MCP client restarts or reconnects. It does **not** persist
 state across service-process restarts. SSE mode is single-client today; if a
 new client should start fresh, call `close_session` first.
@@ -71,7 +73,8 @@ SSE mode caveats:
   breakpoints, console/network buffers; `launch_chrome` from client B
   tears down client A's session).
 - **Non-loopback bind requires opt-in.** `--allow-remote` (or
-  `CDP_MCP_ALLOW_REMOTE=1`) is required to bind to anything other than
+  `LYNCEUS_ALLOW_REMOTE=1`, or the deprecated `CDP_MCP_ALLOW_REMOTE=1`) is
+  required to bind to anything other than
   loopback. MCP tools include `evaluate` (in-page code exec), a
   `screenshot path=` filesystem write, `export_storage_state` (writes full
   cookie values — including HttpOnly auth secrets — to a server-side file) and
@@ -169,7 +172,7 @@ npm run eval -- --scenarios=compute-step --trials=1
 
 Use `npm run eval` (or `npm run eval:quick`) — NOT `npx tsx evals/cli.ts` directly. The npm script triggers the `preeval` lifecycle hook which rebuilds `dist/index.js` (the MCP subprocess); calling tsx directly bypasses the hook and a fresh clone fails with `Cannot find module '.../dist/index.js'`. If you must invoke tsx directly, run `npm run build` first.
 
-Drives the cdp-mcp tool surface through an LLM agent via the
+Drives the lynceus tool surface through an LLM agent via the
 `VendorAdapter` seam (`evals/harness/vendor.ts`); the Anthropic adapter
 backed by `@anthropic-ai/sdk` is the default; OpenAI, Vertex, DeepSeek,
 and Moonshot/Kimi are also shipped production adapters (plus an LM Studio
@@ -248,7 +251,7 @@ stock `examples/sample-app/`, others against per-scenario forks under
 ## Wire into Claude Code
 
 ```sh
-claude mcp add cdp-mcp node /absolute/path/to/dist/index.js
+claude mcp add lynceus node /absolute/path/to/dist/index.js
 ```
 
 Or via `~/.claude.json`:
@@ -256,7 +259,7 @@ Or via `~/.claude.json`:
 ```json
 {
   "mcpServers": {
-    "cdp-mcp": { "command": "node", "args": ["/abs/path/dist/index.js"] }
+    "lynceus": { "command": "node", "args": ["/abs/path/dist/index.js"] }
   }
 }
 ```
@@ -269,7 +272,7 @@ Or via `~/.claude.json`:
    npm install
    npm run dev          # listens on :5173
    ```
-2. In a Claude Code session with `cdp-mcp` enabled, ask:
+2. In a Claude Code session with `lynceus` enabled, ask:
    > Open localhost:5173 in a non-headless browser. Set a breakpoint at src/handlers.ts:7. Click #go. When it pauses, tell me what `step` is — and why the counter increments wrong.
 3. The agent should chain: `launch_chrome` → `set_breakpoint` → `click` → `wait_for_pause` → `get_scope`/`evaluate` → `resume`, and conclude that `computeStep()` returns `2` instead of `1`.
 
@@ -284,7 +287,7 @@ npm run sample-node:build
 node --inspect-brk examples/sample-node-app/dist/index.js   # pauses at the first line; listens on 127.0.0.1:9229
 ```
 
-In a Claude Code session with `cdp-mcp` enabled, ask:
+In a Claude Code session with `lynceus` enabled, ask:
 > Attach to the Node process on 127.0.0.1:9229. Set a breakpoint at `src/handlers.ts:2`. Resume and tell me what `name` is on the first hit.
 
 The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `resume` → `wait_for_pause` → `get_scope`, and report `name === "world"` from the paused frame.
@@ -293,14 +296,14 @@ The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `
 
 > Launch `examples/sample-node-app/dist/index.js` under `--inspect-brk`. Set a breakpoint at `src/handlers.ts:2`. Resume and tell me what `name` is on the first hit.
 
-`close_session` terminates the child because cdp-mcp launched it (`sessionState.attached === false`); `attach_node` sessions leave the user's Node process alive.
+`close_session` terminates the child because lynceus launched it (`sessionState.attached === false`); `attach_node` sessions leave the user's Node process alive.
 
 ### Inspector port security
 
-`node --inspect` opens a debugger port with **full arbitrary-code-execution** capability against the V8 runtime — anyone who can reach the port can run code in your Node process. cdp-mcp's defaults keep this safe in normal use, but the constraints are worth knowing:
+`node --inspect` opens a debugger port with **full arbitrary-code-execution** capability against the V8 runtime — anyone who can reach the port can run code in your Node process. lynceus's defaults keep this safe in normal use, but the constraints are worth knowing:
 
 - `attach_node` defaults to `127.0.0.1:9229`. Don't bind `--inspect=0.0.0.0` or a LAN/VPN interface unless you've thought hard about who can reach it.
-- The source-map loader refuses `file://` reads when the inspector host is non-loopback (`src/sourcemap/loader.ts`) — a remote-debugging session can't trick cdp-mcp into reading attacker-chosen local paths.
+- The source-map loader refuses `file://` reads when the inspector host is non-loopback (`src/sourcemap/loader.ts`) — a remote-debugging session can't trick lynceus into reading attacker-chosen local paths.
 - Browser-only MCP tools (DOM, navigation, browser-network) return `unsupported_target` when the active session is Node, so an agent can't accidentally drive page-style automation against a backend process.
 
 ## Tool conventions for agents
@@ -311,15 +314,15 @@ The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `
 - **Errors** come back as `isError: true` with a structured `{ error, message }` JSON payload.
 - **Compact returns**: previews trimmed to ~200 chars, lists capped at sensible defaults — bodies lazy-loaded via dedicated tools.
 
-## Programmatic contract (`cdp-mcp/contract`)
+## Programmatic contract (`lynceus/contract`)
 
 The structured `LocatorSpec` that `locate`, `wait_for`, and the form-driving tools
 accept is published as a side-effect-free subpath export, so external tooling can
 *produce and validate* specs without duplicating the shape or pulling in the CLI:
 
 ```ts
-import { locatorSchema, parseLocator, serializeLocator } from "cdp-mcp/contract";
-import type { LocatorSpec } from "cdp-mcp/contract";
+import { locatorSchema, parseLocator, serializeLocator } from "lynceus/contract";
+import type { LocatorSpec } from "lynceus/contract";
 
 const spec = parseLocator({ by: "role", role: "button", name: "Submit" });
 locatorSchema.parse(spec);          // throws on an invalid shape
@@ -334,7 +337,7 @@ bundler.
 
 ## Prior art
 
-If `cdp-mcp` doesn't fit your workflow, look at:
+If `lynceus` doesn't fit your workflow, look at:
 - [`InDate/cdp-tools-mcp`](https://github.com/InDate/cdp-tools-mcp)
 - [`ScriptedAlchemy/devtools-debugger-mcp`](https://github.com/ScriptedAlchemy/devtools-debugger-mcp) (Node-focused)
 - [`ChromeDevTools/chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp) (automation + console, no breakpoints)

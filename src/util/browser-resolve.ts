@@ -311,5 +311,5 @@ export function snapUserDataDir(binaryPath: string): string {
   // 'chromium'; /snap/firefox/current/firefox -> 'firefox'.
   const match = binaryPath.match(/\/snap\/(?:bin\/)?([^/]+)/);
   const app = match?.[1] ?? "chromium";
-  return join(homedir(), "snap", app, "current", "cdp-mcp-test-profile");
+  return join(homedir(), "snap", app, "current", "lynceus-test-profile");
 }

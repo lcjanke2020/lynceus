@@ -1,4 +1,4 @@
-// L3 launch_node e2e: cdp-mcp owns the Node child, parses the inspector
+// L3 launch_node e2e: lynceus owns the Node child, parses the inspector
 // endpoint from stderr, attaches through the shared Node Inspector path, and
 // close_session terminates the launched process.
 

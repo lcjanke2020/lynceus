@@ -1,10 +1,10 @@
 /**
- * Canonical `LocatorSpec` contract for cdp-mcp.
+ * Canonical `LocatorSpec` contract for lynceus.
  *
  * This module is the single source of truth for the structured element-locator
  * shape that `locate`, `wait_for`, and the form-driving tools accept. It is
  * deliberately **side-effect free** and depends only on `zod`, so external
- * consumers can import it (via `cdp-mcp/contract`) to produce and validate specs
+ * consumers can import it (via `lynceus/contract`) to produce and validate specs
  * without pulling in the CLI/server. Tool code re-imports these symbols rather
  * than redefining them, so the published contract can never silently drift from
  * what the tools actually accept.
@@ -13,7 +13,7 @@ import { z } from "zod";
 
 /**
  * Error thrown by {@link normalizeLocator} / {@link parseLocator} for an invalid
- * spec. `code` mirrors the cdp-mcp tool error codes so tool handlers can re-wrap it
+ * spec. `code` mirrors the lynceus tool error codes so tool handlers can re-wrap it
  * structurally: `"missing_arg"` when a spec is under-specified for its strategy,
  * `"invalid_locator"` for an unsupported strategy.
  */
@@ -26,7 +26,7 @@ export class LocatorError extends Error {
   }
 }
 
-/** The locator strategies cdp-mcp understands. `css` is the default when a selector is given. */
+/** The locator strategies lynceus understands. `css` is the default when a selector is given. */
 export const locatorBySchema = z.enum([
   "css",
   "text",

@@ -61,7 +61,7 @@ here so future contributors don't waste a debug cycle.
   `Start-Process` and probing `/json/version` over HTTP works fine — only
   chrome-launcher's launch path fails. The same code works on Linux (CI)
   and is widely used elsewhere, so this is a Windows-host quirk rather
-  than a cdp-mcp issue. **Workaround**: run L3 changes under WSL2
+  than a lynceus issue. **Workaround**: run L3 changes under WSL2
   (Ubuntu) or push and let CI validate (but see WSL2 caveat below). Unit
   + L2 tests work fine on native Windows.
 

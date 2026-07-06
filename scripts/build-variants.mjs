@@ -15,7 +15,7 @@
 // and matches the actual semantics — every variant uses the exact same
 // build pipeline as the canonical sample-app.
 //
-// Each variant uses the root cdp-mcp node_modules via npm's nearest-
+// Each variant uses the root lynceus node_modules via npm's nearest-
 // ancestor resolution — no per-variant npm install. The root's
 // devDependencies (vite + typescript) are inherited.
 
@@ -58,7 +58,7 @@ const SHARED_TSCONFIG = `{
 const SHARED_PACKAGE_JSON = (variantName) =>
   JSON.stringify(
     {
-      name: `cdp-mcp-sample-app-${variantName}`,
+      name: `lynceus-sample-app-${variantName}`,
       version: "0.0.0",
       private: true,
       type: "module",
