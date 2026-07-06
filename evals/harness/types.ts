@@ -17,13 +17,44 @@
 
 import type { Vendor } from "./vendor.js";
 
+/** Discriminated union over the target the scenario drives.
+ *
+ *  Added when the harness gained a Node-target seam so the same
+ *  runner can host both browser scenarios (the original surface) and
+ *  Node scenarios (`launch_node`-driven). Approach A (additive
+ *  optional `Scenario.target?` field) was chosen over Approach B
+ *  (`Scenario = BrowserScenario | NodeScenario`) to avoid touching
+ *  all existing browser scenarios — they continue to carry
+ *  `variantDir` and the runner's `resolveTarget()` helper folds them
+ *  into `{ kind: "browser", variantDistDir: variantDir }`.
+ *
+ *  - `browser` — drives a sample-app variant served from `variantDistDir`
+ *    over a port-0 static server, launches Chrome, frames the first
+ *    user message as `Page under test: ${url}`.
+ *  - `node`    — drives a built JS entrypoint at `script` via
+ *    `launch_node`, skips static-server + Chrome resolution, frames the
+ *    first user message as `Node script under test: ${script}`. */
+export type ScenarioTarget =
+  | { kind: "browser"; variantDistDir: string }
+  | { kind: "node"; script: string };
+
 export interface Scenario {
   /** Identifier — matches the filename under evals/scenarios/. */
   name: string;
   /** Sub-directory under evals/sample-app-variants/ to serve as the page
    *  under test. The default is the canonical examples/sample-app for
-   *  scenarios that don't need a fork. */
-  variantDir: string;
+   *  scenarios that don't need a fork. **Browser scenarios only** — Node
+   *  scenarios omit this and supply `target: { kind: "node", script }`
+   *  instead. Optional now that the harness supports Node targets; the runner's
+   *  `resolveTarget()` helper throws at startup if a scenario has
+   *  neither `variantDir` nor `target`. */
+  variantDir?: string;
+  /** Explicit target discriminator — when set, takes precedence over the
+   *  legacy `variantDir` fallback. New Node scenarios set this; existing
+   *  browser scenarios leave it unset and rely on `variantDir`. The
+   *  runner's `resolveTarget(scenario)` helper resolves the effective
+   *  target from these two fields. */
+  target?: ScenarioTarget;
   /** The natural-language prompt the agent receives as the first user
    *  message. */
   prompt: string;
@@ -80,8 +111,19 @@ export interface ScenarioStartEntry {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Public commit SHA the eval was run against, when available. */
   sha?: string;
-  /** URL the sample-app variant was served at (for log correlation). */
-  variantUrl: string;
+  /** URL the sample-app variant was served at (for log correlation).
+   *  **Optional** — present only on browser trials; Node trials omit
+   *  it (there is no static server). Legacy (pre-Node-seam) traces
+   *  always carried this field; `normalizeLegacyEntry` in trace.ts
+   *  synthesizes a `target` for those by defaulting the entry to
+   *  `{ kind: "browser", variantDistDir: "" }`, so downstream consumers
+   *  can branch on `target.kind` uniformly. */
+  variantUrl?: string;
+  /** Target discriminator for this trial — required on entries written by
+   *  current runners. Legacy traces are folded to a default
+   *  browser kind by `normalizeLegacyEntry` so `target` is always
+   *  populated by the time the grader / analytics layer reads it. */
+  target: ScenarioTarget;
 }
 
 export interface AssistantMsgEntry {

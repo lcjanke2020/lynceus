@@ -58,22 +58,70 @@ export interface SpawnOpts {
   onStderr?: (chunk: Buffer) => void;
 }
 
+// Vendor/eval credentials that must NEVER reach the spawned cdp-mcp
+// subprocess. The threat model has two layers:
+//
+//   1. Log/blast-radius widening: cdp-mcp's server has no need for any
+//      of these. Forwarding them grows the surface area for an
+//      accidental log dump (the original concern from an upstream review).
+//   2. Debuggee exfiltration (raised by an upstream Codex high-severity review):
+//      a Node `launch_node` debuggee inherits the MCP subprocess env by
+//      default and can `evaluate` `process.env.<credential>` directly.
+//      The result then persists into the trace via the tool_result
+//      entry, so a single Node eval trial under, e.g., EVAL_PROVIDER=
+//      openai/vertex would write the vendor key to disk in cleartext.
+//
+// Defense-in-depth: an explicit name set covers vendors we know about
+// today, plus a regex catch-all so future *_API_KEY / *_SECRET /
+// *_TOKEN / *_CREDENTIALS additions are blocked by construction. The
+// filter applies to BOTH inherited process.env AND caller-supplied
+// `opts.env` — the latter is plumbed by the harness runner and should
+// only carry config (CHROME_PATH today); we refuse to be the path that
+// re-introduces a credential just because the caller forgot.
+const ENV_DENYLIST_EXPLICIT = new Set<string>([
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "EVAL_LM_STUDIO_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+]);
+const ENV_DENYLIST_PATTERN = /_API_KEY$|_SECRET$|_TOKEN$|_CREDENTIALS$/i;
+
+function isCredentialEnvName(name: string): boolean {
+  return ENV_DENYLIST_EXPLICIT.has(name) || ENV_DENYLIST_PATTERN.test(name);
+}
+
+/** Pure helper: build the env map the cdp-mcp subprocess will receive.
+ *
+ *  - Drops any value that's not a string (process.env can carry
+ *    `undefined`; StdioClientTransport's env type is
+ *    `Record<string, string>`).
+ *  - Drops any name in the credential denylist (explicit set OR regex
+ *    pattern) — applied to BOTH inherited and caller-supplied entries.
+ *  - opts_env merges on top of inherited env, BUT denylisted opts_env
+ *    keys are still scrubbed; if you need to forward a name that
+ *    matches the pattern, change the pattern, don't bypass it.
+ *
+ *  Exported for L2 unit testing — the full transport-level path is
+ *  covered by L3 e2e tests against a real subprocess. */
+export function buildSanitizedEnv(
+  process_env: NodeJS.ProcessEnv,
+  opts_env: Record<string, string> | undefined,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process_env)) {
+    if (typeof v === "string" && !isCredentialEnvName(k)) env[k] = v;
+  }
+  for (const [k, v] of Object.entries(opts_env ?? {})) {
+    if (!isCredentialEnvName(k)) env[k] = v;
+  }
+  return env;
+}
+
 export async function spawnMcpServer(opts: SpawnOpts = {}): Promise<McpSubprocess> {
   const serverPath = opts.serverPath ?? "dist/index.js";
-  // StdioClientTransport's env type is `Record<string, string>`, but
-  // process.env can carry `undefined` values. Filter them out so TS is
-  // happy and the subprocess doesn't see the literal string "undefined".
-  // Also drop ANTHROPIC_API_KEY — the cdp-mcp server never needs it,
-  // and forwarding it widens the blast radius if the server ever logs
-  // env or its child process does (PR #15 review).
-  const ENV_DENYLIST = new Set(["ANTHROPIC_API_KEY"]);
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === "string" && !ENV_DENYLIST.has(k)) env[k] = v;
-  }
-  for (const [k, v] of Object.entries(opts.env ?? {})) {
-    env[k] = v;
-  }
+  const env = buildSanitizedEnv(process.env, opts.env);
 
   // StdioClientTransport takes a command + args and manages the child
   // process itself. We don't spawn separately — that would double-spawn.

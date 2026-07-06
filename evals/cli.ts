@@ -12,7 +12,12 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { runTrial, BudgetExceeded, type BudgetTracker } from "./harness/runner.js";
+import {
+  runTrial,
+  resolveTarget,
+  BudgetExceeded,
+  type BudgetTracker,
+} from "./harness/runner.js";
 import { rollupScenario, renderScoreboard } from "./harness/grader.js";
 import { lookupScenario, SCENARIOS } from "./scenarios/index.js";
 import {
@@ -324,10 +329,21 @@ async function main(): Promise<void> {
 
   for (const name of args.scenarios) {
     const scenario = lookupScenario(name);
-    if (!existsSync(scenario.variantDir)) {
-      throw new Error(
-        `Scenario '${name}' references variantDir '${scenario.variantDir}' which does not exist. Run 'npm run sample:build' (canonical) or build the scenario's variant first.`,
-      );
+    // Resolve the target up-front so the precondition check + runTrial
+    // wiring both branch on the same source of truth.
+    const target = resolveTarget(scenario);
+    if (target.kind === "browser") {
+      if (!existsSync(target.variantDistDir)) {
+        throw new Error(
+          `Scenario '${name}' references variantDir '${target.variantDistDir}' which does not exist. Run 'npm run sample:build' (canonical) or build the scenario's variant first.`,
+        );
+      }
+    } else {
+      if (!existsSync(target.script)) {
+        throw new Error(
+          `Scenario '${name}' references Node target.script '${target.script}' which does not exist. Run 'npm run sample-node:build' (or the scenario's prebuild) to produce the dist/ entry first.`,
+        );
+      }
     }
     const outcomes: TrialOutcome[] = [];
     for (let trial = 1; trial <= args.trials; trial++) {
@@ -337,7 +353,7 @@ async function main(): Promise<void> {
           trial,
           outDir,
           budget,
-          variantDistDir: scenario.variantDir,
+          target,
           ...(provider ? { adapter: provider } : {}),
         });
         outcomes.push(outcome);

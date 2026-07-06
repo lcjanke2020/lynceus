@@ -30,7 +30,7 @@
 // #15 review). Per-message tool_call / tool_result blocks are NOT cached
 // either — they're per-trial by definition.
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   effectiveTokenCap,
@@ -58,9 +58,11 @@ import {
   resolveBrowser,
   isChromeLauncherDefault,
 } from "../../src/util/browser-resolve.js";
+import { TOOL_KIND_SUPPORT } from "../../src/session/capabilities.js";
 import type {
   Scenario,
   ScenarioStartEntry,
+  ScenarioTarget,
   AssistantMsgEntry,
   AdapterRetryEntry,
   ToolCallEntry,
@@ -71,6 +73,7 @@ import type {
   ThinkingBlock,
   TraceEntry,
   TrialOutcome,
+  ReasoningConfig,
 } from "./types.js";
 
 export interface BudgetTracker {
@@ -86,9 +89,12 @@ export interface RunTrialOpts {
   outDir: string;
   /** Shared budget — runTrial reads ceilingUsd and updates spentUsd. */
   budget: BudgetTracker;
-  /** Variant root — the built dist/ directory of the scenario's
-   *  sample-app fork (e.g., examples/sample-app/dist for the canonical). */
-  variantDistDir: string;
+  /** Target discriminator — browser scenarios pass
+   *  `{ kind: "browser", variantDistDir }`; Node scenarios pass
+   *  `{ kind: "node", script }`. Replaced the earlier
+   *  `variantDistDir: string` field once the harness gained a Node-target
+   *  seam. cli.ts derives this via `resolveTarget(scenario)`. */
+  target: ScenarioTarget;
   /** Optional override for the spawned MCP server path. */
   serverPath?: string;
   /** Test seam — inject a fake vendor adapter for unit tests. Defaults
@@ -99,6 +105,44 @@ export interface RunTrialOpts {
    *  the cost-billing identity. */
   adapter?: VendorAdapter;
 }
+
+/** Resolve a scenario's effective target. Approach A (additive) — if
+ *  `scenario.target` is set, it wins; otherwise fall back to the legacy
+ *  `{ kind: "browser", variantDistDir: scenario.variantDir }` shape.
+ *  Throws when a scenario has neither field set (misconfig), which
+ *  cli.ts double-guards with an `existsSync` check before invoking the
+ *  runner.
+ *
+ *  Exposed at module scope so cli.ts can branch its `existsSync` check
+ *  on the resolved kind, and so the L2 test suite can pin the
+ *  invariant. */
+export function resolveTarget(scenario: Scenario): ScenarioTarget {
+  if (scenario.target !== undefined) return scenario.target;
+  if (scenario.variantDir !== undefined) {
+    return { kind: "browser", variantDistDir: scenario.variantDir };
+  }
+  throw new Error(
+    `Scenario '${scenario.name}' has neither 'target' nor 'variantDir' set — one is required.`,
+  );
+}
+
+/** Browser-only tool surface — derived once at module load from
+ *  `TOOL_KIND_SUPPORT` (src/session/capabilities.ts), so the
+ *  `NODE_SYSTEM_PROMPT` blocklist stays in sync with the runtime
+ *  capability gate by construction. Sorted for deterministic prompt
+ *  bytes (a non-deterministic prompt would defeat the cache_control
+ *  marker on the system block — see runner header §Cache control).
+ *
+ *  Cross-import precedent: this file already imports from
+ *  `../../src/util/browser-resolve.js` for the Chrome-binary resolver. */
+export const BROWSER_ONLY_TOOLS: readonly string[] = Object.entries(
+  TOOL_KIND_SUPPORT,
+)
+  .filter(
+    ([, kinds]) => kinds !== undefined && kinds.has("browser") && !kinds.has("node"),
+  )
+  .map(([name]) => name)
+  .sort();
 
 const SYSTEM_PROMPT_PREFIX = `You are a Software Development Engineer in Test (SDET) doing manual exploratory testing of a Chrome DevTools Protocol (CDP) MCP server. The server exposes a TypeScript-aware frontend debugger to AI agents. Your job is to verify the debugger works correctly across each step of a standard debug session.
 
@@ -127,8 +171,78 @@ Common mistakes to avoid:
 - Forgetting to call wait_for_pause AFTER clicking something that triggers a breakpoint.
 - Setting a breakpoint on a non-executable line (comments, blank lines, type declarations).`;
 
+/** System prompt for Node trials. Mirrors `SYSTEM_PROMPT_PREFIX`'s SDET
+ *  framing + test-plan structure, but the test plan prescribes Node-
+ *  specific tools (`launch_node` instead of `launch_chrome`/`navigate`/
+ *  `click`/`type_text`/etc.). The blocked browser-only tools are listed
+ *  explicitly at the end so the agent doesn't waste first-turn planning
+ *  on probes that will return `error: "unsupported_target"`.
+ *
+ *  The blocked list is sourced from `BROWSER_ONLY_TOOLS` at module load
+ *  — kept module-static (NOT per-trial) so the prompt bytes stay
+ *  identical across trials and the cache_control marker keeps reusing
+ *  the cached prefix. */
+export const NODE_SYSTEM_PROMPT = `You are a Software Development Engineer in Test (SDET) doing manual exploratory testing of a Chrome DevTools Protocol (CDP) MCP server. The server exposes a TypeScript-aware Node.js Inspector debugger to AI agents. Your job is to verify the debugger works correctly across each step of a standard Node debug session.
+
+For each scenario you receive, you have TWO goals — both are scored:
+
+  1. Test plan execution (PRIMARY). Exercise each step of the debugger workflow and verify each one performs as expected. The steps below are a semi-formal test plan; following them is the point of the work.
+
+  2. Bug identification (SECONDARY). The scenario describes a bug. Find it. The bug exists as a concrete target the test plan converges on — but if you identify the bug without exercising the debugger workflow (e.g., by reading source alone), the debugger has NOT been tested.
+
+Test plan, in order:
+  1. launch_node({ script }) — verify the child process starts under --inspect-brk and the session opens cleanly. The child is paused at entry on return; wait_for_pause picks up the entry pause.
+  2. wait_for_pause — drain the entry pause. Note: V8 does NOT emit a stable reason string for the entry pause (e.g. "Break on start" on some Node versions) — drive off hit_breakpoint_ids being empty, not reason equality.
+  3. list_scripts (optional) — verify source maps are discovered.
+  4. set_breakpoint on a TypeScript source line — verify source-map resolution works on the path you choose. Setting a breakpoint while paused at entry is fine and recommended.
+  5. resume — releases the entry pause; the script runs until the breakpoint hits.
+  6. wait_for_pause — verify your breakpoint actually fires. The canonical check is hit_breakpoint_ids containing the id returned by set_breakpoint; reason strings are NOT a reliable signal on Node.
+  7. get_call_stack / get_scope / evaluate — verify state inspection works at the pause point. Use evaluate to probe hypotheses about the bug at runtime.
+  8. get_node_output (for raw process.stdout / process.stderr) and/or get_console_logs (for console.log / console.error captured via Runtime.consoleAPICalled) — verify the output buffers populated. Both are kind-aware: get_console_logs works on browser sessions too; get_node_output is Node-only.
+  9. resume between investigations; close_session at the end — never leave the process paused.
+
+get_script_source is available and sometimes necessary (to choose where to break), but it is NOT a substitute for the steps above. The point of this work is to test that the debugger tools function correctly — not to demonstrate that a sufficiently smart agent can shortcut around them.
+
+When done, write a single short final answer naming the buggy file:line and the cause.
+
+NOT available in a Node session (calling these returns error: "unsupported_target"):
+${BROWSER_ONLY_TOOLS.map((t) => `  - ${t}`).join("\n")}
+
+Common mistakes to avoid:
+- Calling pause-only tools (get_call_stack, get_scope) without first establishing a pause.
+- Forgetting that launch_node starts the child paused at entry — wait_for_pause first, then resume.
+- Setting a breakpoint on a non-executable line (comments, blank lines, type declarations).`;
+
+/** Assemble the `scenario_start` trace entry from the inputs the runner
+ *  already has. Factored out of `runTrial` so the target-discriminator
+ *  branching (Node entries omit `variantUrl`; browser entries include it)
+ *  is unit-testable without spinning up the trial machinery. */
+export function buildScenarioStartEntry(args: {
+  scenario: Scenario;
+  trial: number;
+  adapter: VendorAdapter;
+  target: ScenarioTarget;
+  reasoning: ReasoningConfig;
+  resolvedEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+  variantUrl?: string;
+}): ScenarioStartEntry {
+  const { scenario, trial, adapter, target, reasoning, resolvedEffort, variantUrl } = args;
+  return {
+    t: "scenario_start",
+    ts: new Date().toISOString(),
+    scenario: scenario.name,
+    trial,
+    provider: adapter.vendor,
+    model: adapter.model,
+    reasoning,
+    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+    ...(variantUrl !== undefined ? { variantUrl } : {}),
+    target,
+  };
+}
+
 export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
-  const { scenario, trial, outDir, budget, variantDistDir } = opts;
+  const { scenario, trial, outDir, budget, target } = opts;
 
   // Budget gate — bail BEFORE any API spend if we're already over.
   if (budget.spentUsd >= budget.ceilingUsd) {
@@ -162,39 +276,63 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
   }
 
   const startMs = Date.now();
-  const server = await startStaticServer(variantDistDir);
-  const variantUrl = server.url;
 
-  // Resolve the Chrome/Chromium binary the spawned MCP server should drive.
-  // Shared with L3 (test/e2e/setup/global.ts) — both layers go through one
-  // resolution path so they can't test against different protocol revisions
-  // (docs/test-eval-plan.md §L3, plan rev 3 Cursor open-Q-2 resolution).
-  // The path is plumbed to the subprocess via CHROME_PATH; chrome-launcher
-  // honors it natively, so production launchChrome (src/session/browser.ts)
-  // doesn't need to read CDP_TEST_BROWSER_PATH itself. If the resolver
-  // returns the chrome-launcher-default marker (only when CDP_TEST_BROWSER=
-  // chrome and no override is set), omit CHROME_PATH so chrome-launcher
-  // runs its own detection — same policy as L3.
-  const browser = resolveBrowser();
-  const extraEnv: Record<string, string> = isChromeLauncherDefault(browser)
-    ? {}
-    : { CHROME_PATH: browser.binaryPath };
-  // Opt-in: run the model-launched Chromium WITH the sandbox. Default OFF —
-  // the automation default is --no-sandbox (docs/chromium-sandboxing.md). The
-  // model controls launch_chrome's `sandbox` arg and normally omits it, so to
-  // run a whole suite sandbox-on without prompt-injecting every scenario we
-  // plumb CDP_SANDBOX=true to the server, which uses it as the launch default.
-  // Use only on a host with a working sandbox path (AppArmor userns allowance
-  // or SUID chrome_sandbox helper).
-  if (process.env.EVAL_SANDBOX === "true" || process.env.EVAL_SANDBOX === "1") {
-    extraEnv.CDP_SANDBOX = "true";
+  // Branch on the target kind: browser trials spin up a port-0 static
+  // server + resolve a Chrome binary; Node trials skip both (the agent
+  // calls `launch_node` directly with the script path).
+  let server: { url: string; close(): Promise<void> } | null = null;
+  let variantUrl: string | undefined;
+  let extraEnv: Record<string, string> = {};
+  if (target.kind === "browser") {
+    server = await startStaticServer(target.variantDistDir);
+    variantUrl = server.url;
+
+    // Resolve the Chrome/Chromium binary the spawned MCP server should drive.
+    // Shared with L3 (test/e2e/setup/global.ts) — both layers go through one
+    // resolution path so they can't test against different protocol revisions
+    // (docs/test-eval-plan.md §L3, plan rev 3 Cursor open-Q-2 resolution).
+    // The path is plumbed to the subprocess via CHROME_PATH; chrome-launcher
+    // honors it natively, so production launchChrome (src/session/browser.ts)
+    // doesn't need to read CDP_TEST_BROWSER_PATH itself. If the resolver
+    // returns the chrome-launcher-default marker (only when CDP_TEST_BROWSER=
+    // chrome and no override is set), omit CHROME_PATH so chrome-launcher
+    // runs its own detection — same policy as L3.
+    const browser = resolveBrowser();
+    extraEnv = isChromeLauncherDefault(browser)
+      ? {}
+      : { CHROME_PATH: browser.binaryPath };
+    // Opt-in: run the model-launched Chromium WITH the sandbox. Default OFF —
+    // the automation default is --no-sandbox (docs/chromium-sandboxing.md). The
+    // model controls launch_chrome's `sandbox` arg and normally omits it, so to
+    // run a whole suite sandbox-on without prompt-injecting every scenario we
+    // plumb CDP_SANDBOX=true to the server, which uses it as the launch default.
+    // Use only on a host with a working sandbox path (AppArmor userns allowance
+    // or SUID chrome_sandbox helper). Browser-only: a Node trial never launches
+    // Chromium, so this stays inside the browser branch — Node targets must not
+    // inherit CDP_SANDBOX.
+    if (process.env.EVAL_SANDBOX === "true" || process.env.EVAL_SANDBOX === "1") {
+      extraEnv.CDP_SANDBOX = "true";
+      process.stderr.write(
+        `[eval] EVAL_SANDBOX set — launching Chromium with the sandbox on (CDP_SANDBOX=true)\n`,
+      );
+    }
     process.stderr.write(
-      `[eval] EVAL_SANDBOX set — launching Chromium with the sandbox on (CDP_SANDBOX=true)\n`,
+      `[eval] resolved browser: ${browser.binaryPath} (source=${browser.source})\n`,
+    );
+  } else {
+    // Node trial — double-guard the script path (cli.ts also checks).
+    // A stale dist/ between cli.ts startup and the runner is a real
+    // concurrent-build hazard.
+    if (!existsSync(target.script)) {
+      throw new Error(
+        `runner: Node target.script '${target.script}' does not exist. Run 'npm run sample-node:build' (or the scenario's prebuild) first.`,
+      );
+    }
+    process.stderr.write(
+      `[eval] node trial — no browser resolution (script=${target.script})\n`,
     );
   }
-  process.stderr.write(
-    `[eval] resolved browser: ${browser.binaryPath} (source=${browser.source})\n`,
-  );
+
   const mcp = await spawnMcpServer({
     ...(opts.serverPath ? { serverPath: opts.serverPath } : {}),
     env: extraEnv,
@@ -204,8 +342,11 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
   // cache_control so the full system + tools span hits cache on every
   // trial after the first. The per-trial variant URL goes into the
   // first user message below, NOT into the system block — see header
-  // note for the cache-key rationale.
-  const systemPrefix = scenario.systemPromptOverride ?? SYSTEM_PROMPT_PREFIX;
+  // note for the cache-key rationale. Node trials use the Node-specific
+  // prompt by default.
+  const defaultPrefix =
+    target.kind === "node" ? NODE_SYSTEM_PROMPT : SYSTEM_PROMPT_PREFIX;
+  const systemPrefix = scenario.systemPromptOverride ?? defaultPrefix;
   const system: TextBlock[] = [
     {
       type: "text",
@@ -224,30 +365,36 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
       ? tierToEffort(REASONING.level)
       : undefined;
 
-  const startEntry: ScenarioStartEntry = {
-    t: "scenario_start",
-    ts: new Date().toISOString(),
-    scenario: scenario.name,
+  const startEntry: ScenarioStartEntry = buildScenarioStartEntry({
+    scenario,
     trial,
-    provider: adapter.vendor,
-    model: adapter.model,
+    adapter,
+    target,
     reasoning: REASONING,
-    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-    variantUrl,
-  };
+    ...(resolvedEffort !== undefined ? { resolvedEffort } : {}),
+    ...(variantUrl !== undefined ? { variantUrl } : {}),
+  });
   writer.write(startEntry);
   trace.push(startEntry);
 
-  // First user message carries only the per-trial URL + the scenario's
+  // First user message carries the target identifier + the scenario's
   // natural-language prompt. The scenario.name is intentionally NOT
   // surfaced to the model — names like "network-bug", "console-error",
   // "worker-bug" are diagnostic labels that telegraph the answer (Codex
   // re-review on PR #15). Correlation between transcript and trace is
   // already preserved via the scenario_start NDJSON entry.
+  //
+  // Branch on target.kind: browser trials announce `Page under test:
+  // ${url}`; Node trials announce `Node script under test: ${script}`
+  // so the agent can pass the path straight to `launch_node({ script })`.
+  const targetLine =
+    target.kind === "browser"
+      ? `Page under test: ${variantUrl}`
+      : `Node script under test: ${target.script}`;
   const messages: MessageParam[] = [
     {
       role: "user",
-      content: `Page under test: ${variantUrl}\n\n${scenario.prompt}`,
+      content: `${targetLine}\n\n${scenario.prompt}`,
     },
   ];
 
@@ -524,10 +671,14 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
     } catch {
       /* ignore */
     }
-    try {
-      await server.close();
-    } catch {
-      /* ignore */
+    // Static server is only present on browser trials — Node trials
+    // never started one. Guard so we don't fault-on-null on Node.
+    if (server !== null) {
+      try {
+        await server.close();
+      } catch {
+        /* ignore */
+      }
     }
     // Adapter-level scenario-scoped cleanup (#51). The Vertex adapter
     // implements this to delete the trial's `cachedContents` resource.
