@@ -102,11 +102,11 @@ export function registerSessionTools(server: McpServer) {
         .array(z.string())
         .optional()
         .describe("Arguments passed to the script after the script path. Do not include --inspect or --inspect-brk here."),
-      cwd: z.string().optional().describe("Working directory for the Node process (default: cdp-mcp process cwd)."),
+      cwd: z.string().optional().describe("Working directory for the Node process (default: lynceus process cwd)."),
       env: z
         .record(z.string())
         .optional()
-        .describe("Environment variable overrides merged over the cdp-mcp process environment. The launched script inherits other cdp-mcp env vars."),
+        .describe("Environment variable overrides merged over the lynceus process environment. The launched script inherits other lynceus env vars."),
       inspect_mode: z
         .enum(["inspect", "inspect-brk"])
         .optional()

@@ -52,7 +52,7 @@ function notify(method, params) {
 const init = await send("initialize", {
   protocolVersion: "2024-11-05",
   capabilities: {},
-  clientInfo: { name: "cdp-mcp-smoke", version: "0.0.1" },
+  clientInfo: { name: "lynceus-smoke", version: "0.0.1" },
 });
 console.log("initialize:", init.result.serverInfo);
 notify("notifications/initialized");

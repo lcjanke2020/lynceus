@@ -119,7 +119,7 @@ Hosts where `sandbox: true` has been verified working against this project, with
 
 | Host | OS | Arch | `sandbox: true` | AppArmor profile | Notes |
 |---|---|---|---|---|---|
-| Ubuntu 24.04 arm64 (Parallels VM) | Ubuntu 24.04 | arm64 | ✓ | `/etc/apparmor.d/cdp-mcp-chromium` (named-unconfined, mirrors Ubuntu's stock `chrome` / `msedge` / `brave`) | `kernel.apparmor_restrict_unprivileged_userns = 0` was set as a side effect of enabling Bubblewrap, so the kernel-level userns restriction is already off system-wide. The AppArmor profile gives Playwright Chromium a stable named label (instead of `unconfined`) and grants `userns,` explicitly, so `sandbox: true` keeps working even if a future kernel/package update flips the global knob back to `1`. |
+| Ubuntu 24.04 arm64 (Parallels VM) | Ubuntu 24.04 | arm64 | ✓ | `/etc/apparmor.d/lynceus-chromium` (named-unconfined, mirrors Ubuntu's stock `chrome` / `msedge` / `brave`) | `kernel.apparmor_restrict_unprivileged_userns = 0` was set as a side effect of enabling Bubblewrap, so the kernel-level userns restriction is already off system-wide. The AppArmor profile gives Playwright Chromium a stable named label (instead of `unconfined`) and grants `userns,` explicitly, so `sandbox: true` keeps working even if a future kernel/package update flips the global knob back to `1`. |
 
 When adding a new host to this table:
 
@@ -129,17 +129,17 @@ When adding a new host to this table:
    abi <abi/4.0>,
    include <tunables/global>
 
-   profile cdp-mcp-chromium /path/to/chromium flags=(unconfined) {
+   profile lynceus-chromium /path/to/chromium flags=(unconfined) {
      userns,
-     include if exists <local/cdp-mcp-chromium>
+     include if exists <local/lynceus-chromium>
    }
    ```
-   Load with `sudo apparmor_parser -r /etc/apparmor.d/cdp-mcp-chromium`. The profile auto-loads at boot from `/etc/apparmor.d/`.
+   Load with `sudo apparmor_parser -r /etc/apparmor.d/lynceus-chromium`. The profile auto-loads at boot from `/etc/apparmor.d/`.
 3. Verify the running browser process is labelled correctly:
    ```sh
    cat /proc/<chromium-pid>/attr/current
    ```
-   Expect the profile name (e.g. `cdp-mcp-chromium (unconfined)`), not `unconfined` alone.
+   Expect the profile name (e.g. `lynceus-chromium (unconfined)`), not `unconfined` alone.
 4. Add a row to the table above.
 
 Other hosts to characterize as they come online: Fedora — Fedora uses SELinux rather than AppArmor and ships userns enabled by default, so `sandbox: true` is expected to work without host-side profile work. The `dnf install bubblewrap` path is also first-class on Fedora.

@@ -180,7 +180,7 @@ EVAL_PROVIDER=openai OPENAI_API_KEY=… EVAL_OPENAI_MODEL=gpt-5.5 EVAL_REASONING
 # $0.40, output $12/$18 (per the pricing-page footnote: when input
 # exceeds 200K, ALL tokens — input AND output — bill at long-context
 # rates). Storage cost on the cachedContents resource itself is NOT
-# modeled (negligible at cdp-mcp's TTL × prefix size; see
+# modeled (negligible at lynceus's TTL × prefix size; see
 # evals/harness/model.ts PRICING_CATALOG.vertex header for the
 # rationale). PREVIEW pricing — operator must verify against
 # cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing

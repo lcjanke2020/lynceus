@@ -3,12 +3,14 @@
 // stdout is reserved for JSON-RPC framing — anything we write there will
 // corrupt the protocol. All logging goes to stderr.
 
+import { envWithFallback } from "./env.js";
+
 type Level = "debug" | "info" | "warn" | "error";
 
 const LEVELS: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 function envLevel(): Level {
-  const raw = process.env.CDP_MCP_LOG?.toLowerCase();
+  const raw = envWithFallback("LYNCEUS_LOG", "CDP_MCP_LOG")?.toLowerCase();
   if (raw === "debug" || raw === "info" || raw === "warn" || raw === "error") return raw;
   return "info";
 }

@@ -2,11 +2,11 @@
 
 **Last updated: 2026-07-06**
 
-How `cdp-mcp` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
+How `lynceus` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
 ## At a glance
 
-`cdp-mcp` is a stdio MCP server. An AI agent (Claude Code, Copilot CLI, …) launches it as a subprocess, sends MCP `tools/call` requests, and the server proxies them to a real Chrome/Chromium process through the Chrome DevTools Protocol (CDP). The server is **TS-aware**: coordinates the agent sends and receives are in TypeScript source (1-based lines, 0-based columns), translated to/from generated JS via the source maps Chrome already loads when it parses the bundle.
+`lynceus` is a stdio MCP server. An AI agent (Claude Code, Copilot CLI, …) launches it as a subprocess, sends MCP `tools/call` requests, and the server proxies them to a real Chrome/Chromium process through the Chrome DevTools Protocol (CDP). The server is **TS-aware**: coordinates the agent sends and receives are in TypeScript source (1-based lines, 0-based columns), translated to/from generated JS via the source maps Chrome already loads when it parses the bundle.
 
 Three big pieces:
 
@@ -75,7 +75,7 @@ The session-mode design itself is locked in at [`node-session-design.md`](./node
 
 | Directory | Files | Responsibility | Component README |
 |---|---|---|---|
-| [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `cdp-mcp/contract` (LocatorSpec) | — |
+| [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `lynceus/contract` (LocatorSpec) | — |
 | [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `node.ts`, `debugger.ts`, `capabilities.ts`, `pause.ts`, `buffers.ts` | Singleton lifecycle, pause state, ring buffers (console / network / Node stdio); browser + Node attach kinds share `connectDebugger` | [README](../src/session/README.md) |
 | [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing; kind-aware source-map fetch (browser via `Network.loadNetworkResource`, Node via `file://` on loopback only) | [README](../src/sourcemap/README.md) |
 | [`src/tools/`](../src/tools/) | 12 tool files + `_register.ts` + `_locator_runtime.ts` | 51 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` | [README](../src/tools/README.md) |

@@ -402,7 +402,7 @@ export const PRICING_CATALOG: PricingCatalog = {
     // What this row INTENTIONALLY does NOT model: `cachedContents`
     // storage cost. Vertex bills cached-content storage separately
     // from cached-token reads — a small per-Mtok-per-hour rate
-    // amortized over the cache's TTL. With cdp-mcp's 30-min TTL,
+    // amortized over the cache's TTL. With lynceus's 30-min TTL,
     // ~5K-token prefix, and per-trial cache lifetime, this is a
     // rounding error (≤ $0.0001/trial at published rates) and lives
     // below the cost-math precision the harness reports. Revisit if

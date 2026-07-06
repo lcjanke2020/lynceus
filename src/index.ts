@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "./server.js";
 import { getSession, sessionState } from "./session/state.js";
 import { log } from "./util/log.js";
+import { envWithFallback } from "./util/env.js";
 
 interface StdioMode {
   transport: "stdio";
@@ -36,7 +37,7 @@ export interface SseClient {
 function parseArgs(args: string[]): ServerMode {
   let port: number | undefined;
   let host = "127.0.0.1";
-  let allowRemote = process.env.CDP_MCP_ALLOW_REMOTE === "1";
+  let allowRemote = envWithFallback("LYNCEUS_ALLOW_REMOTE", "CDP_MCP_ALLOW_REMOTE") === "1";
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -48,15 +49,15 @@ function parseArgs(args: string[]): ServerMode {
       process.stderr.write(
         [
           "Usage:",
-          "  cdp-mcp                                  # stdio MCP transport",
-          "  cdp-mcp --port 9719                      # SSE MCP transport on 127.0.0.1:9719",
-          "  cdp-mcp --host 0.0.0.0 --port 9719 --allow-remote",
+          "  lynceus                                  # stdio MCP transport",
+          "  lynceus --port 9719                      # SSE MCP transport on 127.0.0.1:9719",
+          "  lynceus --host 0.0.0.0 --port 9719 --allow-remote",
           "",
           "SSE mode caveats:",
           "  - Single-client only: concurrent /sse connections race on a",
           "    shared browser session (sessionState is process-global).",
           "  - Non-loopback bind requires --allow-remote (or",
-          "    CDP_MCP_ALLOW_REMOTE=1). MCP tools include in-page eval and",
+          "    LYNCEUS_ALLOW_REMOTE=1). MCP tools include in-page eval and",
           "    server-filesystem writes; exposing them remotely without",
           "    further auth is a deliberate operator decision.",
           "  - Host / Origin headers are validated against the loopback",
@@ -112,7 +113,7 @@ function parseArgs(args: string[]): ServerMode {
 
   if (!isLoopbackHost(host) && !allowRemote) {
     throw new Error(
-      `Refusing to bind SSE transport on non-loopback host '${host}' without --allow-remote (or CDP_MCP_ALLOW_REMOTE=1). MCP tools include in-page eval and server-filesystem writes; remote exposure is opt-in.`,
+      `Refusing to bind SSE transport on non-loopback host '${host}' without --allow-remote (or LYNCEUS_ALLOW_REMOTE=1). MCP tools include in-page eval and server-filesystem writes; remote exposure is opt-in.`,
     );
   }
 
@@ -138,13 +139,13 @@ const DEFAULT_SSE_KEEPALIVE_MS = 25_000;
 // body-idle timeout (e.g. undici inside GitHub Copilot CLI tears the stream
 // down after ~12 min with "Body Timeout Error"). A periodic SSE comment frame
 // (`: ...\n\n`) is a no-op per the spec but resets that idle timer. Tunable via
-// CDP_MCP_SSE_KEEPALIVE_MS (non-negative integer ms; 0 disables). See issue #1.
+// LYNCEUS_SSE_KEEPALIVE_MS (non-negative integer ms; 0 disables). See issue #1.
 function getKeepaliveMs(): number {
-  const raw = process.env.CDP_MCP_SSE_KEEPALIVE_MS;
+  const raw = envWithFallback("LYNCEUS_SSE_KEEPALIVE_MS", "CDP_MCP_SSE_KEEPALIVE_MS");
   if (raw === undefined || raw === "") return DEFAULT_SSE_KEEPALIVE_MS;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 0) {
-    log.warn("invalid CDP_MCP_SSE_KEEPALIVE_MS; using default", { value: raw, default: DEFAULT_SSE_KEEPALIVE_MS });
+    log.warn("invalid SSE keepalive interval; using default", { value: raw, default: DEFAULT_SSE_KEEPALIVE_MS });
     return DEFAULT_SSE_KEEPALIVE_MS;
   }
   return value;
@@ -165,7 +166,7 @@ async function runStdioServer(): Promise<void> {
   const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  log.info("cdp-mcp server started", { pid: process.pid });
+  log.info("lynceus server started", { pid: process.pid });
 
   const shutdown = async (signal: string) => {
     log.info(`shutdown signal: ${signal}`);
@@ -214,7 +215,7 @@ async function runSseServer(mode: SseMode): Promise<void> {
   });
 
   await listen(httpServer, mode);
-  log.info("cdp-mcp SSE server started", {
+  log.info("lynceus SSE server started", {
     pid: process.pid,
     url: `http://${mode.host}:${mode.port}/sse`,
     allowRemote: mode.allowRemote,

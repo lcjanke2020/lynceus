@@ -1,11 +1,11 @@
 # Linux: Run as a Persistent Service (systemd)
 
-Register `cdp-mcp` as a systemd user service so it starts automatically on login
+Register `lynceus` as a systemd user service so it starts automatically on login
 and exposes the MCP SSE endpoint on `127.0.0.1:9719`. If you enable lingering,
 the service can also start at boot before an interactive login.
 
 Persistent service mode is useful for MCP clients that support SSE because the
-`cdp-mcp` process and its browser/CDP session can survive MCP client restarts or
+`lynceus` process and its browser/CDP session can survive MCP client restarts or
 reconnects. It does **not** persist state across service-process restarts.
 
 > Security note: the local SSE endpoint has no authentication. MCP tools include
@@ -13,6 +13,12 @@ reconnects. It does **not** persist state across service-process restarts.
 > run a persistent service on trusted single-user machines. Be especially careful
 > with `loginctl enable-linger` on shared hosts because it widens the service's
 > exposure window beyond your interactive login session.
+
+> **Migrating from cdp-mcp?** An existing `cdp-mcp.service` keeps working — no
+> action required. To adopt the `lynceus` names used below, remove the old unit
+> first: `systemctl --user disable --now cdp-mcp.service` and
+> `rm ~/.config/systemd/user/cdp-mcp.service`, then `npm install -g lynceus` and
+> follow the steps below.
 
 ## Contents
 
@@ -33,10 +39,10 @@ reconnects. It does **not** persist state across service-process restarts.
 Requires Node.js 20+ and a local Chrome/Chromium browser.
 
 ```bash
-npm install -g cdp-mcp
+npm install -g lynceus
 ```
 
-Verify with `cdp-mcp --help`. The package ships prebuilt `dist/`, so there is no
+Verify with `lynceus --help`. The package ships prebuilt `dist/`, so there is no
 build step and no repo checkout needed.
 
 If `launch_chrome` cannot find Chrome/Chromium automatically, set `CHROME_PATH`
@@ -67,30 +73,30 @@ Run this from any directory:
 # If you use fnm, nvm, or another Node version manager, set these variables to
 # stable paths before running this snippet. Example:
 # NODE_BIN="$HOME/.local/share/fnm/aliases/default/bin/node"
-# CDP_SCRIPT="$HOME/.local/share/fnm/aliases/default/bin/cdp-mcp"
+# LYNCEUS_SCRIPT="$HOME/.local/share/fnm/aliases/default/bin/lynceus"
 NODE_BIN="${NODE_BIN:-$(command -v node)}"
-CDP_SCRIPT="${CDP_SCRIPT:-$(command -v cdp-mcp)}"
+LYNCEUS_SCRIPT="${LYNCEUS_SCRIPT:-$(command -v lynceus)}"
 CHROME_PATH="${CHROME_PATH:-}"
 
 if [ -z "$NODE_BIN" ]; then
   echo "Error: node not found in PATH. Install Node 20+ first." >&2
   exit 1
 fi
-if [ -z "$CDP_SCRIPT" ]; then
-  echo "Error: cdp-mcp not found. Run 'npm install -g cdp-mcp' first." >&2
+if [ -z "$LYNCEUS_SCRIPT" ]; then
+  echo "Error: lynceus not found. Run 'npm install -g lynceus' first." >&2
   exit 1
 fi
 
 NODE_DIR="$(dirname "$NODE_BIN")"
 mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/cdp-mcp.service << EOF
+cat > ~/.config/systemd/user/lynceus.service << EOF
 [Unit]
-Description=cdp-mcp browser MCP server (SSE on port 9719)
+Description=lynceus browser MCP server (SSE on port 9719)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart="${NODE_BIN}" "${CDP_SCRIPT}" --port 9719
+ExecStart="${NODE_BIN}" "${LYNCEUS_SCRIPT}" --port 9719
 Restart=on-failure
 RestartSec=5
 Environment="PATH=${NODE_DIR}:/usr/local/bin:/usr/bin:/bin"
@@ -101,7 +107,7 @@ WantedBy=default.target
 EOF
 ```
 
-The unit invokes `node` directly with the `cdp-mcp` script path. That makes the
+The unit invokes `node` directly with the `lynceus` script path. That makes the
 `NODE_BIN` override authoritative even when your shell uses a Node version
 manager. The `ExecStart` and `Environment` values are double-quoted so systemd
 treats a path containing spaces as a single token rather than splitting it.
@@ -110,20 +116,20 @@ treats a path containing spaces as a single token rather than splitting it.
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now cdp-mcp.service
+systemctl --user enable --now lynceus.service
 ```
 
 ## 5. Verify
 
 ```bash
-systemctl --user status cdp-mcp.service
+systemctl --user status lynceus.service
 ss -tlnp | grep 9719
 curl -s --max-time 2 http://127.0.0.1:9719/sse | head -1
 ```
 
 The `curl` command should print an SSE `event:` line. The stream stays open by
 design. The server also sends periodic SSE keepalive comments by default; tune
-with `CDP_MCP_SSE_KEEPALIVE_MS` only if your MCP client needs a different idle
+with `LYNCEUS_SSE_KEEPALIVE_MS` only if your MCP client needs a different idle
 interval.
 
 ## 6. Configure an MCP client
@@ -139,7 +145,7 @@ For example, clients that use JSON MCP server config commonly use:
 ```json
 {
   "mcpServers": {
-    "cdp-mcp": {
+    "lynceus": {
       "type": "sse",
       "url": "http://127.0.0.1:9719/sse"
     }
@@ -159,24 +165,24 @@ again.
 ## 7. Logs
 
 ```bash
-journalctl --user -u cdp-mcp.service -f
-journalctl --user -u cdp-mcp.service -n 100
+journalctl --user -u lynceus.service -f
+journalctl --user -u lynceus.service -n 100
 ```
 
 ## 8. Stop / uninstall
 
 ```bash
-systemctl --user stop cdp-mcp.service
-systemctl --user disable cdp-mcp.service
-rm ~/.config/systemd/user/cdp-mcp.service
+systemctl --user stop lynceus.service
+systemctl --user disable lynceus.service
+rm ~/.config/systemd/user/lynceus.service
 systemctl --user daemon-reload
 ```
 
 ## 9. Upgrade
 
 ```bash
-npm install -g cdp-mcp@latest
-systemctl --user restart cdp-mcp.service
+npm install -g lynceus@latest
+systemctl --user restart lynceus.service
 ```
 
 Restart or reconnect your MCP client after a server upgrade so it reloads tool
@@ -212,7 +218,7 @@ file, and run:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user restart cdp-mcp.service
+systemctl --user restart lynceus.service
 ```
 
 For Chromium sandbox flags (`--no-sandbox`, AppArmor, snap confinement) and known
@@ -223,11 +229,11 @@ host-OS launch gaps, see [chromium-sandboxing.md](./chromium-sandboxing.md) and
 
 | Symptom | Fix |
 |---|---|
-| Service exits immediately | Check `journalctl --user -u cdp-mcp.service -n 100`; usually `cdp-mcp` is not installed, Node is too old, or a version-manager path moved |
-| Port 9719 is already in use | Compare `systemctl --user show -p MainPID --value cdp-mcp.service` with `ss -tlnp \| grep 9719`, then stop the other process or change the port |
+| Service exits immediately | Check `journalctl --user -u lynceus.service -n 100`; usually `lynceus` is not installed, Node is too old, or a version-manager path moved |
+| Port 9719 is already in use | Compare `systemctl --user show -p MainPID --value lynceus.service` with `ss -tlnp \| grep 9719`, then stop the other process or change the port |
 | MCP client rejects the config | Confirm the client supports SSE MCP servers and include both `"type": "sse"` and the `/sse` URL if your client uses JSON config |
 | `launch_chrome` cannot find Chrome | Set `CHROME_PATH` in the unit file and restart the service; on Linux ARM64, try Playwright-cached Chromium (`~/.cache/ms-playwright/chromium-*/chrome-linux/chrome`) |
 | Service not starting after reboot | Enable lingering with `sudo loginctl enable-linger "$USER"` |
-| Node not found after reboot with fnm/nvm | Version-manager shell paths can be ephemeral. Recreate the unit with stable `NODE_BIN` and `CDP_SCRIPT` paths, or install with a system Node |
+| Node not found after reboot with fnm/nvm | Version-manager shell paths can be ephemeral. Recreate the unit with stable `NODE_BIN` and `LYNCEUS_SCRIPT` paths, or install with a system Node |
 | `Failed to connect to bus` over SSH | Run `export XDG_RUNTIME_DIR=/run/user/$(id -u)` before using `systemctl --user` |
 | `already_session` after reconnecting | The prior browser/CDP session is still alive. Resume it, or call `close_session` before starting fresh |

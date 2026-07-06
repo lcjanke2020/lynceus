@@ -1,7 +1,8 @@
 // Issue #1, Bug 2: idle SSE streams were torn down by the HTTP client's
-// body-idle timeout (undici inside Copilot CLI, ~12 min) because cdp-mcp sent
+// body-idle timeout (undici inside Copilot CLI, ~12 min) because lynceus sent
 // no keepalive. startSseConnection() now writes periodic `: keepalive\n\n`
-// SSE comment frames, tunable via CDP_MCP_SSE_KEEPALIVE_MS.
+// SSE comment frames, tunable via LYNCEUS_SSE_KEEPALIVE_MS (the deprecated
+// CDP_MCP_SSE_KEEPALIVE_MS still works via the env fallback).
 //
 // This drives the real handleSseRequest wiring over a loopback HTTP server
 // (validateHostOrigin disabled, mirroring a --allow-remote bind) with the
@@ -42,6 +43,7 @@ afterEach(async () => {
   }
   sessionState.reset();
   delete process.env.CDP_MCP_SSE_KEEPALIVE_MS;
+  delete process.env.LYNCEUS_SSE_KEEPALIVE_MS;
 });
 
 describe("SSE keepalive (issue #1)", () => {
@@ -126,5 +128,50 @@ describe("SSE keepalive (issue #1)", () => {
 
     expect(buffer).toContain("event: endpoint");
     expect(buffer).not.toContain(": keepalive");
+  });
+
+  it("honors the new LYNCEUS_SSE_KEEPALIVE_MS name", async () => {
+    process.env.LYNCEUS_SSE_KEEPALIVE_MS = "50";
+
+    httpServer = createServer((req, res) => {
+      void handleSseRequest({
+        req,
+        res,
+        clients,
+        host: "127.0.0.1",
+        port: 0,
+        validateHostOrigin: false,
+        allowedHosts: new Set(),
+        allowedOrigins: new Set(),
+      });
+    });
+    await new Promise<void>((resolve) => httpServer!.listen(0, "127.0.0.1", () => resolve()));
+    const port = (httpServer!.address() as AddressInfo).port;
+
+    let buffer = "";
+    const sawKeepalive = new Promise<void>((resolve, reject) => {
+      clientReq = request({ host: "127.0.0.1", port, path: "/sse", method: "GET" }, (res) => {
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          buffer += chunk;
+          if (buffer.includes(": keepalive")) resolve();
+        });
+        res.on("error", reject);
+      });
+      clientReq.on("error", reject);
+      clientReq.end();
+    });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("no keepalive frame within 2s")), 2000);
+    });
+    try {
+      await Promise.race([sawKeepalive, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    expect(buffer).toContain(": keepalive");
   });
 });

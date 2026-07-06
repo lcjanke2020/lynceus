@@ -58,7 +58,7 @@ export const TOOL_KIND_SUPPORT: Partial<Record<string, ReadonlySet<SessionKind>>
   get_cookies: BROWSER_ONLY,
   set_cookies: BROWSER_ONLY,
   // Node-only output buffer. The browser-session equivalent (Chrome stdio)
-  // isn't exposed by cdp-mcp at all, so calling get_node_output against a
+  // isn't exposed by lynceus at all, so calling get_node_output against a
   // browser session is a category error, not a "wrong session" mistake.
   get_node_output: NODE_ONLY,
 };

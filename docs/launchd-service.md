@@ -1,16 +1,23 @@
 # macOS: Run as a Persistent Service (launchd)
 
-Register `cdp-mcp` as a launchd user agent so it starts automatically on login
+Register `lynceus` as a launchd user agent so it starts automatically on login
 and exposes the MCP SSE endpoint on `127.0.0.1:9719`.
 
 Persistent service mode is useful for MCP clients that support SSE because the
-`cdp-mcp` process and its browser/CDP session can survive MCP client restarts or
+`lynceus` process and its browser/CDP session can survive MCP client restarts or
 reconnects. It does **not** persist state across service-process restarts.
 
 > Security note: the local SSE endpoint has no authentication. MCP tools include
 > in-page JavaScript evaluation and filesystem writes via screenshot paths. Only
 > run a persistent service on trusted single-user machines, and do not bind it to
 > non-loopback interfaces unless you understand the `--allow-remote` exposure.
+
+> **Migrating from cdp-mcp?** An existing `cdp-mcp` service keeps working under
+> its old Label `io.github.lcjanke2020.cdp-mcp` and `~/Library/Logs/cdp-mcp/`
+> paths — no action required. To adopt the `lynceus` names used below, remove the
+> old agent first: `launchctl bootout gui/$UID/io.github.lcjanke2020.cdp-mcp` and
+> `rm ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist`, then
+> `npm install -g lynceus` and follow the steps below.
 
 ## Contents
 
@@ -29,10 +36,10 @@ reconnects. It does **not** persist state across service-process restarts.
 Requires Node.js 20+ and a local Chrome/Chromium browser.
 
 ```bash
-npm install -g cdp-mcp
+npm install -g lynceus
 ```
 
-Verify with `cdp-mcp --help`. The package ships prebuilt `dist/`, so there is no
+Verify with `lynceus --help`. The package ships prebuilt `dist/`, so there is no
 build step and no repo checkout needed.
 
 If `launch_chrome` cannot find Chrome/Chromium automatically, set `CHROME_PATH`
@@ -46,17 +53,17 @@ Run this from any directory:
 # If you use fnm, nvm, or another Node version manager, set these variables to
 # stable paths before running this snippet. Example:
 # NODE_BIN="$HOME/.local/share/fnm/aliases/default/bin/node"
-# CDP_SCRIPT="$HOME/.local/share/fnm/aliases/default/bin/cdp-mcp"
+# LYNCEUS_SCRIPT="$HOME/.local/share/fnm/aliases/default/bin/lynceus"
 NODE_BIN="${NODE_BIN:-$(command -v node)}"
-CDP_SCRIPT="${CDP_SCRIPT:-$(command -v cdp-mcp)}"
+LYNCEUS_SCRIPT="${LYNCEUS_SCRIPT:-$(command -v lynceus)}"
 CHROME_PATH="${CHROME_PATH:-}"
 
 if [ -z "$NODE_BIN" ]; then
   echo "Error: node not found in PATH. Install Node 20+ first." >&2
   exit 1
 fi
-if [ -z "$CDP_SCRIPT" ]; then
-  echo "Error: cdp-mcp not found. Run 'npm install -g cdp-mcp' first." >&2
+if [ -z "$LYNCEUS_SCRIPT" ]; then
+  echo "Error: lynceus not found. Run 'npm install -g lynceus' first." >&2
   exit 1
 fi
 
@@ -71,24 +78,24 @@ xml_escape() {
 }
 
 NODE_DIR="$(dirname "$NODE_BIN")"
-mkdir -p ~/Library/LaunchAgents ~/Library/Logs/cdp-mcp
+mkdir -p ~/Library/LaunchAgents ~/Library/Logs/lynceus
 ESC_NODE=$(xml_escape "$NODE_BIN")
 ESC_NODE_DIR=$(xml_escape "$NODE_DIR")
-ESC_CDP=$(xml_escape "$CDP_SCRIPT")
+ESC_LYNCEUS=$(xml_escape "$LYNCEUS_SCRIPT")
 ESC_HOME=$(xml_escape "$HOME")
 ESC_CHROME=$(xml_escape "$CHROME_PATH")
-cat > ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist <<PLIST
+cat > ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>io.github.lcjanke2020.cdp-mcp</string>
+  <string>io.github.lcjanke2020.lynceus</string>
   <key>ProgramArguments</key>
   <array>
     <string>$ESC_NODE</string>
-    <string>$ESC_CDP</string>
+    <string>$ESC_LYNCEUS</string>
     <string>--port</string>
     <string>9719</string>
   </array>
@@ -97,9 +104,9 @@ cat > ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist <<PLIST
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$ESC_HOME/Library/Logs/cdp-mcp/server.stdout.log</string>
+  <string>$ESC_HOME/Library/Logs/lynceus/server.stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>$ESC_HOME/Library/Logs/cdp-mcp/server.stderr.log</string>
+  <string>$ESC_HOME/Library/Logs/lynceus/server.stderr.log</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -111,7 +118,7 @@ $(if [ -n "$CHROME_PATH" ]; then printf '    <key>CHROME_PATH</key>\n    <string
 PLIST
 ```
 
-The plist invokes `node` directly with the `cdp-mcp` script path. That makes the
+The plist invokes `node` directly with the `lynceus` script path. That makes the
 `NODE_BIN` override authoritative even when your shell uses a Node version
 manager.
 
@@ -120,20 +127,20 @@ manager.
 On macOS 10.15+, use:
 
 ```bash
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist
-launchctl kickstart -k gui/$UID/io.github.lcjanke2020.cdp-mcp
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist
+launchctl kickstart -k gui/$UID/io.github.lcjanke2020.lynceus
 ```
 
 Older macOS releases also support:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist
+launchctl load ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist
 ```
 
 ## 4. Verify
 
 ```bash
-launchctl print gui/$UID/io.github.lcjanke2020.cdp-mcp
+launchctl print gui/$UID/io.github.lcjanke2020.lynceus
 lsof -i :9719
 curl -v --max-time 2 http://127.0.0.1:9719/sse 2>&1 | head -20
 ```
@@ -141,7 +148,7 @@ curl -v --max-time 2 http://127.0.0.1:9719/sse 2>&1 | head -20
 The `curl` command should show a `200 OK` response and SSE event output. A
 timeout after the first event is expected because `/sse` keeps the connection
 open. The server also sends periodic SSE keepalive comments by default; tune
-with `CDP_MCP_SSE_KEEPALIVE_MS` only if your MCP client needs a different idle
+with `LYNCEUS_SSE_KEEPALIVE_MS` only if your MCP client needs a different idle
 interval.
 
 ## 5. Configure an MCP client
@@ -157,7 +164,7 @@ For example, clients that use JSON MCP server config commonly use:
 ```json
 {
   "mcpServers": {
-    "cdp-mcp": {
+    "lynceus": {
       "type": "sse",
       "url": "http://127.0.0.1:9719/sse"
     }
@@ -177,27 +184,27 @@ again.
 ## 6. Logs
 
 ```bash
-tail -f ~/Library/Logs/cdp-mcp/server.stderr.log
+tail -f ~/Library/Logs/lynceus/server.stderr.log
 ```
 
 ## 7. Stop / uninstall
 
 ```bash
-launchctl bootout gui/$UID/io.github.lcjanke2020.cdp-mcp
-rm ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist
+launchctl bootout gui/$UID/io.github.lcjanke2020.lynceus
+rm ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist
 ```
 
 Older macOS releases also support:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/io.github.lcjanke2020.cdp-mcp.plist
+launchctl unload ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist
 ```
 
 ## 8. Upgrade
 
 ```bash
-npm install -g cdp-mcp@latest
-launchctl kickstart -k gui/$UID/io.github.lcjanke2020.cdp-mcp
+npm install -g lynceus@latest
+launchctl kickstart -k gui/$UID/io.github.lcjanke2020.lynceus
 ```
 
 Restart or reconnect your MCP client after a server upgrade so it reloads tool
@@ -207,11 +214,11 @@ schemas.
 
 | Symptom | Fix |
 |---|---|
-| `bootstrap` says service already loaded | Run `launchctl bootout gui/$UID/io.github.lcjanke2020.cdp-mcp`, then bootstrap again |
-| Service exits immediately | Check `~/Library/Logs/cdp-mcp/server.stderr.log`; usually `cdp-mcp` is not installed, Node is too old, or a version-manager path moved |
+| `bootstrap` says service already loaded | Run `launchctl bootout gui/$UID/io.github.lcjanke2020.lynceus`, then bootstrap again |
+| Service exits immediately | Check `~/Library/Logs/lynceus/server.stderr.log`; usually `lynceus` is not installed, Node is too old, or a version-manager path moved |
 | Port 9719 is already in use | Check `lsof -i :9719`, then stop the other process or change the port in the plist |
 | MCP client rejects the config | Confirm the client supports SSE MCP servers and include both `"type": "sse"` and the `/sse` URL if your client uses JSON config |
 | `launch_chrome` cannot find Chrome | Set `CHROME_PATH` before generating the plist, or edit the plist environment and reload the service |
 | Service not starting after reboot | Verify the plist is in `~/Library/LaunchAgents/`, not `LaunchDaemons` |
-| Service not starting after reboot with fnm/nvm | Version-manager shell paths can be ephemeral. Recreate the plist with stable `NODE_BIN` and `CDP_SCRIPT` paths, or install with a system Node |
+| Service not starting after reboot with fnm/nvm | Version-manager shell paths can be ephemeral. Recreate the plist with stable `NODE_BIN` and `LYNCEUS_SCRIPT` paths, or install with a system Node |
 | `already_session` after reconnecting | The prior browser/CDP session is still alive. Resume it, or call `close_session` before starting fresh |

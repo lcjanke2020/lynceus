@@ -358,7 +358,7 @@ function translateTools(tools: readonly Tool[]): VertexTool[] {
 /** Translate the harness's `MessageParam[]` to Gemini's `Content[]`.
  *
  *  Messages are alternating user / assistant turns. User turns may
- *  carry text + tool_result blocks (cdp-mcp scenarios don't use
+ *  carry text + tool_result blocks (lynceus scenarios don't use
  *  image). Assistant turns carry text + (vendor-tagged) thinking +
  *  tool_use blocks — for the Vertex path the assistant content is our
  *  normalized union (see runner.ts: the runner pushes
@@ -402,7 +402,7 @@ function userContentToParts(
   const parts: Part[] = [];
   for (const block of content) {
     // The runner's user turns contain `text` and `tool_result` blocks
-    // only (no `image` in cdp-mcp scenarios). `block.type` is narrowed
+    // only (no `image` in lynceus scenarios). `block.type` is narrowed
     // by Anthropic's MessageParam types; cast as the parts we expect.
     const b = block as
       | { type: "text"; text: string }

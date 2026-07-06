@@ -1,6 +1,6 @@
 // L3 e2e — drive `runTrial` end-to-end against a Node target with a stub
 // VendorAdapter. Verifies the Node-target seam wiring at the integration
-// tier: the runner spawns a real cdp-mcp subprocess, the subprocess hosts
+// tier: the runner spawns a real lynceus subprocess, the subprocess hosts
 // a real `launch_node` against examples/sample-node-app/dist/index.js, the
 // scripted agent issues real MCP tool calls through it, and the runner
 // writes a trace whose `scenario_start.target.kind === "node"` and that
@@ -127,7 +127,7 @@ function makeNodeScenario(): Scenario {
 }
 
 describe("eval runner — Node target (e2e)", () => {
-  const tmpOutDir = mkdtempSync(join(tmpdir(), "cdp-mcp-eval-runner-node-"));
+  const tmpOutDir = mkdtempSync(join(tmpdir(), "lynceus-eval-runner-node-"));
 
   afterAll(() => {
     rmSync(tmpOutDir, { recursive: true, force: true });

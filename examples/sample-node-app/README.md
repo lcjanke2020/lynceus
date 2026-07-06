@@ -58,6 +58,6 @@ node --enable-source-maps examples/sample-node-app/dist/index.js
 
 Prints `hello, world`. The other four entries (`compute-step`, `throw`,
 `stdio-bug`, `conditional-bp`) intentionally misbehave — invoke them
-through cdp-mcp directly, or via the matching eval scenarios / e2e specs
+through lynceus directly, or via the matching eval scenarios / e2e specs
 once those land. `handlers.ts` is a helper imported by `index.ts`, not a
 runnable entry.
