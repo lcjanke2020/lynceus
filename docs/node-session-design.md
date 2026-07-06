@@ -31,10 +31,10 @@ Extend the existing browser-only debugger surface to **also** drive a Node.js pr
 
 ## 2. `SessionState` shape
 
-Today (`src/session/state.ts:30–100`), `SessionState` is browser-specific in two ways:
+Today (`src/session/state.ts`), `SessionState` is browser-specific in two ways:
 
 1. The `chrome: LaunchedChrome | null` field — typed to the chrome-launcher handle.
-2. `SessionState.close()` (`src/session/state.ts:76–99`, called from the `close_session` tool via `closeSession()` in `src/session/browser.ts:432`) only kills the process when `chrome && !attached` (line 88).
+2. `SessionState.close()` (`src/session/state.ts`, called from the `close_session` tool via `closeSession()` in `src/session/browser.ts`) only kills the process when `chrome && !attached`.
 
 Generalize both along a new `kind` axis. The `attached` boolean stays — it already encodes the "we launched this vs. borrowed it" distinction we need to mirror for Node.
 
@@ -81,7 +81,7 @@ Per [`src/session/README.md`](../src/session/README.md), the singleton `sessionS
 
 The two unions don't share strings:
 
-- **`SessionKind = "browser" | "node"`** is the user-facing concept — what *kind of debugging context* the session represents. Matches the existing error-message text in `src/util/errors.ts:11` (*"No browser session. Call launch_chrome…"*) and the `requires a browser session` phrasing of the new `unsupported_target` error (§4).
+- **`SessionKind = "browser" | "node"`** is the user-facing concept — what *kind of debugging context* the session represents. Matches the existing error-message text in `src/util/errors.ts` (*"No browser session. Call launch_chrome…"*) and the `requires a browser session` phrasing of the new `unsupported_target` error (§4).
 - **`OwnedProcess.kind = "chrome" | "node"`** tags the literal process handle: chrome-launcher's `LaunchedChrome` vs. Node's `ChildProcess`. It exists only so `close()` can dispatch `.kill()` correctly across the two handle types.
 
 The asymmetry is deliberate. If a non-Chromium browser engine ever lands (Firefox via the WebKit/Gecko CDP shim, Edge with custom flags, etc.), `OwnedProcess` grows another variant (`{ kind: "firefox"; handle: … }`) without touching `SessionKind` or any tool-level capability gating — Firefox is still a *browser* session.
@@ -118,7 +118,7 @@ export function disconnectDebugger(
   client: CDP.Client,
   sessionId: string,
 ): void {
-  // Symmetric teardown — mirrors today's detachSession() body in browser.ts:214,
+  // Symmetric teardown — mirrors today's detachSession() body in browser.ts,
   // but only the Runtime+Debugger handlers. Browser-only handlers are removed
   // by a sibling browser-side helper.
 }
@@ -136,7 +136,7 @@ async function enableBrowserDomains(client: CDP.Client, sessionId: string | unde
 }
 ```
 
-`connectToTarget()` (`browser.ts:155`) becomes a thin orchestrator:
+`connectToTarget()` (`browser.ts`) becomes a thin orchestrator:
 
 ```ts
 async function connectToTarget(port, targetId, host?) {
@@ -176,9 +176,9 @@ The asymmetry (`Target.*` and `enableBrowserDomains` skipped for Node) is intent
 
 ### Handler-registry aggregation
 
-Today `wireDomainHandlers` (`src/session/browser.ts:247–357`) builds one `registered: HandlerEntry[]` array and writes it wholesale at the bottom: `sessionState.sessionHandlers.set(sessionId ?? ROOT_SESSION_KEY, registered)` (`browser.ts:356`). That works because *one* function writes the map per session.
+Today `wireDomainHandlers` (`src/session/browser.ts`) builds one `registered: HandlerEntry[]` array and writes it wholesale at the bottom: `sessionState.sessionHandlers.set(sessionId ?? ROOT_SESSION_KEY, registered)` (`browser.ts`). That works because *one* function writes the map per session.
 
-Post-split, **both** `connectDebugger` and `enableBrowserDomains` register handlers. If each issued its own `.set(...)`, the second call would clobber the first's array and `detachSession()` (`src/session/browser.ts:214`) would leak the earlier listeners — source-map / pause / console handlers from `connectDebugger` would survive past detach.
+Post-split, **both** `connectDebugger` and `enableBrowserDomains` register handlers. If each issued its own `.set(...)`, the second call would clobber the first's array and `detachSession()` (`src/session/browser.ts`) would leak the earlier listeners — source-map / pause / console handlers from `connectDebugger` would survive past detach.
 
 Resolution: introduce a shared helper that **attaches AND tracks in one call**, used by both `connectDebugger` and `enableBrowserDomains`. The single-call shape is deliberate — a tracking-only helper would let an implementer call `registerHandler(...)` without the matching `client.on(...)` and silently drop events, or attach via `client.on(...)` without tracking and leak listeners on detach.
 
@@ -203,9 +203,9 @@ export function registerHandler(
 }
 ```
 
-`connectDebugger` calls `registerHandler` for `Debugger.scriptParsed`, `Debugger.paused`, `Debugger.resumed`, `Runtime.consoleAPICalled`, `Runtime.exceptionThrown`. `enableBrowserDomains` calls it for the four `Network.*` events. `detachSession()` is unchanged — it already iterates the full per-session list (`browser.ts:222–227`) and calls `removeListener` on every entry, which still works when the list came from multiple registrars.
+`connectDebugger` calls `registerHandler` for `Debugger.scriptParsed`, `Debugger.paused`, `Debugger.resumed`, `Runtime.consoleAPICalled`, `Runtime.exceptionThrown`. `enableBrowserDomains` calls it for the four `Network.*` events. `detachSession()` is unchanged — it already iterates the full per-session list (`browser.ts`) and calls `removeListener` on every entry, which still works when the list came from multiple registrars.
 
-**The script-parsed listener needs a co-refactor.** The pre-Node `attachScriptListener` (`src/sourcemap/loader.ts:7–41`) calls `client.on("Debugger.scriptParsed", handler)` internally and returns the handler — the older "attach + return for tracking" pattern that the pre-Node `wireDomainHandlers` (`src/session/browser.ts:262–264`) accommodates by track-only-pushing the returned handler without re-attaching. That pattern collides with the new attach-AND-track `registerHandler`: passing `attachScriptListener(...)`'s return value into `registerHandler(...)` would double-attach the listener; skipping `registerHandler` for this one event would leak the handler on detach.
+**The script-parsed listener needs a co-refactor.** The pre-Node `attachScriptListener` (`src/sourcemap/loader.ts`) calls `client.on("Debugger.scriptParsed", handler)` internally and returns the handler — the older "attach + return for tracking" pattern that the pre-Node `wireDomainHandlers` (`src/session/browser.ts`) accommodates by track-only-pushing the returned handler without re-attaching. That pattern collides with the new attach-AND-track `registerHandler`: passing `attachScriptListener(...)`'s return value into `registerHandler(...)` would double-attach the listener; skipping `registerHandler` for this one event would leak the handler on detach.
 
 Phase 1 resolves this by refactoring `attachScriptListener` into a **pure factory** that builds and returns the handler without calling `client.on`:
 
@@ -234,11 +234,11 @@ registerHandler(
 );
 ```
 
-One attach pathway, no special-case. Renaming `attachScriptListener` → `buildScriptParsedHandler` is part of the Phase 1 diff; the only other call site is `wireDomainHandlers` (`browser.ts:263`), which `connectDebugger` is replacing anyway.
+One attach pathway, no special-case. Renaming `attachScriptListener` → `buildScriptParsedHandler` is part of the Phase 1 diff; the only other call site is `wireDomainHandlers` (`browser.ts`), which `connectDebugger` is replacing anyway.
 
 ### `select_target` / `switchTarget` — browser-only by construction
 
-`switchTarget()` (`src/session/browser.ts:438–461`) and its `select_target` tool wrapper (`src/tools/session.ts`) read `sessionState.chromePort` + `sessionState.chrome`, call `CDP.List`, then run `connectToTarget` — every step is browser-specific. After the §2 refactor, the `chrome` field is gone (folded into `ownedProcess`), so calling `switchTarget` on a Node session would either crash on field access *or*, worse, succeed at running Chrome-page reconnect logic against a Node-Inspector target.
+`switchTarget()` (`src/session/browser.ts`) and its `select_target` tool wrapper (`src/tools/session.ts`) read `sessionState.chromePort` + `sessionState.chrome`, call `CDP.List`, then run `connectToTarget` — every step is browser-specific. After the §2 refactor, the `chrome` field is gone (folded into `ownedProcess`), so calling `switchTarget` on a Node session would either crash on field access *or*, worse, succeed at running Chrome-page reconnect logic against a Node-Inspector target.
 
 The design commits to gating `select_target` via the capability table introduced in §4 — `select_target: new Set(["browser"])`. Phase 1 wires that entry as soon as the helper exists (it's the one entry Phase 1 needs to ship for self-protection; Phase 3 fills out the rest of the table).
 
@@ -246,7 +246,7 @@ The design commits to gating `select_target` via the capability table introduced
 
 ### Error
 
-`src/util/errors.ts:1–6` defines `class ToolError extends Error { code, message }`; the tool wrapper (`src/tools/_register.ts:8–38`) turns thrown `ToolError`s into the wire envelope `{ error: code, message: msg }`. Existing codes: `no_session`, `not_paused`, `already_session`, fallback `internal_error`.
+`src/util/errors.ts` defines `class ToolError extends Error { code, message }`; the tool wrapper (`src/tools/_register.ts`) turns thrown `ToolError`s into the wire envelope `{ error: code, message: msg }`. Existing codes: `no_session`, `not_paused`, `already_session`, fallback `internal_error`.
 
 Add a new code following the same pattern:
 
@@ -317,11 +317,11 @@ Until Phase 3 lands, the table contains only `select_target` — so existing bro
 
 ## 5. Source-map loading for Node
 
-`src/sourcemap/loader.ts:43–150` (`loadSourceMap` + `fetchMap`) is two-tier today:
+`src/sourcemap/loader.ts` (`loadSourceMap` + `fetchMap`) is two-tier today:
 
 1. **Primary:** CDP `Network.loadNetworkResource` — uses the page's network stack (cookies / auth / dev-server middleware). Requires `Network` + optionally `Page` domains.
 2. **Fallback:** Node `fetch()` — works for plain localhost HTTP, loses page context.
-3. Inline `data:` URIs handled separately (`loader.ts:54–56`, via `decodeDataUri`).
+3. Inline `data:` URIs handled separately (`loader.ts`, via `decodeDataUri`).
 
 Node Inspector:
 - Has **no `Network` domain** — the primary tier always fails.
@@ -341,7 +341,7 @@ Tier order by `s.kind`:
 | `"browser"` | `Network.loadNetworkResource` (unchanged) | Node `fetch()` | — |
 | `"node"` | `fs.readFile()` for `file://` URLs (resolve via `url.fileURLToPath`) | Node `fetch()` for HTTP URLs (rare in Node — possible for sourcemaps pointing at dev-server-built bundles) | — |
 
-`data:` URIs work in both kinds via the existing `loadSourceMap` path (`loader.ts:54–56`), no change.
+`data:` URIs work in both kinds via the existing `loadSourceMap` path (`loader.ts`), no change.
 
 Why pass the whole `SessionState` rather than just `kind`: it costs nothing today and lets us add per-session caching / source-map disk paths / tsconfig-derived rootDir later without another signature break. Either is defensible — pass-the-whole-thing is the recommended call.
 
@@ -399,11 +399,11 @@ For `node --inspect` (no `-brk`), `runIfWaitingForDebugger` is a no-op and there
 
 | Sub-step | Code path |
 |---|---|
-| `if (sessionState.client) throw alreadySession()` | Same guard as `src/session/browser.ts:50, 110` |
-| `CDP.List({ port: 9229 })` → first inspector target | Same as `attachChrome` (`src/session/browser.ts:115`) |
-| `CDP({ port, target: targets[0].id })` | Same client API as `connectToTarget` (`src/session/browser.ts:156`) |
+| `if (sessionState.client) throw alreadySession()` | Same guard as `src/session/browser.ts, 110` |
+| `CDP.List({ port: 9229 })` → first inspector target | Same as `attachChrome` (`src/session/browser.ts`) |
+| `CDP({ port, target: targets[0].id })` | Same client API as `connectToTarget` (`src/session/browser.ts`) |
 | Set `kind = "node"`, `attached = true`, `chromePort = port` | New (per §2) |
-| `connectDebugger(client, undefined)` — enables `Runtime` + `Debugger`, wires `scriptParsed` / `paused` / `resumed` / `consoleAPICalled` / `exceptionThrown` via `registerHandler()` | **Refactored** from `src/session/browser.ts:175–185, 234–245, 247–357` |
+| `connectDebugger(client, undefined)` — enables `Runtime` + `Debugger`, wires `scriptParsed` / `paused` / `resumed` / `consoleAPICalled` / `exceptionThrown` via `registerHandler()` | **Refactored** from `src/session/browser.ts, 234–245, 247–357` |
 | **SKIP** `enableBrowserDomains` and `Target.setAutoAttach` | Node has no `Page`/`DOM`/`Network` domains and no child sessions |
 | `client.send("Runtime.runIfWaitingForDebugger")` | **New, Node-only** (per the contract subsection above) — fires the entry pause for `--inspect-brk`; no-op for `--inspect` |
 
@@ -414,7 +414,7 @@ Returns `{ targetId, url: "" }`. For `--inspect-brk` targets, V8 fires `Debugger
 | Sub-step | Code path |
 |---|---|
 | `requireSession()` then `pause.waitForPause(timeout)` | `src/session/pause.ts` `waitForPause()`, called from `src/tools/execution.ts` (unchanged) |
-| `onPaused` records the entry pause when V8 fires it (triggered by `runIfWaitingForDebugger` in Step 1); the waiter resolves once the event arrives | `wireDomainHandlers` → `onPaused` (`src/session/browser.ts:266–279`), post-refactor moved into `connectDebugger` |
+| `onPaused` records the entry pause when V8 fires it (triggered by `runIfWaitingForDebugger` in Step 1); the waiter resolves once the event arrives | `wireDomainHandlers` → `onPaused` (`src/session/browser.ts`), post-refactor moved into `connectDebugger` |
 
 Returns `{ reason: <V8 break-on-start, opaque>, callStack: [{file: "src/index.ts", line: 1, …}], … }` — V8 parks at the first executable line of the entry module. Per the contract subsection, the `reason` value is opaque (Node emits non-Chromium strings); implementers should not branch on it. At this point no user breakpoints exist yet.
 
@@ -424,12 +424,12 @@ Identical to today, because every code path it touches is already kind-agnostic:
 
 | Sub-step | Code path |
 |---|---|
-| `requireSession()` | `src/session/state.ts:108` (unchanged) |
-| `mapOriginalToGenerated(s.scripts, "src/handlers.ts", 42, 0)` returns `[{ scriptId, scriptUrl, sessionId: undefined, lineNumber: 41, columnNumber: 0 }]` | `src/sourcemap/store.ts:178–221` — already operates on the compound-keyed `ScriptStore` populated by `connectDebugger`'s `scriptParsed` handler |
+| `requireSession()` | `src/session/state.ts` (unchanged) |
+| `mapOriginalToGenerated(s.scripts, "src/handlers.ts", 42, 0)` returns `[{ scriptId, scriptUrl, sessionId: undefined, lineNumber: 41, columnNumber: 0 }]` | `src/sourcemap/store.ts` — already operates on the compound-keyed `ScriptStore` populated by `connectDebugger`'s `scriptParsed` handler |
 | For each binding, find the set of CDP flat-session IDs from `sessionHandlers` and call `client.send("Debugger.setBreakpointByUrl", ..., sid)` | Unchanged. For Node there's exactly one entry (the root) since there are no auto-attached children. |
-| Store `BreakpointRecord` and return `{ id, resolvedLocations }` | Unchanged (`src/session/state.ts:14–23`) |
+| Store `BreakpointRecord` and return `{ id, resolvedLocations }` | Unchanged (`src/session/state.ts`) |
 
-Source-map loading along the way: this transcript assumes the entry module statically imports `handlers.js` (ESM `import` at the top of `dist/server.js`). Static imports are parsed eagerly during module-loading, before V8 hits the entry pause, so `dist/handlers.js` is in the `ScriptStore` by the time `wait_for_pause` returns — but the **source-map consumer may not be**. The script-parsed handler (`src/sourcemap/loader.ts:7–41`) fires `void loadSourceMap(...)` as fire-and-forget at line 36; the actual `fs.readFile` (Node tier per §5) + `SourceMapConsumer` parse complete asynchronously, after `Debugger.scriptParsed` and after `Debugger.paused`. A timing probe showed: scripts and the entry pause arrive at the same wall-clock tick; map reads land a few ms later.
+Source-map loading along the way: this transcript assumes the entry module statically imports `handlers.js` (ESM `import` at the top of `dist/server.js`). Static imports are parsed eagerly during module-loading, before V8 hits the entry pause, so `dist/handlers.js` is in the `ScriptStore` by the time `wait_for_pause` returns — but the **source-map consumer may not be**. The script-parsed handler (`src/sourcemap/loader.ts`) fires `void loadSourceMap(...)` as fire-and-forget; the actual `fs.readFile` (Node tier per §5) + `SourceMapConsumer` parse complete asynchronously, after `Debugger.scriptParsed` and after `Debugger.paused`. A timing probe showed: scripts and the entry pause arrive at the same wall-clock tick; map reads land a few ms later.
 
 **Implication:** an immediate `set_breakpoint` after the entry pause can return `no_mapping` even when `dist/handlers.js` *is* in `ScriptStore` — its `consumer` field is still `undefined` because the async map load hasn't completed. This is **the same race that exists today on the browser side**, masked there by `navigate` typically resolving after map loads complete. See §9 for the loader-readiness open question — Phase 1 / Phase 2 own the resolution (recommended direction: a short bounded internal wait inside `mapOriginalToGenerated` or `set_breakpoint`'s pre-flight, so agents don't have to poll `list_scripts(mapped_only: true)` themselves).
 
@@ -445,11 +445,11 @@ Out of band: the Node process hits the breakpoint when something invokes the han
 
 #### Step 6 — `wait_for_pause()` (target breakpoint)
 
-Same machinery as Step 2, but now `hitBreakpoints` lists the CDP breakpoint ID bound in Step 3 (and the tool summary's `hit_breakpoint_ids` carries the user-facing ID). Implementers should drive breakpoint detection off `hitBreakpoints` / `hit_breakpoint_ids`, not a `reason === "breakpoint"` check — `"breakpoint"` isn't in the checked-in devtools-protocol `Debugger.paused.reason` union, and Node's reason values are opaque (per the contract subsection). The summarized pause includes the TS-mapped frame via `mapCdpToOriginal` (`src/sourcemap/store.ts:133–150`) — already source-map-aware.
+Same machinery as Step 2, but now `hitBreakpoints` lists the CDP breakpoint ID bound in Step 3 (and the tool summary's `hit_breakpoint_ids` carries the user-facing ID). Implementers should drive breakpoint detection off `hitBreakpoints` / `hit_breakpoint_ids`, not a `reason === "breakpoint"` check — `"breakpoint"` isn't in the checked-in devtools-protocol `Debugger.paused.reason` union, and Node's reason values are opaque (per the contract subsection). The summarized pause includes the TS-mapped frame via `mapCdpToOriginal` (`src/sourcemap/store.ts`) — already source-map-aware.
 
 #### Step 7 — `get_scope({ frame_index: 0, scope_type: "local" })`
 
-Unchanged. `requirePaused()` (`src/session/state.ts:113`), then `Runtime.getProperties` on the scope's `objectId`. Both are Node-supported domains. The `objectId` round-trips with the implicit root `session_id` per [`src/session/README.md`](../src/session/README.md) §`session_id` provenance.
+Unchanged. `requirePaused()` (`src/session/state.ts`), then `Runtime.getProperties` on the scope's `objectId`. Both are Node-supported domains. The `objectId` round-trips with the implicit root `session_id` per [`src/session/README.md`](../src/session/README.md) §`session_id` provenance.
 
 #### Step 8 — `step_over()`
 
@@ -457,7 +457,7 @@ Unchanged. `requirePaused()`, `client.send("Debugger.stepOver", ..., sid)`, then
 
 #### Step 9 — `close_session()`
 
-`SessionState.close()` (`src/session/state.ts:76–99`, post-refactor). Closes the CDP client; `ownedProcess === null && attached === true` means we don't kill anything. The user's Node process stays running.
+`SessionState.close()` (`src/session/state.ts`, post-refactor). Closes the CDP client; `ownedProcess === null && attached === true` means we don't kill anything. The user's Node process stays running.
 
 **Tools that would have failed in this flow if not gated** (and that Phase 3 hard-blocks): `click`, `type`, `query_selector`, `get_element_html`, `screenshot`, `navigate`, `reload`, `get_url`, `get_network_requests` (Node inspector has no `Network`), and `select_target` (gated in Phase 1 for self-protection — see §3). Reading the *console* ring buffer still works — `Runtime.consoleAPICalled` exists in Node and is wired by `connectDebugger`.
 
@@ -480,8 +480,8 @@ This design locked the architecture; implementation then landed in seven phases 
 - **`launch_node` stdin/stdout/stderr policy.** Phase 4 keeps stdio handling to startup diagnostics and pipe draining so the child cannot block on a full pipe. A durable pull-based stdout/stderr buffer is tracked separately (the durable Node-output buffer); it stays separate from the console buffer, which is for `console.*` calls captured via `Runtime.consoleAPICalled`.
 - **`sourceMappingURL` resolution for ESM Node + `--enable-source-maps`.** Node 20+ resolves source maps itself when `--enable-source-maps` is set. We don't need that; we have our own loader. But Phase 2 must verify that the `Debugger.scriptParsed.sourceMapURL` field is still populated when the flag is on (it should be — the flag is for Node's *own* error-trace remapping, not the inspector). If it isn't, the loader needs a `Debugger.getScriptSource` + inline-map-comment fallback.
 - **TypeScript Node binaries (`tsx`, `ts-node`, `bun`).** These compile in-memory and may emit synthetic `node:` URLs or memory-only source maps. v1 contract: works against compiled JS + sourcemap on disk; in-memory loaders are best-effort. Phase 6's L3 fixture must use the disk path.
-- **Pending breakpoints in not-yet-parsed Node modules (CJS / lazy imports).** `Debugger.setBreakpointByUrl` natively supports pending breakpoints — it returns a `breakpointId` even when no script matches the URL yet, and binds lazily when `Debugger.scriptParsed` fires. However, `set_breakpoint` resolves through `mapOriginalToGenerated` (`src/sourcemap/store.ts:178–221`), which depends on the source map already being in `ScriptStore`. A review probe (Node v24.13.1) confirmed: static ESM imports all land before the entry pause, but CJS / lazy modules don't — `require('./handlers')` hasn't run yet, so the script isn't parsed and `set_breakpoint` returns `no_mapping`. **v1 scope:** Phase 6's L3 fixture uses compiled ESM with static imports (the case that works end-to-end from the entry pause). **Follow-up:** a pending-breakpoint code path that accepts a hint URL (or scans `tsconfig.outDir`) and defers source-map resolution until `scriptParsed` — a clean sibling of Phase 2 / Phase 3, out of scope here.
+- **Pending breakpoints in not-yet-parsed Node modules (CJS / lazy imports).** `Debugger.setBreakpointByUrl` natively supports pending breakpoints — it returns a `breakpointId` even when no script matches the URL yet, and binds lazily when `Debugger.scriptParsed` fires. However, `set_breakpoint` resolves through `mapOriginalToGenerated` (`src/sourcemap/store.ts`), which depends on the source map already being in `ScriptStore`. A review probe (Node v24.13.1) confirmed: static ESM imports all land before the entry pause, but CJS / lazy modules don't — `require('./handlers')` hasn't run yet, so the script isn't parsed and `set_breakpoint` returns `no_mapping`. **v1 scope:** Phase 6's L3 fixture uses compiled ESM with static imports (the case that works end-to-end from the entry pause). **Follow-up:** a pending-breakpoint code path that accepts a hint URL (or scans `tsconfig.outDir`) and defers source-map resolution until `scriptParsed` — a clean sibling of Phase 2 / Phase 3, out of scope here.
 
-- **Source-map load race at the entry pause.** A subtler failure mode than the CJS one above, in the *static-ESM happy path*. The script-parsed handler (`src/sourcemap/loader.ts:36`) starts `loadSourceMap()` as fire-and-forget (`void loadSourceMap(...)`); `Debugger.scriptParsed` puts the script into `ScriptStore` synchronously, but the `consumer` field is `undefined` until the async map read + parse completes. A second probe (Node v24.13.1) measured the window: `scriptParsed` and `Debugger.paused` arrive at the same tick; map reads complete a few ms later. So an agent that calls `set_breakpoint` immediately after `wait_for_pause` returns the entry pause can hit a `no_mapping` even though the script is fully tracked. The same race exists today on the browser side but is typically masked by `navigate(wait:"load")` blocking past the map load. **Recommended resolution — land in Phase 1:** add a short bounded internal wait inside `mapOriginalToGenerated` (or as a pre-flight inside `set_breakpoint`) — when the script is in `ScriptStore` but `consumer` is `undefined`, poll for up to ~500 ms before returning `no_mapping`. Keeps the public contract simple (no agent-visible polling) and resolves both the Node entry-pause case and any latent browser-side races. **Why Phase 1 specifically:** Phase 1's `attach_node` is the first surface where this race fires in earnest — the browser side masks it incidentally via `navigate(wait:"load")` blocking past map loads, but Node's entry pause has no analogous barrier, so the race is exposed the moment `attach_node` returns. Deferring would mean Phase 1's contract tests have to encode the workaround. Workaround for any code written before this lands: agent retries `set_breakpoint` with backoff, or polls `list_scripts(mapped_only: true, url_includes: "<file>")` until `has_map` is `true`.
+- **Source-map load race at the entry pause.** A subtler failure mode than the CJS one above, in the *static-ESM happy path*. The script-parsed handler (`src/sourcemap/loader.ts`) starts `loadSourceMap()` as fire-and-forget (`void loadSourceMap(...)`); `Debugger.scriptParsed` puts the script into `ScriptStore` synchronously, but the `consumer` field is `undefined` until the async map read + parse completes. A second probe (Node v24.13.1) measured the window: `scriptParsed` and `Debugger.paused` arrive at the same tick; map reads complete a few ms later. So an agent that calls `set_breakpoint` immediately after `wait_for_pause` returns the entry pause can hit a `no_mapping` even though the script is fully tracked. The same race exists today on the browser side but is typically masked by `navigate(wait:"load")` blocking past the map load. **Recommended resolution — land in Phase 1:** add a short bounded internal wait inside `mapOriginalToGenerated` (or as a pre-flight inside `set_breakpoint`) — when the script is in `ScriptStore` but `consumer` is `undefined`, poll for up to ~500 ms before returning `no_mapping`. Keeps the public contract simple (no agent-visible polling) and resolves both the Node entry-pause case and any latent browser-side races. **Why Phase 1 specifically:** Phase 1's `attach_node` is the first surface where this race fires in earnest — the browser side masks it incidentally via `navigate(wait:"load")` blocking past map loads, but Node's entry pause has no analogous barrier, so the race is exposed the moment `attach_node` returns. Deferring would mean Phase 1's contract tests have to encode the workaround. Workaround for any code written before this lands: agent retries `set_breakpoint` with backoff, or polls `list_scripts(mapped_only: true, url_includes: "<file>")` until `has_map` is `true`.
 
 These didn't block the design — they were flagged here so the right implementation phase picked them up.

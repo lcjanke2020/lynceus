@@ -51,7 +51,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Skip when ANTHROPIC_API_KEY is absent
         id: secret_check
@@ -65,7 +65,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         if: steps.secret_check.outputs.skip != 'true'
         with:
           node-version: 20
@@ -84,9 +84,11 @@ jobs:
           BIN=$(node -e "const {readdirSync}=require('fs');const {join}=require('path');const root=process.env.HOME+'/.cache/ms-playwright';const dirs=readdirSync(root).filter(d=>/^chromium-\d+$/.test(d)).sort().reverse();for(const d of dirs){const c=[join(root,d,'chrome-linux','chrome'),join(root,d,'chrome-linux64','chrome'),join(root,d,'chrome-linux-arm64','chrome')];for(const p of c){try{require('fs').accessSync(p);console.log(p);process.exit(0)}catch{}}};process.exit(1)")
           echo "CDP_TEST_BROWSER_PATH=$BIN" >> $GITHUB_ENV
 
-      - name: Build sample-app (canonical + variants when present)
+      - name: Build sample fixtures (browser + Node)
         if: steps.secret_check.outputs.skip != 'true'
-        run: npm run sample:build
+        run: |
+          npm run sample:build        # browser: examples/sample-app + variants
+          npm run sample-node:build   # Node: examples/sample-node-app/dist (also run by preeval, kept explicit)
 
       - name: Run eval
         if: steps.secret_check.outputs.skip != 'true'
@@ -98,15 +100,17 @@ jobs:
           EVAL_TRIALS: ${{ inputs.trials || '3' }}
         run: |
           set -e
-          ARGS="--trials=${EVAL_TRIALS}"
-          if [ -n "${EVAL_SCENARIOS}" ]; then
-            ARGS="${ARGS} --scenarios=${EVAL_SCENARIOS}"
+          # Quote the inputs so a scenario/trials value can't word-split or glob
+          # into extra arguments when passed to the CLI.
+          if [ -n "$EVAL_SCENARIOS" ]; then
+            npm run eval -- --trials="$EVAL_TRIALS" --scenarios="$EVAL_SCENARIOS"
+          else
+            npm run eval -- --trials="$EVAL_TRIALS"
           fi
-          npm run eval -- ${ARGS}
 
       - name: Upload eval traces
         if: always() && steps.secret_check.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: eval-traces-${{ github.run_id }}
           path: evals/runs/
