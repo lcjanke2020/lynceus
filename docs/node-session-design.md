@@ -75,6 +75,8 @@ async close(): Promise<void> {
 }
 ```
 
+The sketch above shows the kind-agnostic shape. The shipped `close()` refines the Node branch: rather than a bare `.kill()`, it escalates SIGTERM → SIGKILL after a grace window (via `killNodeChild()` in `src/session/state.ts`) so a Node child with its own SIGTERM handler can't wedge shutdown.
+
 Per [`src/session/README.md`](../src/session/README.md), the singleton `sessionState` and its `requireSession()` / `requirePaused()` accessors stay unchanged — every existing tool keeps compiling. The new `kind` field is set by the lifecycle entry point (Chrome lifecycle leaves it `"browser"`; Node lifecycle sets `"node"`).
 
 ### Deliberate vocabulary split: `SessionKind` vs. `OwnedProcess.kind`
@@ -399,11 +401,11 @@ For `node --inspect` (no `-brk`), `runIfWaitingForDebugger` is a no-op and there
 
 | Sub-step | Code path |
 |---|---|
-| `if (sessionState.client) throw alreadySession()` | Same guard as `src/session/browser.ts, 110` |
+| `if (sessionState.client) throw alreadySession()` | Same guard as `src/session/browser.ts` |
 | `CDP.List({ port: 9229 })` → first inspector target | Same as `attachChrome` (`src/session/browser.ts`) |
 | `CDP({ port, target: targets[0].id })` | Same client API as `connectToTarget` (`src/session/browser.ts`) |
 | Set `kind = "node"`, `attached = true`, `chromePort = port` | New (per §2) |
-| `connectDebugger(client, undefined)` — enables `Runtime` + `Debugger`, wires `scriptParsed` / `paused` / `resumed` / `consoleAPICalled` / `exceptionThrown` via `registerHandler()` | **Refactored** from `src/session/browser.ts, 234–245, 247–357` |
+| `connectDebugger(client, undefined)` — enables `Runtime` + `Debugger`, wires `scriptParsed` / `paused` / `resumed` / `consoleAPICalled` / `exceptionThrown` via `registerHandler()` | **Refactored** from `src/session/browser.ts` |
 | **SKIP** `enableBrowserDomains` and `Target.setAutoAttach` | Node has no `Page`/`DOM`/`Network` domains and no child sessions |
 | `client.send("Runtime.runIfWaitingForDebugger")` | **New, Node-only** (per the contract subsection above) — fires the entry pause for `--inspect-brk`; no-op for `--inspect` |
 
