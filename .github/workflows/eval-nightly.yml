@@ -1,0 +1,117 @@
+# On-demand L4 eval — the full scenario suite (browser + Node) × 3 trials
+# against the live Anthropic API. Distinct from .github/workflows/ci.yml so
+# the API-key secret is scoped to this workflow only, fork PRs don't trigger
+# it, and a slow / expensive eval can't block ordinary unit + e2e CI.
+#
+# Gating:
+#   - workflow_dispatch only: this eval spends real API budget, so it runs
+#     when an operator explicitly triggers it (Actions -> eval-nightly ->
+#     Run workflow), never on a schedule. To run it on a nightly cron, add a
+#     `schedule:` trigger below — that is a deliberate, cost-incurring opt-in,
+#     not a default that ships enabled.
+#   - Per-PR `eval-quick` is in ci.yml's eval-quick job, also gated on the
+#     secret being present.
+#
+# Secret: `ANTHROPIC_API_KEY` must be set on the repo. If the secret is
+# absent (forks, before initial setup), the job no-ops with a clear message
+# — does NOT fail.
+#
+# Budget: each run reads EVAL_BUDGET_USD (default from evals/harness/model.ts).
+# Override per-run via the budget_usd workflow input below.
+
+name: eval-nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: "Comma-separated scenario names (default: all)"
+        type: string
+        required: false
+        default: ""
+      trials:
+        description: "Trials per scenario"
+        type: string
+        required: false
+        default: "3"
+      budget_usd:
+        description: "Hard USD ceiling for this run (default 100)"
+        type: string
+        required: false
+        default: "100"
+
+concurrency:
+  group: eval-nightly
+  cancel-in-progress: false # do NOT cancel; let a previous run finish
+
+jobs:
+  eval:
+    name: full eval (default model × 3 trials × all scenarios)
+    runs-on: ubuntu-24.04-arm # match L3 primary target so Chromium is consistent
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Skip when ANTHROPIC_API_KEY is absent
+        id: secret_check
+        env:
+          KEY_PRESENT: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$KEY_PRESENT" != "true" ]; then
+            echo "ANTHROPIC_API_KEY is not set on this repo. Skipping eval — set the secret in repo settings to enable."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        if: steps.secret_check.outputs.skip != 'true'
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+        if: steps.secret_check.outputs.skip != 'true'
+
+      - name: Install Playwright-bundled Chromium
+        if: steps.secret_check.outputs.skip != 'true'
+        run: npx --yes playwright@latest install --with-deps chromium
+
+      - name: Resolve Chromium binary into env
+        if: steps.secret_check.outputs.skip != 'true'
+        run: |
+          BIN=$(node -e "const {readdirSync}=require('fs');const {join}=require('path');const root=process.env.HOME+'/.cache/ms-playwright';const dirs=readdirSync(root).filter(d=>/^chromium-\d+$/.test(d)).sort().reverse();for(const d of dirs){const c=[join(root,d,'chrome-linux','chrome'),join(root,d,'chrome-linux64','chrome'),join(root,d,'chrome-linux-arm64','chrome')];for(const p of c){try{require('fs').accessSync(p);console.log(p);process.exit(0)}catch{}}};process.exit(1)")
+          echo "CDP_TEST_BROWSER_PATH=$BIN" >> $GITHUB_ENV
+
+      - name: Build sample fixtures (browser + Node)
+        if: steps.secret_check.outputs.skip != 'true'
+        run: |
+          npm run sample:build        # browser: examples/sample-app + variants
+          npm run sample-node:build   # Node: examples/sample-node-app/dist (also run by preeval, kept explicit)
+
+      - name: Run eval
+        if: steps.secret_check.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_BUDGET_USD: ${{ inputs.budget_usd || '100' }}
+          # Pass through workflow inputs when present.
+          EVAL_SCENARIOS: ${{ inputs.scenarios }}
+          EVAL_TRIALS: ${{ inputs.trials || '3' }}
+        run: |
+          set -e
+          # Quote the inputs so a scenario/trials value can't word-split or glob
+          # into extra arguments when passed to the CLI.
+          if [ -n "$EVAL_SCENARIOS" ]; then
+            npm run eval -- --trials="$EVAL_TRIALS" --scenarios="$EVAL_SCENARIOS"
+          else
+            npm run eval -- --trials="$EVAL_TRIALS"
+          fi
+
+      - name: Upload eval traces
+        if: always() && steps.secret_check.outputs.skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eval-traces-${{ github.run_id }}
+          path: evals/runs/
+          retention-days: 30

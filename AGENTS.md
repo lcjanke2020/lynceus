@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**Last updated: 2026-06-09**
+**Last updated: 2026-07-06**
 
 Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropped into this repo. Read this end-to-end before doing anything else.
 
 ## What this project is
 
-`cdp-mcp` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 48 tools across 11 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console + network, structured DOM driving, form driving, session-portability (cookies + storage state). Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
+`cdp-mcp` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 51 tools across 12 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console, buffered network, structured DOM driving, form driving, session-portability (cookies + storage state), and Node-process output. Both **browser** (Chrome / Chromium) and **Node.js Inspector** sessions are first-class via `launch_chrome` / `attach_chrome` and `launch_node` / `attach_node`; the Runtime + Debugger surface is shared across both, and browser-only / Node-only tools gate via the `unsupported_target` envelope. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
 
 ## Read first
 
@@ -16,7 +16,7 @@ Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropp
 
 ## Project status
 
-The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-vendor end-to-end. The runner sits behind a vendor-agnostic `VendorAdapter` seam, with production adapters for Anthropic, OpenAI (GPT-class), Google Vertex (Gemini), DeepSeek, and Moonshot/Kimi, plus an LM Studio reference adapter for local models — all sharing one runner and a vendor-namespaced pricing catalog. NDJSON traces are `provider`-tagged with vendor-keyed `cacheTokens`. The production MCP server itself has no LLM dependency.
+The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-vendor end-to-end. **Node.js Inspector sessions are first-class** alongside browser sessions — `launch_node` / `attach_node`, a shared Runtime + Debugger surface, capability-gated browser-only tools, and the Node-only `get_node_output` buffer — with L2 / L3 / L4 coverage on the load-bearing debug subset (breakpoints, stepping, exceptions, conditional breakpoints, console + stdio). The runner sits behind a vendor-agnostic `VendorAdapter` seam, with production adapters for Anthropic, OpenAI (GPT-class), Google Vertex (Gemini), DeepSeek, and Moonshot/Kimi, plus an LM Studio reference adapter for local models — all sharing one runner and a vendor-namespaced pricing catalog. NDJSON traces are `provider`-tagged with vendor-keyed `cacheTokens`. The production MCP server itself has no LLM dependency.
 
 ## Where to look
 
@@ -32,6 +32,9 @@ The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-ve
 | Debugging a flaky/failed test | [docs/test-eval-plan.md](./docs/test-eval-plan.md) §Critical gotchas — **mandatory** before debugging any test |
 | A test fails on macOS/Windows but passes on Linux | [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md) |
 | Original design rationale + post-implementation discoveries | [docs/design-notes.md](./docs/design-notes.md) |
+| Node.js Inspector session-mode design (`SessionState.kind`, module split, capability gating) | [docs/node-session-design.md](./docs/node-session-design.md) |
+| L3 e2e + L4 eval coverage shape for Node sessions | [docs/node-test-coverage-proposal.md](./docs/node-test-coverage-proposal.md) |
+| `examples/sample-node-app/` — shared Node fixture (5 runnable entries — `index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp` — plus the shared helper `handlers.ts`) | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) |
 
 ## Eval run storage
 
@@ -74,7 +77,7 @@ Five-step pattern (full detail in [src/tools/README.md](./src/tools/README.md)):
 
 ## Out of scope (v1)
 
-Firefox / Safari, Node.js inspector, `Storage.*`, `Tracing.*`, `HeapProfiler.*`, concurrent multi-page debugging. See [README §Out of scope](./README.md).
+Firefox / Safari, `Storage.*`, `Tracing.*`, `HeapProfiler.*`, concurrent multi-page debugging, and multi-process Node (Worker threads / `cluster` children — Worker-domain auto-attach is deferred per [`docs/node-session-design.md`](./docs/node-session-design.md) §9). Single-process Node debugging **is** in scope via `attach_node` and `launch_node`. See [README §Out of scope](./README.md).
 
 ## Stuck? Try this first
 

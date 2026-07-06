@@ -6,12 +6,13 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE).
 
-**Last updated: 2026-06-09**
+**Last updated: 2026-07-06**
 
 ## What it gives an agent
 
-Across 48 tools:
+Across 51 tools:
 
+- **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.
 - **Stepping** — `step_over`, `step_into`, `step_out`, `resume`, `pause`, plus the authoritative sync point `wait_for_pause`.
 - **Live inspection at a paused frame** — `get_call_stack`, `get_scope`, `evaluate` (frame-aware), `get_object_properties`. All call-stack frames are TS-mapped.
@@ -101,18 +102,23 @@ CDP — see `test/fake-cdp.ts`); the inline `src/**/*.test.ts` files are L1
 pure-data tests; `evals/**/*.test.ts` cover the L4 harness's
 grader/trace/oracle units. See `docs/test-eval-plan.md` for the full pyramid.
 
-### L3 — real-browser end-to-end
+### L3 — real-browser + real-Node end-to-end
 
 ```sh
 npm run test:e2e
 ```
 
-Drives the 48 MCP tools against a real headless Chromium attached to a
-built copy of `examples/sample-app/`. Eleven specs cover lifecycle, breakpoints,
-stepping, exceptions, console, network, workers, screenshot, DOM
-interaction, form driving, and storage portability. Sequential (one Chrome shared across specs, isolated by a
-shared `afterEach(close_session)`). Run time is a few seconds on a warm
-machine.
+Drives the browser-facing MCP tools against a real headless Chromium attached to
+a built copy of `examples/sample-app/`, plus Node Inspector attach/launch flows
+against `examples/sample-node-app/`. Nineteen specs cover browser lifecycle,
+breakpoints, stepping, exceptions, console, network, workers, screenshot, DOM
+interaction (incl. `locate` / `wait_for` / `get_form_state`), form driving, and
+storage portability, plus Node Inspector debugging: attach flow, launch flow,
+breakpoint flow, stepping, exceptions, conditional breakpoints, and console +
+stdio (`get_node_output`). A separate `eval-runner-node.e2e.test.ts` exercises
+the harness's Node-target seam end-to-end. Sequential (one Chrome shared across
+browser specs, isolated by a shared `afterEach(close_session)`; Node specs spawn
+one inspector child per spec). Run time is a few seconds on a warm machine.
 
 **Browser selection (`CDP_TEST_BROWSER` env, default `chromium`)**:
 
@@ -155,7 +161,8 @@ confinement, or Bubblewrap. For the step-by-step setup that gets local
 
 ```sh
 export ANTHROPIC_API_KEY=...
-npm run eval:quick                 # 1 scenario × 1 trial (~$0.50–2 at default Opus-4.8-medium; ~$0.05 with EVAL_MODEL_OVERRIDE=claude-sonnet-4-6)
+npm run eval:quick                 # 1 browser scenario × 1 trial (~$0.50–2 at default Opus-4.8-medium; ~$0.05 with EVAL_MODEL_OVERRIDE=claude-sonnet-4-6)
+npm run eval:quick:node            # 1 Node scenario × 1 trial (node-compute-step; auto-builds the Node fixture)
 npm run eval                       # all scenarios × 3 trials (~$4 full pass — first observed on Opus-4.7-medium, the prior default; 4.8 shares its rate card)
 npm run eval -- --scenarios=compute-step --trials=1
 ```
@@ -167,9 +174,11 @@ Drives the cdp-mcp tool surface through an LLM agent via the
 backed by `@anthropic-ai/sdk` is the default; OpenAI, Vertex, DeepSeek,
 and Moonshot/Kimi are also shipped production adapters (plus an LM Studio
 reference adapter for local models), each selected via `EVAL_PROVIDER`.
-Each trial spawns a fresh `dist/index.js` MCP subprocess + a
-static server for the scenario's sample-app variant; the tool-use loop
-drives the page, sets source-level breakpoints, inspects pauses, and
+Each trial spawns a fresh `dist/index.js` MCP subprocess plus the right
+target for the scenario — a static server for browser scenarios'
+sample-app variants, or a `node --inspect` child for Node scenarios (the
+`Scenario.target` discriminator); the tool-use loop drives the page or
+Node process, sets source-level breakpoints, inspects pauses, and
 produces a natural-language final answer. NDJSON traces land under
 `evals/runs/<run-id>/` (gitignored). A programmatic oracle per scenario
 (no LLM judge) emits a dual-axis verdict — **mechanic** (did the agent
@@ -221,15 +230,19 @@ wired behind the seam for local models (issue #45). See
 / `EVAL_VERTEX_*` / `EVAL_DEEPSEEK_*` / `EVAL_MOONSHOT_*` / `EVAL_LM_STUDIO_*`
 details.
 
-Currently registered scenarios (14) — 8 **debugger** scenarios
-(`compute-step`, `adversarial-out-of-order`, `network-bug`, `console-error`,
-`event-binding`, `deep-source-map`, `worker-bug`, `conditional-bp`) plus 6
-**driving + session-portability** scenarios from issue #12 (`form-drive`,
-`clearing-fill`, `idempotent-toggle`, `robust-locator`, `session-resume`,
-`cookie-redaction`). `compute-step` is the canonical `npm run eval:quick`
-target; some scenarios run against the stock `examples/sample-app/`, others
-against per-scenario forks under `evals/sample-app-variants/<name>/` built via
-`npm run sample:build` (`scripts/build-variants.mjs`). See
+Currently registered scenarios (18) — **14 browser + 4 Node**. The browser
+set is 8 **debugger** scenarios (`compute-step`, `adversarial-out-of-order`,
+`network-bug`, `console-error`, `event-binding`, `deep-source-map`,
+`worker-bug`, `conditional-bp`) plus 6 **driving + session-portability**
+scenarios from issue #12 (`form-drive`, `clearing-fill`, `idempotent-toggle`,
+`robust-locator`, `session-resume`, `cookie-redaction`); some run against the
+stock `examples/sample-app/`, others against per-scenario forks under
+`evals/sample-app-variants/<name>/` built via `npm run sample:build`
+(`scripts/build-variants.mjs`). The 4 **Node** scenarios (`node-compute-step`,
+`node-stdio-bug`, `node-conditional-bp`, `node-uncaught-throw`) share
+`examples/sample-node-app/` via the `Scenario.target` discriminator.
+`compute-step` is the canonical `npm run eval:quick` target and
+`node-compute-step` the `npm run eval:quick:node` target. See
 [evals/README.md](evals/README.md) for the full scenario table.
 
 ## Wire into Claude Code
@@ -259,6 +272,36 @@ Or via `~/.claude.json`:
 2. In a Claude Code session with `cdp-mcp` enabled, ask:
    > Open localhost:5173 in a non-headless browser. Set a breakpoint at src/handlers.ts:7. Click #go. When it pauses, tell me what `step` is — and why the counter increments wrong.
 3. The agent should chain: `launch_chrome` → `set_breakpoint` → `click` → `wait_for_pause` → `get_scope`/`evaluate` → `resume`, and conclude that `computeStep()` returns `2` instead of `1`.
+
+## End-to-end smoke (Node Inspector)
+
+Two flows against `examples/sample-node-app/` (the same fixture the L3 e2e tests use).
+
+**`attach_node` — agent attaches to an already-running Node process.** Build the fixture (from the repo root) and start it under the inspector in one terminal:
+
+```sh
+npm run sample-node:build
+node --inspect-brk examples/sample-node-app/dist/index.js   # pauses at the first line; listens on 127.0.0.1:9229
+```
+
+In a Claude Code session with `cdp-mcp` enabled, ask:
+> Attach to the Node process on 127.0.0.1:9229. Set a breakpoint at `src/handlers.ts:2`. Resume and tell me what `name` is on the first hit.
+
+The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `resume` → `wait_for_pause` → `get_scope`, and report `name === "world"` from the paused frame.
+
+**`launch_node` — agent owns the Node child end-to-end.** No separate terminal:
+
+> Launch `examples/sample-node-app/dist/index.js` under `--inspect-brk`. Set a breakpoint at `src/handlers.ts:2`. Resume and tell me what `name` is on the first hit.
+
+`close_session` terminates the child because cdp-mcp launched it (`sessionState.attached === false`); `attach_node` sessions leave the user's Node process alive.
+
+### Inspector port security
+
+`node --inspect` opens a debugger port with **full arbitrary-code-execution** capability against the V8 runtime — anyone who can reach the port can run code in your Node process. cdp-mcp's defaults keep this safe in normal use, but the constraints are worth knowing:
+
+- `attach_node` defaults to `127.0.0.1:9229`. Don't bind `--inspect=0.0.0.0` or a LAN/VPN interface unless you've thought hard about who can reach it.
+- The source-map loader refuses `file://` reads when the inspector host is non-loopback (`src/sourcemap/loader.ts`) — a remote-debugging session can't trick cdp-mcp into reading attacker-chosen local paths.
+- Browser-only MCP tools (DOM, navigation, browser-network) return `unsupported_target` when the active session is Node, so an agent can't accidentally drive page-style automation against a backend process.
 
 ## Tool conventions for agents
 
@@ -298,6 +341,6 @@ If `cdp-mcp` doesn't fit your workflow, look at:
 
 ## Out of scope for v1
 
-Firefox / Safari, Node.js debugging, `Storage.*`, `Tracing.*`, `HeapProfiler.*`, concurrent multi-page debugging.
+Firefox / Safari, `Storage.*`, `Tracing.*`, `HeapProfiler.*`, concurrent multi-page debugging, and multi-process Node (Worker threads / `cluster` children — Worker-domain auto-attach is deferred per [`docs/node-session-design.md`](docs/node-session-design.md) §9). Single-process Node debugging **is** in scope via `attach_node` / `launch_node`.
 
 See [design notes](docs/design-notes.md) — original plan snapshot + a section on what reviewer iteration discovered.

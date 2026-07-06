@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated: 2026-06-09**
+**Last updated: 2026-07-06**
 
 How `cdp-mcp` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
@@ -10,9 +10,9 @@ How `cdp-mcp` is put together. For *why* decisions were made the way they were, 
 
 Three big pieces:
 
-- A **tool layer** (`src/tools/`) — 48 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
-- A **state layer** (`src/session/` + `src/sourcemap/`) — owns the singleton Chrome process, the CDP client, the pause tracker, ring buffers, and the script store / source-map indexes.
-- A **CDP transport** (`chrome-remote-interface`) — the WebSocket to Chrome, with flat sessions for the root page + every attached worker/iframe.
+- A **tool layer** (`src/tools/`) — 51 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
+- A **state layer** (`src/session/` + `src/sourcemap/`) — owns the singleton browser/Node process, the CDP client, the pause tracker, ring buffers, the script store / source-map indexes, and the Node child's stdio buffer.
+- A **CDP transport** (`chrome-remote-interface`) — the WebSocket to Chrome (root page + every attached worker/iframe via `flatten:true` auto-attach) or to a Node `--inspect` endpoint (single root target).
 
 ## Component diagram
 
@@ -20,8 +20,8 @@ Three big pieces:
 flowchart LR
     Agent["AI agent<br/>Claude Code / Copilot CLI"]
     Index["src/index.ts<br/>stdio MCP lifecycle"]
-    Server["src/server.ts<br/>registers 11 tool modules"]
-    Tools["src/tools/<br/>48 tool handlers"]
+    Server["src/server.ts<br/>registers 12 tool modules"]
+    Tools["src/tools/<br/>51 tool handlers"]
     Session["src/session/<br/>state · pause · buffers"]
     Sourcemap["src/sourcemap/<br/>TS↔JS coords"]
     CRI["chrome-remote-interface<br/>(CDP client)"]
@@ -47,10 +47,10 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph T["Tool layer — src/tools/"]
-        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage"]
+        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage · node-output"]
     end
     subgraph S["State layer — src/session/ + src/sourcemap/"]
-        SS["sessionState (singleton)<br/>PauseTracker · RingBuffer (console / network)<br/>ScriptStore (sessionId + scriptId)"]
+        SS["sessionState (singleton)<br/>PauseTracker · RingBuffer (console / network / Node stdio)<br/>ScriptStore (sessionId + scriptId)"]
     end
     subgraph C["CDP transport"]
         CC["chrome-remote-interface<br/>flat session: root + workers + iframes"]
@@ -61,14 +61,24 @@ flowchart TB
     T --> S --> C --> B
 ```
 
+## Browser vs Node session kinds
+
+A session is either a **browser** target (Chrome / Chromium via `chrome-launcher` or a `--remote-debugging-port` attach) or a **Node Inspector** target (Node `--inspect` / `--inspect-brk`). The `kind` is stored on `sessionState` and gates the tool surface:
+
+- Both kinds share the Runtime + Debugger surface — breakpoints, stepping, pause, scope, evaluate, console reads, source maps. The `connectDebugger` helper in `src/session/debugger.ts` is shared.
+- Browser-only domains (`Page`, `DOM`, `Input`, `Network`) are not enabled in Node sessions. The 25 browser-only MCP tools return the structured error envelope `{ error: "unsupported_target", message: "Tool <name> requires a browser session (current session is node)" }` when called against a Node session. The reverse holds for `get_node_output`, which targets a Node-only surface and returns `{ error: "unsupported_target", message: "Tool get_node_output requires a node session (current session is browser)" }` when called against a browser session. The lookup table lives in `src/session/capabilities.ts` (see [`src/tools/README.md`](../src/tools/README.md) §Capability gating).
+- Lifecycle plumbing differs: browser sessions go through `chrome-launcher` (or a port attach) and `Target.setAutoAttach({ flatten: true })` to fan out to workers + iframes. Node sessions use `child_process.spawn` (for `launch_node`) or a direct CDP connect to the inspector websocket (for `attach_node`), and remain single-target — no child sessions in v1 (Worker-threads auto-attach is deferred per [`node-session-design.md`](./node-session-design.md) §9).
+
+The session-mode design itself is locked in at [`node-session-design.md`](./node-session-design.md).
+
 ## Module map
 
 | Directory | Files | Responsibility | Component README |
 |---|---|---|---|
 | [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `cdp-mcp/contract` (LocatorSpec) | — |
-| [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `pause.ts`, `buffers.ts` | Singleton lifecycle, pause state, ring buffers | [README](../src/session/README.md) |
-| [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing | [README](../src/sourcemap/README.md) |
-| [`src/tools/`](../src/tools/) | 11 tool files + `_register.ts` + `_locator_runtime.ts` | 48 MCP tool implementations | [README](../src/tools/README.md) |
+| [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `node.ts`, `debugger.ts`, `capabilities.ts`, `pause.ts`, `buffers.ts` | Singleton lifecycle, pause state, ring buffers (console / network / Node stdio); browser + Node attach kinds share `connectDebugger` | [README](../src/session/README.md) |
+| [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing; kind-aware source-map fetch (browser via `Network.loadNetworkResource`, Node via `file://` on loopback only) | [README](../src/sourcemap/README.md) |
+| [`src/tools/`](../src/tools/) | 12 tool files + `_register.ts` + `_locator_runtime.ts` | 51 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` | [README](../src/tools/README.md) |
 | [`src/util/`](../src/util/) | `errors.ts`, `format.ts`, `log.ts` | `ToolError`, preview/truncate helpers, structured stderr logging | — |
 
 ## Request flow — `set_breakpoint`
@@ -138,9 +148,9 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> Disconnected
-    Disconnected --> Launching: launch_chrome
-    Disconnected --> Attaching: attach_chrome
-    Launching --> Running: chrome-launcher + CRI connect ok
+    Disconnected --> Launching: launch_chrome / launch_node
+    Disconnected --> Attaching: attach_chrome / attach_node
+    Launching --> Running: process spawned + CRI connect ok
     Attaching --> Running: CRI connect ok
     Running --> Paused: Debugger.paused
     Paused --> Running: resume / step_over / step_into / step_out
@@ -150,7 +160,7 @@ stateDiagram-v2
     Closed --> Disconnected: SessionState.reset()
 ```
 
-`closeSession()` kills Chrome **only** when we `launch_chrome`'d it ourselves; an `attach_chrome` session leaves the user's Chrome running (`sessionState.attached === true`).
+`closeSession()` kills the underlying process (Chrome or Node) **only** when we launched it ourselves; an `attach_chrome` / `attach_node` session leaves the user's process running (`sessionState.attached === true`).
 
 ## Test pyramid
 
@@ -159,9 +169,9 @@ The full 4-layer strategy lives in [test-eval-plan.md](./test-eval-plan.md) — 
 ```mermaid
 flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
-    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>48 tools · no real browser · npm test"]
-    L3["L3 — E2E<br/>test/e2e/*.test.ts vs real headless Chromium<br/>seconds · npm run test:e2e"]
-    L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter seam<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>first observed: $3.97 full pass (Opus-4.7-medium, default) · npm run eval"]
+    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>51 tools · no real browser · npm test"]
+    L3["L3 — E2E<br/>test/e2e/*.test.ts vs real Chromium + real Node --inspect<br/>19 specs (11 browser + 7 Node + 1 harness) · seconds · npm run test:e2e"]
+    L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter + Scenario.target seams<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>14 browser + 4 Node scenarios<br/>first observed: $3.97 full browser pass (Opus-4.7-medium) · npm run eval"]
     L1 --> L2 --> L3 --> L4
 ```
 
@@ -171,13 +181,13 @@ What this code talks to:
 
 - **CDP** (`chrome-remote-interface`) — WebSocket to Chrome. `Debugger.*`, `Page.*`, `Runtime.*`, `Network.*`, `DOM.*`, `Input.*`, `IO.*`, `Target.*`. Auto-attaches to workers + iframes via `Target.setAutoAttach({ flatten: true })`.
 - **`chrome-launcher`** — spawns Chrome with `--remote-debugging-port`; cross-platform binary detection (`chrome_path` arg overrides).
-- **File system** — TypeScript source files + source maps. Source maps are loaded **lazily** on `Debugger.scriptParsed` (`src/sourcemap/loader.ts` — browser-first via `Network.loadNetworkResource` to inherit auth/cookies/dev-server middleware, Node `fetch` fallback for plain localhost).
+- **File system** — TypeScript source files + source maps. Source maps are loaded **lazily** on `Debugger.scriptParsed` (`src/sourcemap/loader.ts`). The fetch tier dispatches on session kind: **browser** sessions go through `Network.loadNetworkResource` to inherit auth/cookies/dev-server middleware (with a `fetch()` fallback for plain localhost); **Node** sessions have no `Network` domain, so `file://` source maps are read directly via `fs.readFile(fileURLToPath(url))` — gated to loopback inspector hosts only, so a remote-debugging session can't trick the loader into reading attacker-chosen local paths.
 - **MCP stdio JSON-RPC** — talks to the agent (Claude Code, Copilot CLI). Stdout is reserved for the MCP protocol; logs go to stderr (see `src/util/log.ts`).
 - **LLM SDKs (`@anthropic-ai/sdk`, `@google/genai`) + raw-fetch OpenAI-compatible clients** — used **only** by the L4 evals, behind the `VendorAdapter` seam (`evals/harness/vendor.ts` defines the interface). Adapters: `anthropic.ts`, `openai-adapter.ts` / `openai-responses-adapter.ts` / `openai-compat-adapter.ts`, `vertex-adapter.ts` (`@google/genai`), `deepseek-adapter.ts`, `moonshot-adapter.ts`, and the `lm-studio-adapter.ts` local reference. The production server has no LLM dependency.
 
 ## Where to go next
 
-- Component depth → the 5 component READMEs (module-map table above).
+- Component depth → the component READMEs (module-map table above).
 - Design rationale + post-implementation gotchas → [design-notes.md](./design-notes.md).
 - Test/eval depth + 11 critical gotchas → [test-eval-plan.md](./test-eval-plan.md).
 - Chromium-vs-Chrome differences + host-OS workarounds → [known-chromium-gaps.md](./known-chromium-gaps.md).

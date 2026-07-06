@@ -1,16 +1,16 @@
 # evals/
 
-**Last updated: 2026-06-09**
+**Last updated: 2026-07-06**
 
-L4 of the test pyramid — runs Claude through scripted scenarios that exercise the full MCP tool surface end-to-end against a real browser. For pyramid context see [../docs/ARCHITECTURE.md §Test pyramid](../docs/ARCHITECTURE.md); for the cost model + caching guarantees see [../docs/test-eval-plan.md §L4](../docs/test-eval-plan.md).
+L4 of the test pyramid — runs an LLM agent (Claude, GPT-5.5, Gemini, …) through scripted scenarios that exercise the full MCP tool surface end-to-end against either a real browser or a real Node.js Inspector child. For pyramid context see [../docs/ARCHITECTURE.md §Test pyramid](../docs/ARCHITECTURE.md); for the cost model + caching guarantees see [../docs/test-eval-plan.md §L4](../docs/test-eval-plan.md).
 
 ## Layout
 
 | Path | Role |
 |---|---|
-| `cli.ts` | Entry point. Parses `--scenarios=…` / `--trials=…` / budget flags. `resolveProviderClient()` picks a `VendorAdapter` from `EVAL_PROVIDER` (unset/`"anthropic"` → runner default; `"openai"` → `makeOpenaiAdapter()` for reasoning-off / `makeOpenaiResponsesAdapter()` for reasoning-on, auto-routed (#50/#58); `"vertex"` → `makeVertexAdapter()` for Gemini 3.x (#51); `"deepseek"`/`"moonshot"` → `makeDeepseekAdapter()`/`makeMoonshotAdapter()` (remote OpenAI-compat vendors, GH #8); `"lm-studio"` → investigation artifact). Dispatches to the runner. |
+| `cli.ts` | Entry point. Parses `--scenarios=…` / `--trials=…` / budget flags. `resolveProviderClient()` picks a `VendorAdapter` from `EVAL_PROVIDER` (unset/`"anthropic"` → runner default; `"openai"` → `makeOpenaiAdapter()` for reasoning-off / `makeOpenaiResponsesAdapter()` for reasoning-on, auto-routed (#50/#58); `"vertex"` → `makeVertexAdapter()` for Gemini 3.x (#51); `"deepseek"`/`"moonshot"` → `makeDeepseekAdapter()`/`makeMoonshotAdapter()` (remote OpenAI-compat vendors, GH #8); `"lm-studio"` → investigation artifact). Resolves each scenario's target (browser vs Node) via `resolveTarget()` and fail-fasts if the browser `variantDistDir` or Node `script` is missing. Dispatches to the runner. |
 | `harness/vendor.ts` | The vendor-agnostic seam (#47): `Vendor`, `VendorAdapter`, `NormalizedMessage`, `NormalizedThinkingBlock`, `VendorMessageRequest`, `ThinkingRequest`. The runner consumes only these shapes. |
-| `harness/runner.ts` | Spawns a fresh `dist/index.js` MCP subprocess and the per-scenario static server, runs the tool-use loop against `adapter.messages(...)`, writes NDJSON traces, calls the oracle. Zero `@anthropic-ai/sdk` imports post-#47. |
+| `harness/runner.ts` | Spawns a fresh `dist/index.js` MCP subprocess plus the per-scenario target (static server for browser; a `node --inspect[-brk]` child for Node — branched on `scenario.target.kind`), runs the tool-use loop against `adapter.messages(...)`, writes NDJSON traces, calls the oracle. Zero `@anthropic-ai/sdk` imports post-#47. |
 | `harness/anthropic.ts` | Anthropic adapter — `makeAnthropicAdapter()`, request building (`buildAnthropicRequest`, `effectiveTokenCap`), and the `@internal` helpers (`splitAssistantContent`, `readCacheUsage`) kept exported for regression tests. Owns ephemeral cache markers on system prompt + tool list. |
 | `harness/lm-studio-adapter.ts` | LM Studio (OpenAI-compatible) adapter — `makeLmStudioAdapter()`. Investigation artifact for issue #45 (still tagged NOT-FOR-MERGE in the header); post-#47 implements `VendorAdapter` directly, no `AnthropicClient` faking. |
 | `harness/openai-compat-adapter.ts` | Shared OpenAI-compatible Chat Completions factory — `makeOpenAICompatAdapter()` (GH #8). Backs the DeepSeek + Moonshot adapters; `max_tokens` (NOT `max_completion_tokens`), no Responses API. Parametrized by vendor tag / env-var names / default base URL, plus per-vendor `extraBody` (DeepSeek's `thinking` reasoning toggle) and `cacheTokensFrom` (cache accounting). Default per-request output cap is 32K so reasoning isn't truncated (GH #7). |
@@ -22,11 +22,11 @@ L4 of the test pyramid — runs Claude through scripted scenarios that exercise 
 | `harness/grader.ts` | Per-scenario oracle — emits `correctness ∈ {0,1}`, `mechanic ∈ {0,1}`, efficiency ratio, recovery count. No LLM judge. |
 | `harness/trace.ts` | Trace serialization (NDJSON under `evals/runs/<run-id>/`). `readTraceFile` folds pre-#49 legacy shapes forward via `normalizeLegacyEntry`. |
 | `harness/static-server.ts` | Tiny static server for the scenario's sample-app variant. |
-| `harness/types.ts` | Shared types: `Scenario` (`name`, `variantDir`, `prompt`, `oracle`, `oracleMinimumToolCalls`, optional `systemPromptOverride`, optional `xfailCorrectness`), `TraceEntry` (NDJSON shape — `ScenarioStartEntry.provider`, `UsageEntry.cacheTokens` post-#49), `OracleResult`, `ReasoningConfig`, `TrialOutcome`. |
+| `harness/types.ts` | Shared types: `Scenario` (`name`, `prompt`, `oracle`, `oracleMinimumToolCalls`, optional `systemPromptOverride`, optional `xfailCorrectness`, plus *either* `variantDir` for browser scenarios *or* an explicit `target: ScenarioTarget`), `ScenarioTarget` (discriminated union `{ kind: "browser", variantDistDir }` \| `{ kind: "node", script, nodeFlags? }`), `TraceEntry` (NDJSON shape — `ScenarioStartEntry.provider` + `target`, `UsageEntry.cacheTokens` post-#49), `OracleResult`, `ReasoningConfig`, `TrialOutcome`. |
 | `scenarios/index.ts` | Scenario registry — what `npm run eval` picks up. |
-| `scenarios/<name>.ts` | One file per scenario: prompt, sample-app variant, oracle. |
-| `scenarios/<name>.test.ts` | L1 unit tests for the scenario's oracle (no LLM, no browser). |
-| `sample-app-variants/<name>/` | Per-scenario tweak of `examples/sample-app/` — each ships its own intentional bug. |
+| `scenarios/<name>.ts` | One file per scenario: prompt, target (browser variant or Node entry script), oracle. |
+| `scenarios/<name>.test.ts` | L1 unit tests for the scenario's oracle (no LLM, no browser, no Node child). |
+| `sample-app-variants/<name>/` | Per-scenario tweak of `examples/sample-app/` for browser scenarios — each ships its own intentional bug. Node scenarios instead share `examples/sample-node-app/` and pick a different entry script per scenario. |
 
 ### Trace files per trial
 
@@ -52,7 +52,7 @@ parseable schema.
 
 ## Scenarios present
 
-All 14 scenarios are registered and runnable. Eight are **debugger** scenarios — `adversarial-out-of-order`, `compute-step`, `conditional-bp`, `console-error`, `deep-source-map`, `event-binding`, `network-bug`, `worker-bug` — exercising the breakpoint/pause/inspect/console/network/worker surfaces. Six are **driving + session-portability** scenarios (issue #12, see below). `compute-step` is the canonical shipped scenario (root [README](../README.md) demo + `npm run eval:quick` target); the rest are exercised by `npm run eval`.
+All 18 scenarios are registered and runnable — **14 browser + 4 Node**. Of the browser scenarios, eight are **debugger** scenarios — `adversarial-out-of-order`, `compute-step`, `conditional-bp`, `console-error`, `deep-source-map`, `event-binding`, `network-bug`, `worker-bug` — exercising the breakpoint/pause/inspect/console/network/worker surfaces, and six are **driving + session-portability** scenarios (issue #12, see below). The four Node scenarios (see below) drive the Node.js Inspector. `compute-step` is the canonical browser scenario (root [README](../README.md) demo + `npm run eval:quick` target) and `node-compute-step` the Node smoke (`npm run eval:quick:node`); the rest are exercised by `npm run eval`.
 
 Stock-app scenarios set `variantDir` to `examples/sample-app/dist`: `compute-step`, `adversarial-out-of-order`, `form-drive`, `robust-locator`, `cookie-redaction`. The others have per-scenario forks under `sample-app-variants/<name>/` that `npm run sample:build` materializes via `scripts/build-variants.mjs` — including two added for issue #12: `prefilled-form` (a preferences form with a pre-filled input, two pre-checked boxes, and a plan radio group — serves `clearing-fill` + `idempotent-toggle`) and `stateful-app` (writes `localStorage["user_pref"]` on load — serves `session-resume`).
 
@@ -75,6 +75,19 @@ First full run (Opus-4.8 medium, all 14 × 3 trials, 2026-06-08, archived to dur
 
 **Cost gating:** `npm run eval:quick` still runs only `compute-step` (the per-PR gate stays fast/cheap). The driving scenarios run nightly via `npm run eval` — they're at temperature 1 (thinking on) so non-deterministic, and `session-resume` is the most expensive (close/relaunch). `cookie-redaction` is the cheapest/most-deterministic and is the natural candidate if a storage-path scenario is later promoted into the per-PR gate.
 
+### Node scenarios (4)
+
+All four run against the Node.js Inspector via `launch_node`, sharing the multi-entry [`examples/sample-node-app/`](../examples/sample-node-app/) fixture through the `Scenario.target` discriminator (`{ kind: "node", script: "examples/sample-node-app/dist/<entry>.js", nodeFlags: ["--enable-source-maps"] }`); `npm run sample-node:build` (auto-run by `preeval` / `preeval:quick:node`) rebuilds it.
+
+| Scenario | Entry | What it exercises |
+|---|---|---|
+| `node-compute-step` | `compute-step.ts` | Canonical bp/pause/inspect cycle; `npm run eval:quick:node` smoke target. `get_node_output` is optional/diagnostic — mechanic comes from the breakpoint-hit cycle. |
+| `node-stdio-bug` | `stdio-bug.ts` | Mandates `get_node_output` — the wrong value is observable only via the OS-pipe stdio buffer, not via V8's `Runtime.consoleAPICalled` console buffer. |
+| `node-conditional-bp` | `conditional-bp.ts` | Conditional-breakpoint primitive — the bp sits on a line every iteration runs, so the oracle only passes when the `condition` is actually applied. |
+| `node-uncaught-throw` | `throw.ts` | Exception flow + re-launch recovery — the oracle iterates ALL pause indices so a re-launch that re-pauses on the same throw still replays the inspection. |
+
+Breakpoint-hit detection uses `hit_breakpoint_ids` membership, never pause-`reason` equality (V8 emits non-standard reason strings like `"Break on start"` on Node — see [../docs/node-session-design.md](../docs/node-session-design.md) §7 and [../docs/node-test-coverage-proposal.md](../docs/node-test-coverage-proposal.md)).
+
 ## Eval loop
 
 ```mermaid
@@ -82,14 +95,15 @@ sequenceDiagram
     autonumber
     participant CLI as evals/cli.ts
     participant R as harness/runner.ts
-    participant SS as static-server<br/>(scenario variant)
+    participant T as Target<br/>(static-server OR<br/>node --inspect child)
     participant MCP as dist/index.js<br/>(subprocess)
     participant A as VendorAdapter<br/>(anthropic / openai / vertex / deepseek / moonshot / lm-studio)
     participant Cl as Model<br/>(Claude / GPT / Gemini / DeepSeek / Kimi / LM Studio)
     participant Or as grader (oracle)
 
     CLI->>R: run(scenario, trials, adapter?)
-    R->>SS: start (random port)
+    Note over CLI,R: scenario.target.kind branches:<br/>browser → static-server; node → node --inspect child
+    R->>T: start (browser: bind random port;<br/>node: spawn child, parse inspector port)
     R->>MCP: spawn (stdio)
     loop each trial
         R->>A: messages(req) → NormalizedMessage
@@ -112,10 +126,11 @@ sequenceDiagram
 
 ## Running
 
-The `preeval` npm hook rebuilds `dist/index.js` (the MCP subprocess) but does **not** build the sample-app or any scenario variants. Run that once first (or any time you change the sample app):
+The `preeval` npm hook rebuilds `dist/index.js` (the MCP subprocess) **and** the Node fixture (`npm run sample-node:build`), but does **not** build the browser sample-app or its scenario variants. Run that once first (or any time you change the sample app):
 
 ```sh
-npm run sample:build          # builds examples/sample-app + all evals/sample-app-variants/*
+npm run sample:build          # builds examples/sample-app + all evals/sample-app-variants/* (browser scenarios)
+npm run sample-node:build     # builds examples/sample-node-app/dist/*.js (Node scenarios; also auto-run by preeval / preeval:quick:node)
 ```
 
 Then:
@@ -123,8 +138,10 @@ Then:
 ```sh
 export ANTHROPIC_API_KEY=…
 npm run eval:quick                           # compute-step × 1 trial (~$0.50–$2 at default Opus-4.8-medium)
+npm run eval:quick:node                      # node-compute-step × 1 trial (Node smoke; auto-builds the Node fixture)
 npm run eval                                 # all scenarios × 3 trials (~$4 full pass — first observed on Opus-4.7-medium, the prior default; 4.8 shares its rate card)
 npm run eval -- --scenarios=compute-step --trials=1
+npm run eval -- --scenarios=node-compute-step,node-stdio-bug,node-conditional-bp,node-uncaught-throw --trials=1   # Node scenarios
 
 # Opt the run into Chromium's sandbox. Default OFF — the model launches
 # Chromium via launch_chrome, whose `sandbox` arg defaults to false
@@ -194,14 +211,14 @@ EVAL_PROVIDER=deepseek EVAL_DEEPSEEK_API_KEY=… EVAL_DEEPSEEK_MODEL=deepseek-v4
 EVAL_PROVIDER=moonshot EVAL_MOONSHOT_API_KEY=… EVAL_MOONSHOT_MODEL=kimi-k2.6 EVAL_BUDGET_USD=5 npm run eval:quick
 ```
 
-If `variantDir` is missing the runner fails fast with the exact message *"Run 'npm run sample:build' (canonical) or build the scenario's variant first."* (`evals/cli.ts`).
+If a browser scenario's `variantDir` is missing the runner fails fast with *"Scenario '&lt;name&gt;' references variantDir '…' which does not exist. Run 'npm run sample:build' (canonical) or build the scenario's variant first."*; a Node scenario whose `target.script` is missing fails with the symmetric *"Scenario '&lt;name&gt;' references Node target.script '…' which does not exist. Run 'npm run sample-node:build' (or the scenario's prebuild) to produce the dist/ entry first."* (`evals/cli.ts`).
 
 **Use `npm run eval`, not `npx tsx evals/cli.ts`.** The npm script's `preeval` hook rebuilds `dist/index.js`; direct `tsx` skips the hook and a fresh clone errors with `Cannot find module '…/dist/index.js'`. PR #18 added a docs note for this exact gotcha.
 
 ## Cost & caching
 
 - Default model: **`claude-opus-4-8` with adaptive `medium` thinking** (`harness/model.ts`; bumped from Opus 4.7 on 2026-06-07 — see the `model.ts` header for the four-way campaign rationale). Originally switched off Sonnet 4.6 once real-money runs landed ~5× under the original $50–100/run estimate (Sonnet 4.6 came in at ~$5–10/run). Adaptive-style models default to medium-effort thinking when both `EVAL_REASONING_LEVEL` and `EVAL_REASONING_BUDGET` are unset; budget-style models (Sonnet 4.6) still default to thinking-off. Swap via `EVAL_MODEL_OVERRIDE` (supported ids listed in `SUPPORTED_MODELS`); pricing is per-(vendor, model) via `PRICING_CATALOG.<vendor>[<model>]` resolved through `pricingFor` (Anthropic exact match; LM Studio wildcard `"*"` sentinel = $0; unknown pairs throw) so the budget gate and cost estimates stay correct on the swap. When thinking is enabled Anthropic mandates `temperature: 1`, so runs become non-deterministic — use `--trials >= 3` to characterize variance. See `harness/model.ts` for the truth table and `TIER_BUDGET_TOKENS` defaults.
-- Per-run budget cap: **`$100`** (set `EVAL_BUDGET_USD` to override). **First observed Opus-4.7-medium full-suite cost: `~$4`** (measured when the suite was 8 scenarios × 3 trials, single run; the suite is now 14 scenarios). Single data point — call it the first observation, not the steady-state band. The pre-impl table in `docs/test-eval-plan.md` predicted ~$45/night derived; the Sonnet 4.6 nightly came in at ~$5–10 vs ~$8.6 predicted (close), and the Opus-medium first run beat the Opus pre-impl line by another ~10×. Cache hit-rate + Opus tokenizer behavior probably explain the gap. Sonnet 4.6 baseline (selectable via override) still lands at ~$5–10/run; budget cap stays well above either.
+- Per-run budget cap: **`$100`** (set `EVAL_BUDGET_USD` to override). **First observed Opus-4.7-medium full-suite cost: `~$4`** (measured when the suite was 8 scenarios × 3 trials, single run; the suite is now 18 scenarios — 14 browser + 4 Node). Single data point — call it the first observation, not the steady-state band. The pre-impl table in `docs/test-eval-plan.md` predicted ~$45/night derived; the Sonnet 4.6 nightly came in at ~$5–10 vs ~$8.6 predicted (close), and the Opus-medium first run beat the Opus pre-impl line by another ~10×. Cache hit-rate + Opus tokenizer behavior probably explain the gap. Sonnet 4.6 baseline (selectable via override) still lands at ~$5–10/run; budget cap stays well above either.
 - The system prompt + tool catalog are tagged `cache_control: ephemeral` so the static prefix hits cache on every trial after the first. Measured sizes (per trace notes): ~280 tokens for the system block (`harness/runner.ts:18-22`) and ~5K tokens for the tool catalog (`harness/mcp-client.ts:122-128`) — earlier estimates of ~40K turned out to be high. The system block is *below* Anthropic's ~1024-token cache-breakpoint minimum, so its marker is effectively a no-op (the `runner.ts` comment spells this out); only the tools-array marker actually carries cross-trial reuse — which is enough to dominate the input cost on trial 2+. Verify post-#49 via the `cacheTokens` field on each `t:"usage"` trace entry: the Anthropic adapter writes `cacheTokens.cacheReadInputTokens` and `cacheTokens.cacheCreationInputTokens` (the keys match the SDK's `cache_read_input_tokens` / `cache_creation_input_tokens` verbatim, just dropped to camelCase under the vendor-tagged map).
 
 ## Scoring: SDET framing + dual-axis oracle
@@ -240,13 +257,15 @@ PR #12 (DRAFT, branch `agents/eval-model-rotation-proposal`) proposes day-of-wee
 
 1. Add `scenarios/<name>.ts`: export a `Scenario` (from `harness/types.ts`) with:
    - `name` — matches the filename.
-   - `variantDir` — path to a built static tree. Use `examples/sample-app/dist` to share the stock app, or add a fork under `sample-app-variants/<name>/` and point at `evals/sample-app-variants/<name>/dist`.
+   - Target — one of:
+     - *Browser:* `variantDir` — path to a built static tree. Use `examples/sample-app/dist` to share the stock app, or add a fork under `sample-app-variants/<name>/` and point at `evals/sample-app-variants/<name>/dist`.
+     - *Node:* an explicit `target: { kind: "node", script: "examples/sample-node-app/dist/<entry>.js", nodeFlags?: ["--enable-source-maps"] }`. Add a new entry under `examples/sample-node-app/src/` if no existing entry has the bug shape you need; the shared `dist/` rebuilds via `npm run sample-node:build`. Use `node-compute-step.ts` as the canonical Node example.
    - `prompt` — the natural-language task the agent receives.
-   - `oracle` — pure function over `(trace, finalAnswer)` returning `OracleResult`.
+   - `oracle` — pure function over `(trace, finalAnswer)` returning `OracleResult`. For Node scenarios with re-launch recovery, iterate ALL pause indices rather than `findIndex` so re-paused windows are checked too (see `node-uncaught-throw.ts`).
    - `oracleMinimumToolCalls` — efficiency floor (`tool_calls / oracleMinimumToolCalls`, capped at 1).
    - Optional `systemPromptOverride` — strips the default workflow guidance (used by `adversarial-out-of-order` to test recovery from degraded guidance).
    - Use `compute-step.ts` as the canonical example.
-2. If the scenario needs a forked sample-app bug, add `sample-app-variants/<name>/` and `npm run sample:build` will pick it up via `scripts/build-variants.mjs`.
-3. Add an L1 unit test in `scenarios/<name>.test.ts` for the oracle (no LLM, no browser).
+2. If a browser scenario needs a forked sample-app bug, add `sample-app-variants/<name>/` and `npm run sample:build` will pick it up via `scripts/build-variants.mjs`. Node scenarios share `examples/sample-node-app/` — no per-scenario variants tree, just a new entry script rebuilt by `npm run sample-node:build`.
+3. Add an L1 unit test in `scenarios/<name>.test.ts` for the oracle (no LLM, no browser, no Node child).
 4. Register in `scenarios/index.ts`.
 5. Run `npm run eval -- --scenarios=<name> --trials=1` and inspect the trace under `evals/runs/<run-id>/`.
