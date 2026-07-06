@@ -145,7 +145,7 @@ function getKeepaliveMs(): number {
   if (raw === undefined || raw === "") return DEFAULT_SSE_KEEPALIVE_MS;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 0) {
-    log.warn("invalid LYNCEUS_SSE_KEEPALIVE_MS; using default", { value: raw, default: DEFAULT_SSE_KEEPALIVE_MS });
+    log.warn("invalid SSE keepalive interval; using default", { value: raw, default: DEFAULT_SSE_KEEPALIVE_MS });
     return DEFAULT_SSE_KEEPALIVE_MS;
   }
   return value;

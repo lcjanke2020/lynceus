@@ -81,7 +81,7 @@ NODE_DIR="$(dirname "$NODE_BIN")"
 mkdir -p ~/Library/LaunchAgents ~/Library/Logs/lynceus
 ESC_NODE=$(xml_escape "$NODE_BIN")
 ESC_NODE_DIR=$(xml_escape "$NODE_DIR")
-ESC_CDP=$(xml_escape "$LYNCEUS_SCRIPT")
+ESC_LYNCEUS=$(xml_escape "$LYNCEUS_SCRIPT")
 ESC_HOME=$(xml_escape "$HOME")
 ESC_CHROME=$(xml_escape "$CHROME_PATH")
 cat > ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist <<PLIST
@@ -95,7 +95,7 @@ cat > ~/Library/LaunchAgents/io.github.lcjanke2020.lynceus.plist <<PLIST
   <key>ProgramArguments</key>
   <array>
     <string>$ESC_NODE</string>
-    <string>$ESC_CDP</string>
+    <string>$ESC_LYNCEUS</string>
     <string>--port</string>
     <string>9719</string>
   </array>
