@@ -3,8 +3,11 @@
 // setTimeout(N) guesses through every spec, wait for the actual condition and
 // bail with a useful diagnostic if it never holds.
 //
-// Convention: the polled fn returns null/undefined/false to mean "not ready,
-// keep polling", and a truthy value once the condition holds. A THROW is a
+// Convention: the polled fn returns null, undefined, or false to mean "not
+// ready, keep polling"; ANY other return value is treated as ready and
+// returned. The readiness predicate is `!== null && !== undefined && !== false`
+// (not truthiness), so a falsy-but-real value like 0 or "" also counts as
+// ready — return null/undefined/false, never 0/"", to keep polling. A THROW is a
 // hard failure (e.g. a tool error envelope from `call()` — no_session, a bad
 // argument) and propagates IMMEDIATELY; it is not retried. This keeps an early
 // terminal failure from being masked behind the full timeout window (it would
