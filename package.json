@@ -60,10 +60,12 @@
     "lint:chromium-skips": "node scripts/check-chromium-skips.mjs",
     "smoke": "node scripts/smoke.mjs",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.evals.json",
-    "preeval": "npm run build",
+    "preeval": "npm run build && npm run sample-node:build",
     "preeval:quick": "npm run build",
     "eval": "tsx evals/cli.ts",
     "eval:quick": "tsx evals/cli.ts --scenarios=compute-step --trials=1",
+    "preeval:quick:node": "npm run build && npm run sample-node:build",
+    "eval:quick:node": "tsx evals/cli.ts --scenarios=node-compute-step --trials=1",
     "clean": "rimraf dist",
     "prepack": "npm run build"
   },

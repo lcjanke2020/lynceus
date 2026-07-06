@@ -75,6 +75,16 @@ function normalizeLegacyEntry(entry: TraceEntry): TraceEntry {
     if (e.provider === undefined) {
       e.provider = "anthropic";
     }
+    // Legacy traces (pre-Node-seam) never carried a `target` field — every
+    // pre-existing scenario was browser-only. Default to a browser kind
+    // with empty `variantDistDir` so downstream consumers can branch on
+    // `target.kind` uniformly. The empty string is safe because no
+    // consumer reads `variantDistDir` from a trace (the runner is the
+    // only producer; cli.ts reads it from the Scenario object, not the
+    // trace).
+    if (e.target === undefined) {
+      e.target = { kind: "browser", variantDistDir: "" };
+    }
   } else if (entry.t === "usage") {
     const e = entry as UsageEntry & {
       cacheCreationInputTokens?: number;

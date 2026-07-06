@@ -235,6 +235,56 @@ describe("readTraceFile legacy-shape fold", () => {
     expect(s.model).toBe("claude-opus-4-7");
   });
 
+  it("defaults missing scenario_start.target to browser kind on legacy entries", () => {
+    // Legacy traces never carried a `target` field — every scenario
+    // was browser-only. The fold gives downstream consumers a uniform
+    // discriminator without requiring on-disk migration of historical
+    // traces.
+    const p = join(tmp, "compute-step-trial-1.ndjson");
+    writeNdjson(p, [
+      {
+        t: "scenario_start",
+        ts: "2026-05-17T00:00:00.000Z",
+        scenario: "compute-step",
+        trial: 1,
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        reasoning: { level: "medium", budgetTokens: 4096 },
+        variantUrl: "http://localhost:12345",
+        // NOTE: no `target` field — legacy (pre-Node-seam) shape.
+      },
+    ]);
+    const entries = readTraceFile(p);
+    expect(entries).toHaveLength(1);
+    const s = entries[0] as ScenarioStartEntry;
+    expect(s.target).toEqual({ kind: "browser", variantDistDir: "" });
+    // Existing fields untouched.
+    expect(s.variantUrl).toBe("http://localhost:12345");
+    expect(s.provider).toBe("anthropic");
+  });
+
+  it("leaves explicit scenario_start.target untouched on new-shape entries", () => {
+    const p = join(tmp, "node-compute-step-trial-1.ndjson");
+    writeNdjson(p, [
+      {
+        t: "scenario_start",
+        ts: "2026-05-22T00:00:00.000Z",
+        scenario: "node-compute-step",
+        trial: 1,
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        reasoning: { level: "medium", budgetTokens: 4096 },
+        target: { kind: "node", script: "/tmp/script.js" },
+        // No variantUrl — Node trial.
+      },
+    ]);
+    const entries = readTraceFile(p);
+    expect(entries).toHaveLength(1);
+    const s = entries[0] as ScenarioStartEntry;
+    expect(s.target).toEqual({ kind: "node", script: "/tmp/script.js" });
+    expect(s.variantUrl).toBeUndefined();
+  });
+
   it("leaves explicit scenario_start.provider untouched", () => {
     const p = join(tmp, "compute-step-openai-x-trial-1.ndjson");
     writeNdjson(p, [

@@ -28,6 +28,11 @@ import { idempotentToggle } from "./idempotent-toggle.js";
 import { robustLocator } from "./robust-locator.js";
 import { sessionResume } from "./session-resume.js";
 import { cookieRedaction } from "./cookie-redaction.js";
+// Node L4 scenarios.
+import { nodeComputeStep } from "./node-compute-step.js";
+import { nodeStdioBug } from "./node-stdio-bug.js";
+import { nodeConditionalBp } from "./node-conditional-bp.js";
+import { nodeUncaughtThrow } from "./node-uncaught-throw.js";
 
 export const SCENARIOS: Record<string, Scenario> = {
   [computeStep.name]: computeStep,
@@ -45,6 +50,11 @@ export const SCENARIOS: Record<string, Scenario> = {
   [robustLocator.name]: robustLocator,
   [sessionResume.name]: sessionResume,
   [cookieRedaction.name]: cookieRedaction,
+  // Node L4 scenarios.
+  [nodeComputeStep.name]: nodeComputeStep,
+  [nodeStdioBug.name]: nodeStdioBug,
+  [nodeConditionalBp.name]: nodeConditionalBp,
+  [nodeUncaughtThrow.name]: nodeUncaughtThrow,
 };
 
 export function lookupScenario(name: string): Scenario {
