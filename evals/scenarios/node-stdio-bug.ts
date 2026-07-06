@@ -18,9 +18,14 @@
 //
 // Canonical workflow:
 //   launch_node → set_breakpoint(stdio-bug.ts) → resume past entry pause →
-//   wait_for_pause (bp hit) → get_node_output (raw stdout has flushed by
-//   then) → inspect (get_call_stack / get_scope / evaluate) → resume →
+//   wait_for_pause (bp hit inside accumulate) → inspect (get_call_stack /
+//   get_scope / evaluate — see the `+ 1`) → resume → get_node_output →
 //   final answer naming stdio-bug.ts + line 12 / `accumulate` / the +1 bug.
+// Note the ordering: the `total:` line is written from main() only AFTER
+// accumulate returns, so raw stdout carries it only once the trial has
+// resumed past the in-accumulate bp — a get_node_output called while still
+// paused there sees no `total:` line yet. The oracle scans every
+// get_node_output result, so any call that observes the flushed line counts.
 
 import type { Scenario, TraceEntry, OracleResult } from "../harness/types.js";
 import { toolPairs } from "../harness/trace.js";

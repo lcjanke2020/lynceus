@@ -71,9 +71,11 @@ export interface SpawnOpts {
 //      entry, so a single Node eval trial under, e.g., EVAL_PROVIDER=
 //      openai/vertex would write the vendor key to disk in cleartext.
 //
-// Defense-in-depth: an explicit name set covers vendors we know about
-// today, plus a regex catch-all so future *_API_KEY / *_SECRET /
-// *_TOKEN / *_CREDENTIALS additions are blocked by construction. The
+// Defense-in-depth: an explicit name set covers the vendors we know
+// about today, plus a regex catch-all over common credential suffixes
+// (*_API_KEY, *_ACCESS_KEY[_ID], *_SECRET[_KEY], *_PRIVATE_KEY, *_TOKEN,
+// *_CREDENTIALS, *_PASSWORD) so future keys of those shapes are blocked
+// without a code change. The
 // filter applies to BOTH inherited process.env AND caller-supplied
 // `opts.env` — the latter is plumbed by the harness runner and should
 // only carry config (CHROME_PATH today); we refuse to be the path that
@@ -86,7 +88,8 @@ const ENV_DENYLIST_EXPLICIT = new Set<string>([
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
 ]);
-const ENV_DENYLIST_PATTERN = /_API_KEY$|_SECRET$|_TOKEN$|_CREDENTIALS$/i;
+const ENV_DENYLIST_PATTERN =
+  /_API_KEY$|_ACCESS_KEY$|_ACCESS_KEY_ID$|_SECRET$|_SECRET_KEY$|_PRIVATE_KEY$|_TOKEN$|_CREDENTIALS$|_PASSWORD$/i;
 
 function isCredentialEnvName(name: string): boolean {
   return ENV_DENYLIST_EXPLICIT.has(name) || ENV_DENYLIST_PATTERN.test(name);

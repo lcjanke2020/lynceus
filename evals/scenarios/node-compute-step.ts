@@ -79,7 +79,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   // the `computeStep` symbol OR a `step = 2` / `return 2` snippet).
   const fa = finalAnswer.toLowerCase();
   const mentionsFile = /compute-step\.ts/i.test(finalAnswer);
-  const mentionsBugLine = /\b[78]\b/.test(finalAnswer);
+  const mentionsBugLine = /\b7\b/.test(finalAnswer);
   const mentionsBugSymbol = /computestep|step\s*=\s*2|return\s*2/i.test(fa);
   const correctness: 0 | 1 =
     mentionsFile && (mentionsBugLine || mentionsBugSymbol) ? 1 : 0;
