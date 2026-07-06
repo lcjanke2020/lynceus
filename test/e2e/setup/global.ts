@@ -37,6 +37,13 @@ const SAMPLE_APP_DIST = join(
   "sample-app",
   "dist",
 );
+const SAMPLE_NODE_APP_ENTRY = join(
+  process.cwd(),
+  "examples",
+  "sample-node-app",
+  "dist",
+  "index.js",
+);
 const CACHE_DIR = join(process.cwd(), ".vitest-cache");
 export const CONFIG_FILE = join(CACHE_DIR, "e2e-config.json");
 
@@ -55,6 +62,11 @@ export async function setup(): Promise<void> {
   if (!existsSync(SAMPLE_APP_DIST)) {
     throw new Error(
       `e2e globalSetup: ${SAMPLE_APP_DIST} not found. Run 'npm run sample:build' first.`,
+    );
+  }
+  if (!existsSync(SAMPLE_NODE_APP_ENTRY)) {
+    throw new Error(
+      `e2e globalSetup: ${SAMPLE_NODE_APP_ENTRY} not found. Run 'npm run sample-node:build' first.`,
     );
   }
   if (!existsSync(CACHE_DIR)) {
