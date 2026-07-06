@@ -84,6 +84,41 @@ describe("buildSanitizedEnv — credential denylist", () => {
     expect(out.PATH).toBe("/usr/bin");
   });
 
+  it("strips the widened credential-suffix families (AWS / DB / PKI shapes)", () => {
+    const out = buildSanitizedEnv(
+      {
+        AWS_SECRET_ACCESS_KEY: "aws-secret", // *_ACCESS_KEY
+        AWS_ACCESS_KEY_ID: "aws-id", // *_ACCESS_KEY_ID
+        MY_SECRET_KEY: "sk", // *_SECRET_KEY
+        SSH_PRIVATE_KEY: "-----BEGIN", // *_PRIVATE_KEY
+        DB_PASSWORD: "hunter2", // *_PASSWORD
+        PATH: "/usr/bin",
+      },
+      undefined,
+    );
+    expect(out.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(out.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(out.MY_SECRET_KEY).toBeUndefined();
+    expect(out.SSH_PRIVATE_KEY).toBeUndefined();
+    expect(out.DB_PASSWORD).toBeUndefined();
+    expect(out.PATH).toBe("/usr/bin");
+  });
+
+  it("does NOT over-match: bare *_KEY / ordinary config stays forwarded", () => {
+    // The widened pattern enumerates specific *_KEY families
+    // (ACCESS_KEY, ACCESS_KEY_ID, SECRET_KEY, PRIVATE_KEY) rather than a
+    // blanket `_KEY$`, so ordinary config that merely ends in _KEY is
+    // preserved — otherwise the scrubber would eat legitimate env.
+    const out = buildSanitizedEnv(
+      { FOO_KEY: "not-secret", CACHE_KEY: "abc", NODE_OPTIONS: "--x", PATH: "/usr/bin" },
+      undefined,
+    );
+    expect(out.FOO_KEY).toBe("not-secret");
+    expect(out.CACHE_KEY).toBe("abc");
+    expect(out.NODE_OPTIONS).toBe("--x");
+    expect(out.PATH).toBe("/usr/bin");
+  });
+
   it("matches pattern case-insensitively", () => {
     const out = buildSanitizedEnv(
       {
