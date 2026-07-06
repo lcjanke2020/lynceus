@@ -110,13 +110,14 @@ export async function spawnInspectorTarget(opts: {
       tryResolve();
     });
 
-    child.on("exit", (code, signal) => {
+    child.once("close", (code, signal) => {
       if (settled) return;
-      // The banner may have been written to stderr in the same tick as this
-      // 'exit' fired, before the 'data' handler processed it — do a final
-      // scan before treating exit as a startup failure, so a child that
-      // printed the inspector URL and then died isn't misreported as
-      // "never listened".
+      // Scan on 'close', not 'exit': 'close' is emitted only after the child's
+      // stdio streams have hit EOF, so stderrBuf holds everything the child
+      // wrote — including a banner still in flight when the process exited.
+      // ('exit' can fire while stderr data is still buffered, so a scan there
+      // could miss it — mirrors the production flush in src/session/node.ts.)
+      // The setTimeout above is the backstop if 'close' never arrives.
       if (tryResolve()) return;
       settled = true;
       clearTimeout(timer);

@@ -3,6 +3,9 @@
 // Responsibilities:
 //   - Verify the sample-app dist exists (built by `npm run pretest:e2e` or
 //     manually via `npm run sample:build`).
+//   - Verify the sample-node-app dist entry exists (built by the same
+//     `pretest:e2e` chain via `npm run sample-node:build`) — the Node L3
+//     specs need it, so this preflight fails fast if it's missing.
 //   - Start a static server on port 0 serving the sample-app dist.
 //   - Resolve the Chromium binary via test/e2e/setup/browser-path.ts.
 //   - Launch a single headless Chromium via chrome-launcher (which manages

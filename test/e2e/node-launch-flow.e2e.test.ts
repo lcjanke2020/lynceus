@@ -40,7 +40,12 @@ describe("node launch flow (e2e)", () => {
       call_stack: Array<{ file: string; line: number }>;
     }>(tools, "wait_for_pause", { timeout_ms: 10_000 });
     expect(entryPause.hit_breakpoint_ids).toEqual([]);
-    expect(entryPause.call_stack[0]!.file).toMatch(/handlers\.ts$/);
+    // The entry-pause frame's exact module (index.ts vs handlers.ts) is a
+    // V8/Node-version-dependent detail — like the entry-pause `reason` we
+    // deliberately don't assert. Require only that it resolved to a TS frame,
+    // which is the load-bearing check: source-map mapping worked at entry (an
+    // unmapped frame would surface as the raw dist/*.js path).
+    expect(entryPause.call_stack[0]!.file).toMatch(/\.ts$/);
 
     const bp = await call<{
       id: string;
