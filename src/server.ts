@@ -15,7 +15,7 @@ import { registerNodeOutputTools } from "./tools/node-output.js";
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "lynceus",
-    version: "0.3.0",
+    version: "0.3.1",
   });
 
   registerSessionTools(server);
