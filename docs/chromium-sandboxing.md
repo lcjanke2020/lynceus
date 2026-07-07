@@ -1,6 +1,6 @@
 # Chromium sandboxing
 
-**Last updated: 2026-05-16**
+**Last updated: 2026-07-07**
 
 This project launches Chromium in two different contexts:
 
@@ -120,6 +120,7 @@ Hosts where `sandbox: true` has been verified working against this project, with
 | Host | OS | Arch | `sandbox: true` | AppArmor profile | Notes |
 |---|---|---|---|---|---|
 | Ubuntu 24.04 arm64 (Parallels VM) | Ubuntu 24.04 | arm64 | ✓ | `/etc/apparmor.d/lynceus-chromium` (named-unconfined, mirrors Ubuntu's stock `chrome` / `msedge` / `brave`) | `kernel.apparmor_restrict_unprivileged_userns = 0` was set as a side effect of enabling Bubblewrap, so the kernel-level userns restriction is already off system-wide. The AppArmor profile gives Playwright Chromium a stable named label (instead of `unconfined`) and grants `userns,` explicitly, so `sandbox: true` keeps working even if a future kernel/package update flips the global knob back to `1`. |
+| Fedora 43 (Qubes AppVM) | Fedora 43 | x86_64 | ✓ | none — SELinux is the MAC (AppArmor not present) | Unprivileged user namespaces are unrestricted by default (`user.max_user_namespaces` nonzero; neither `kernel.unprivileged_userns_clone` nor `kernel.apparmor_restrict_unprivileged_userns` exists), so `sandbox: true` works with **no host-side profile**. Confirmed the renderers run in a separate user namespace from the browser process, and `npm run test:e2e` passes with the real sandbox (no `--no-sandbox`). Inside Qubes the qube is itself a VM boundary, so this is defense-in-depth on top of strong VM isolation. |
 
 When adding a new host to this table:
 
@@ -142,7 +143,26 @@ When adding a new host to this table:
    Expect the profile name (e.g. `lynceus-chromium (unconfined)`), not `unconfined` alone.
 4. Add a row to the table above.
 
-Other hosts to characterize as they come online: Fedora — Fedora uses SELinux rather than AppArmor and ships userns enabled by default, so `sandbox: true` is expected to work without host-side profile work. The `dnf install bubblewrap` path is also first-class on Fedora.
+### Fedora and Qubes
+
+Fedora (verified on Fedora 43) needs none of the AppArmor setup above — steps 2–3
+do not apply:
+
+- **MAC system.** Fedora uses **SELinux**, not AppArmor. The
+  `apparmor_restrict_unprivileged_userns` knob does not exist, and SELinux's
+  targeted policy does not block a Chromium launched from a user shell (it runs in
+  an unconfined domain). There is no profile to write for `sandbox: true`.
+- **User namespaces.** Unprivileged user namespaces are enabled by default
+  (`user.max_user_namespaces` nonzero), so Chromium's namespace sandbox works out
+  of the box.
+- **Bubblewrap** is first-class: `sudo dnf install bubblewrap` (Flatpak depends on
+  it, so it is effectively a system component).
+- **Qubes.** Each qube is a Xen VM with strong dom0/inter-qube isolation, so even an
+  unsandboxed Chromium in a dev qube cannot reach dom0 or sibling qubes; Chromium's
+  own sandbox (kept on) is defense-in-depth on top of that. On x86_64 the Playwright
+  Chromium binary is at `~/.cache/ms-playwright/chromium*/chrome-linux64/chrome` and
+  the default-headless binary is `chrome-headless-shell` — this differs from the
+  arm64 `chrome-linux/{chrome,headless_shell}` layout if you script the path.
 
 ## Smoke tests
 
@@ -156,6 +176,11 @@ cat /proc/sys/user/max_user_namespaces
 Expected working values are usually `1` for
 `kernel.unprivileged_userns_clone` and a nonzero number for
 `user.max_user_namespaces`.
+
+On Fedora (and other non-Debian distros) `kernel.unprivileged_userns_clone` does
+not exist — it is a Debian/Ubuntu patch — so rely on `user.max_user_namespaces`
+being nonzero. `kernel.apparmor_restrict_unprivileged_userns` also does not exist
+on Fedora, since SELinux (not AppArmor) is the MAC.
 
 On Ubuntu, AppArmor may still restrict unprivileged user namespaces:
 
