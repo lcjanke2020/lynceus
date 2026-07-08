@@ -411,6 +411,22 @@ export function detectSandboxCapability(
     };
   }
 
+  // Debian and pre-23.10 Ubuntu kernels carry a distro patch that gates
+  // unprivileged userns creation behind kernel.unprivileged_userns_clone —
+  // explicitly 0 disables it even while user.max_user_namespaces stays
+  // nonzero. The knob does not exist on unpatched kernels (Fedora etc.),
+  // where an absent read (null) means no such restriction.
+  const usernsClone = probe.readSysctlInt(
+    "/proc/sys/kernel/unprivileged_userns_clone",
+  );
+  if (usernsClone === 0) {
+    return {
+      capable: false,
+      reason:
+        "unprivileged user namespaces are disabled (kernel.unprivileged_userns_clone=0) and no SUID sandbox helper is present",
+    };
+  }
+
   // Ubuntu 23.10+/24.04 gate unprivileged userns behind AppArmor. The knob is
   // absent on non-AppArmor hosts (Fedora/SELinux), where userns is unrestricted.
   const restrict = probe.readSysctlInt(

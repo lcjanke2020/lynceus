@@ -97,6 +97,42 @@ describe("detectSandboxCapability", () => {
     expect(cap.reason).toContain("could not read user.max_user_namespaces");
   });
 
+  it("Debian hardened shape (unprivileged_userns_clone=0) is incapable", () => {
+    // Debian / pre-23.10 Ubuntu: the distro patch knob is the only userns
+    // gate — user.max_user_namespaces stays readable/nonzero and the AppArmor
+    // restriction knob doesn't exist. Ignoring the clone knob here was the
+    // false positive flagged in review: auto mode would set CDP_SANDBOX=true
+    // and the first browser trial would FATAL with `No usable sandbox!`.
+    const cap = detectSandboxCapability(
+      BIN,
+      probe({
+        readSysctlInt: (p) =>
+          p.endsWith("max_user_namespaces")
+            ? 15000
+            : p.endsWith("unprivileged_userns_clone")
+              ? 0
+              : null,
+      }),
+    );
+    expect(cap.capable).toBe(false);
+    expect(cap.reason).toContain("unprivileged_userns_clone=0");
+  });
+
+  it("Debian shape with unprivileged_userns_clone=1 (enabled) is capable", () => {
+    const cap = detectSandboxCapability(
+      BIN,
+      probe({
+        readSysctlInt: (p) =>
+          p.endsWith("max_user_namespaces")
+            ? 15000
+            : p.endsWith("unprivileged_userns_clone")
+              ? 1
+              : null,
+      }),
+    );
+    expect(cap.capable).toBe(true);
+  });
+
   it("Fedora shape (no AppArmor knob, userns nonzero) is capable", () => {
     const cap = detectSandboxCapability(
       BIN,

@@ -57,7 +57,9 @@ deliberately conservative (a false negative degrades to the working
 - a SUID-root `chrome_sandbox`/`chrome-sandbox` helper sits next to the binary
   (works even when unprivileged userns is locked down); or
 - unprivileged user namespaces are usable: `user.max_user_namespaces` is a
-  readable nonzero value **and** either `kernel.apparmor_restrict_unprivileged_userns`
+  readable nonzero value, `kernel.unprivileged_userns_clone` is not explicitly
+  `0` (the Debian/pre-23.10-Ubuntu patch knob — absent on other distros, which
+  is fine), **and** either `kernel.apparmor_restrict_unprivileged_userns`
   is `0`/absent, or it is `1` but a loaded AppArmor profile both **attaches to the
   resolved binary path** (glob-matched — the profile's path glob must cover the
   *actual* path, the failure mode that bit the multi-account eval hosts) **and**
