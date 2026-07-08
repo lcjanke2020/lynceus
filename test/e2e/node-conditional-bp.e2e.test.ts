@@ -11,7 +11,7 @@
 // "did this actually wire up" assertion.
 
 import { describe, it, expect } from "vitest";
-import { buildToolMap, call } from "./helpers/build-tools.js";
+import { buildToolMap, call, callExpectError } from "./helpers/build-tools.js";
 import { fixtureScript } from "./helpers/node-target.js";
 import { waitFor } from "./helpers/wait-for.js";
 
@@ -111,5 +111,54 @@ describe("node conditional breakpoint (e2e)", () => {
       },
       { describe: "get_node_output 'i=4 v=4' appears (no second pause)", timeoutMs: 5_000 },
     );
+  });
+
+  it("get_source returns the ORIGINAL TypeScript, not the compiled JS", async () => {
+    await call(tools, "launch_node", { script: fixtureScript("conditional-bp") });
+    await call(tools, "wait_for_pause", { timeout_ms: 10_000 }); // entry pause
+
+    const src = await call<{
+      source: string;
+      origin: string;
+      line_count: number;
+      file: string;
+    }>(tools, "get_source", { file: "conditional-bp.ts" });
+
+    // TS-only tokens the compiled JS does NOT contain (type annotations, the
+    // `: number` return type) — proof we resolved back through the source map
+    // to the .ts rather than echoing generated JS.
+    expect(src.source).toContain("function processIteration(i: number): number");
+    expect(src.source).toContain("i * 10");
+    // tsc --sourceMap emits `sources` but no `sourcesContent`, so this is read
+    // off disk for the loopback Node session.
+    expect(src.origin).toBe("disk");
+    expect(src.line_count).toBeGreaterThan(0);
+    expect(src.file).toMatch(/conditional-bp\.ts$/);
+  });
+
+  it("wait_for_pause timeout diagnoses a never-firing conditional breakpoint (GH #46)", async () => {
+    await call(tools, "launch_node", { script: fixtureScript("conditional-bp") });
+    await call(tools, "wait_for_pause", { timeout_ms: 10_000 }); // entry pause
+
+    // The GH #46 mis-index: a conditional bp on the `function main()` header
+    // (line 14) — the kind of line number an agent reads off compiled JS. CDP
+    // slides it to a location where `i === 3` can never hold, so it never
+    // fires and the program runs to completion.
+    await call(tools, "set_breakpoint", {
+      file: "conditional-bp.ts",
+      line: 14,
+      condition: "i === 3",
+    });
+
+    await call(tools, "resume");
+
+    // Nothing pauses; wait_for_pause must time out with an ACTIONABLE
+    // pause_timeout that names the never-fired conditional bp (and, once the
+    // child has exited, the target exit) — not a bare "Timed out".
+    const err = await callExpectError(tools, "wait_for_pause", { timeout_ms: 4_000 });
+    expect(err.error).toBe("pause_timeout");
+    expect(err.message).toMatch(/conditional breakpoint|exited/i);
+    expect(err.message).toContain("i === 3");
+    expect(err.message).toContain("get_source");
   });
 });

@@ -2,7 +2,22 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { requireSession } from "../session/state.js";
 import { mapOriginalToGenerated } from "../sourcemap/store.js";
+import { readOriginalSource } from "../sourcemap/original-source.js";
+import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+
+// Highest addressable 1-based line, i.e. the largest line number
+// set_breakpoint could bind. A trailing newline yields an empty final segment
+// that is NOT a real line, so it isn't counted ("a\nb\nc\n" -> 3, not 4);
+// content without a final newline counts its last line ("a\nb\nc" -> 3). Empty
+// file -> 0. (Copilot review: split("\n").length over-reported by one and could
+// suggest a non-existent last line was addressable.)
+function addressableLineCount(text: string): number {
+  if (text.length === 0) return 0;
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines.length;
+}
 
 export function registerSourceTools(server: McpServer) {
   registerJsonTool(
@@ -39,8 +54,44 @@ export function registerSourceTools(server: McpServer) {
 
   registerJsonTool(
     server,
+    "get_source",
+    "Fetch the ORIGINAL TypeScript source for a file, resolved through source maps. Use this — not get_script_source — to read line numbers for set_breakpoint, which takes TS coordinates: get_script_source returns compiled JS whose line numbers do NOT correspond to set_breakpoint's. Matches by TS path or fragment (e.g. src/foo.ts), like set_breakpoint / resolve_source_position. Lines are 1-based and are exactly the coordinates set_breakpoint expects.",
+    {
+      file: z.string().describe("TS file path or fragment (e.g. src/foo.ts)"),
+      session_id: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("From list_scripts, to disambiguate a worker/iframe copy. null or omitted = root."),
+    },
+    async (input: { file: string; session_id?: string | null }) => {
+      const s = requireSession();
+      const res = await readOriginalSource(s, input.file, input.session_id);
+      if (!res.ok) {
+        const hint =
+          res.reason === "no_content"
+            ? `A source-mapped script references '${input.file}', but its original source isn't available: the map has no embedded sourcesContent, and reading the .ts from disk is Node-only (browser source maps must embed sourcesContent). Use get_script_source for the compiled JS, or resolve_source_position to map a TS coordinate to JS.`
+            : `No source-mapped script references '${input.file}'. Try list_scripts to see what's loaded (see each entry's original_sources).`;
+        throw new ToolError("no_source", hint);
+      }
+      const { value } = res;
+      return {
+        file: value.file,
+        script_id: value.scriptId,
+        session_id: value.sessionId,
+        script_url: value.scriptUrl,
+        // "source_map" = embedded sourcesContent; "disk" = read from the local .ts.
+        origin: value.origin,
+        line_count: addressableLineCount(value.content),
+        source: value.content,
+      };
+    },
+  );
+
+  registerJsonTool(
+    server,
     "get_script_source",
-    "Fetch the raw generated (JS) source text for a script by CDP script ID. Pass `session_id` from list_scripts to fetch a worker/iframe script — CDP scriptIds are per-Debugger-agent, so omitting session_id always routes to root.",
+    "Fetch the raw generated (JS) source text for a script by CDP script ID. NOTE: this is COMPILED JS — its line numbers are NOT set_breakpoint coordinates (set_breakpoint takes TypeScript lines). To read TS line numbers use get_source; to translate a TS coordinate to JS use resolve_source_position. Pass `session_id` from list_scripts to fetch a worker/iframe script — CDP scriptIds are per-Debugger-agent, so omitting session_id always routes to root.",
     {
       script_id: z.string(),
       session_id: z.string().nullable().optional().describe("From list_scripts. null or omitted = root."),

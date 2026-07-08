@@ -51,6 +51,51 @@ describe("set_breakpoint", () => {
     expect(r.status).toBe("set");
   });
 
+  it("echoes `requested` and emits NO warning when the breakpoint binds on the requested line", async () => {
+    const { fake } = setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
+      breakpointId: `cdp:${params.url}:${params.lineNumber}`,
+      locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
+    }));
+    const r = parseOkEnvelope<{ requested: any; warning?: string }>(
+      await setBp.handler({ file: "src/foo.ts", line: 7 }),
+    );
+    expect(r.requested).toEqual({ file: "src/foo.ts", line: 7, column: 0 });
+    expect(r.warning).toBeUndefined();
+  });
+
+  it("warns when CDP slides the breakpoint to a different TS line (JS-vs-TS coordinate mix-up, GH #46)", async () => {
+    // Map original 14 -> gen line 5, original 15 -> gen line 6. The agent asks
+    // for line 14, but CDP binds at a location that maps back to line 15 — the
+    // fingerprint of a JS line number used as a TS line.
+    const { fake } = setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1", url: "http://x/app.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-s1",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 5, column: 0 }, original: { line: 14, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 6, column: 0 }, original: { line: 15, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    // Ignore the requested lineNumber; bind where CDP "slid" it (gen line 6 =
+    // 0-based 5), which maps back to original line 15.
+    fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
+      breakpointId: `cdp:${params.url}`,
+      locations: [{ scriptId: "s1", lineNumber: 5, columnNumber: 0 }],
+    }));
+    const r = parseOkEnvelope<{ requested: any; resolved_locations: any[]; warning?: string }>(
+      await setBp.handler({ file: "src/foo.ts", line: 14 }),
+    );
+    expect(r.requested).toEqual({ file: "src/foo.ts", line: 14, column: 0 });
+    expect(r.resolved_locations[0]).toMatchObject({ file: "src/foo.ts", line: 15 });
+    expect(r.warning).toBeDefined();
+    expect(r.warning).toContain("src/foo.ts:14");
+    expect(r.warning).toContain("15");
+    expect(r.warning).toContain("get_source");
+  });
+
   it("idempotent: re-setting an identical breakpoint returns the same id with status: 'already-set' and does not hit CDP twice", async () => {
     const { fake } = setupSession();
     seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });

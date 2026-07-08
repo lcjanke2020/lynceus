@@ -10,6 +10,7 @@ autoReset();
 const tools = captureTools(registerSourceTools);
 const list = tools.get("list_scripts")!;
 const getSrc = tools.get("get_script_source")!;
+const getSource = tools.get("get_source")!;
 const resolve = tools.get("resolve_source_position")!;
 
 describe("list_scripts", () => {
@@ -112,6 +113,66 @@ describe("get_script_source", () => {
   });
 });
 
+describe("get_source", () => {
+  it("no_session error", async () => {
+    setupSession({ noClient: true });
+    expect(parseErrorEnvelope(await getSource.handler({ file: "src/foo.ts" }))?.error).toBe("no_session");
+  });
+
+  it("returns the ORIGINAL TS text (embedded sourcesContent) with origin + line_count", async () => {
+    setupSession();
+    seedMappedScript({
+      scriptId: "s1",
+      url: "http://x/app.js",
+      source: "src/foo.ts",
+      sourceContent: "export function foo() {\n  return 42;\n}\n",
+    });
+    const r = parseOkEnvelope<{
+      file: string; script_id: string; session_id: string | null;
+      origin: string; line_count: number; source: string;
+    }>(await getSource.handler({ file: "src/foo.ts" }));
+    expect(r.source).toBe("export function foo() {\n  return 42;\n}\n");
+    expect(r.origin).toBe("source_map");
+    expect(r.file).toBe("src/foo.ts");
+    expect(r.script_id).toBe("s1");
+    expect(r.session_id).toBeNull();
+    expect(r.line_count).toBe(3); // three addressable lines; trailing newline is not a 4th
+  });
+
+  it("no_source error (no_match) when no script's map references the file", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", sourceContent: "x" });
+    const err = parseErrorEnvelope(await getSource.handler({ file: "src/never.ts" }));
+    expect(err?.error).toBe("no_source");
+    expect(err?.message).toContain("src/never.ts");
+    expect(err?.message).toContain("list_scripts");
+  });
+
+  it("no_source error (no_content) when the map matches but carries no readable source", async () => {
+    setupSession();
+    // http-served, no sourcesContent → nothing embedded, nothing on disk.
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts" });
+    const err = parseErrorEnvelope(await getSource.handler({ file: "src/foo.ts" }));
+    expect(err?.error).toBe("no_source");
+    expect(err?.message).toContain("get_script_source");
+  });
+
+  it("session_id disambiguates a worker copy from root", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s_root", url: "http://x/main.js", source: "src/main.ts", sourceContent: "ROOT" });
+    seedMappedScript({ scriptId: "s_w", url: "http://x/worker.js", source: "src/main.ts", sessionId: "SW1", sourceContent: "WORKER" });
+    const worker = parseOkEnvelope<{ source: string; session_id: string | null }>(
+      await getSource.handler({ file: "src/main.ts", session_id: "SW1" }),
+    );
+    expect(worker.source).toBe("WORKER");
+    expect(worker.session_id).toBe("SW1");
+    const root = parseOkEnvelope<{ source: string }>(
+      await getSource.handler({ file: "src/main.ts", session_id: null }),
+    );
+    expect(root.source).toBe("ROOT");
+  });
+});
+
 describe("resolve_source_position", () => {
   it("no_session error", async () => {
     setupSession({ noClient: true });
@@ -164,9 +225,10 @@ describe("resolve_source_position", () => {
 });
 
 describe("registration metadata", () => {
-  it("registers exactly the three source tools", () => {
+  it("registers exactly the four source tools", () => {
     expect(Array.from(tools.keys()).sort()).toEqual([
       "get_script_source",
+      "get_source",
       "list_scripts",
       "resolve_source_position",
     ]);
