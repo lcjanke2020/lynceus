@@ -44,7 +44,11 @@ export type BrowserChoice = "chromium" | "chrome";
 export const CHROME_LAUNCHER_DEFAULT_MARKER = "chrome-launcher-default";
 
 export interface ResolvedBrowser {
-  /** Absolute path to the Chrome/Chromium executable. */
+  /** Absolute path to the Chrome/Chromium executable — or, when `source` is
+   *  `"chrome-launcher-default"`, the `CHROME_LAUNCHER_DEFAULT_MARKER`
+   *  sentinel, which is NOT a filesystem path (chrome-launcher detects the
+   *  binary itself at launch). Callers that treat this as a path must handle
+   *  the sentinel (see `isChromeLauncherDefault`/`detectSandboxCapability`). */
   binaryPath: string;
   /** Which logical browser this binary represents. */
   choice: BrowserChoice;
