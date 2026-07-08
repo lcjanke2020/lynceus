@@ -365,8 +365,20 @@ export function detectSandboxCapability(
     return { capable: true, reason: `SUID-root chrome sandbox helper present (${suid})` };
   }
 
-  // Otherwise the sandbox relies on unprivileged user namespaces.
+  // Otherwise the sandbox relies on unprivileged user namespaces. Require
+  // POSITIVE evidence they are usable: a readable, nonzero
+  // user.max_user_namespaces. Unreadable/absent (null) is unknown, and an
+  // unknown userns state must degrade to incapable (→ --no-sandbox), not be
+  // assumed available — the detector's whole job is to avoid claiming capable
+  // on a host where the sandbox-on launch would then FATAL.
   const maxUserns = probe.readSysctlInt("/proc/sys/user/max_user_namespaces");
+  if (maxUserns === null) {
+    return {
+      capable: false,
+      reason:
+        "could not read user.max_user_namespaces and no SUID sandbox helper is present — cannot confirm a usable sandbox path",
+    };
+  }
   if (maxUserns === 0) {
     return {
       capable: false,
@@ -462,7 +474,7 @@ const defaultSandboxProbe: SandboxProbe = {
         continue;
       }
       for (const p of parseAppArmorProfiles(text)) {
-        if (/\buserns\b/.test(p.body) && matchAppArmorPath(p.attach, binaryPath)) {
+        if (profileGrantsUserns(p.body) && matchAppArmorPath(p.attach, binaryPath)) {
           return p.name;
         }
       }
@@ -502,6 +514,22 @@ export function parseAppArmorProfiles(
     out.push({ name: m[1] ?? attach, attach, body: bodyLines.join("\n") });
   }
   return out;
+}
+
+/** True when an AppArmor profile body contains an ALLOW rule that grants the
+ *  `userns` permission. Conservative: comments are stripped first, and any
+ *  `deny`-qualified line is excluded — so `# userns` or `deny userns,` do NOT
+ *  count as granting it (a false positive there would report a host capable and
+ *  then FATAL at sandbox-on launch). Exported for unit testing. */
+export function profileGrantsUserns(body: string): boolean {
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim(); // strip trailing comment
+    if (!line || /\bdeny\b/.test(line)) continue;
+    // A userns access rule, optionally prefixed with audit/allow and optionally
+    // carrying an access spec (e.g. `userns create,`), terminated by a comma.
+    if (/^(?:audit\s+)?(?:allow\s+)?userns\b[^,]*,$/.test(line)) return true;
+  }
+  return false;
 }
 
 /** Match an AppArmor path glob against a concrete path. Supports `*`

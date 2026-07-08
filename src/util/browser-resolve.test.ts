@@ -8,6 +8,7 @@ import {
   detectSandboxCapability,
   matchAppArmorPath,
   parseAppArmorProfiles,
+  profileGrantsUserns,
   type SandboxProbe,
 } from "./browser-resolve.js";
 
@@ -59,6 +60,14 @@ describe("detectSandboxCapability", () => {
     );
     expect(cap.capable).toBe(false);
     expect(cap.reason).toContain("max_user_namespaces=0");
+  });
+
+  it("unreadable max_user_namespaces (null) is incapable, not assumed-nonzero", () => {
+    // No SUID helper, and every sysctl read fails → the userns state is unknown.
+    // Conservative detector must NOT fall through to capable.
+    const cap = detectSandboxCapability(BIN, probe({ readSysctlInt: () => null }));
+    expect(cap.capable).toBe(false);
+    expect(cap.reason).toContain("could not read user.max_user_namespaces");
   });
 
   it("Fedora shape (no AppArmor knob, userns nonzero) is capable", () => {
@@ -168,6 +177,46 @@ describe("parseAppArmorProfiles", () => {
   it("ignores named profiles with no filesystem attachment", () => {
     const text = "profile just_a_name {\n  userns,\n}";
     expect(parseAppArmorProfiles(text)).toHaveLength(0);
+  });
+
+  // Mirrors how the default probe's appArmorUsernsProfile() composes the three
+  // exported pure helpers (parse → grants-userns → glob-match) against one
+  // profile file's text, without reaching into the FS-bound probe.
+  const coveringProfileName = (text: string, binaryPath: string): string | null => {
+    for (const p of parseAppArmorProfiles(text)) {
+      if (profileGrantsUserns(p.body) && matchAppArmorPath(p.attach, binaryPath)) {
+        return p.name;
+      }
+    }
+    return null;
+  };
+
+  it("a covering profile that ALLOWS userns is selected (by binary path)", () => {
+    const text = "profile pw /home/alice/chrome flags=(unconfined) {\n  userns,\n}";
+    expect(coveringProfileName(text, "/home/alice/chrome")).toBe("pw");
+    expect(coveringProfileName(text, "/home/bob/chrome")).toBe(null); // glob doesn't cover
+  });
+
+  it("a `deny userns` profile is NOT selected (no false positive)", () => {
+    const text = "profile pw /home/alice/chrome flags=(unconfined) {\n  deny userns,\n}";
+    expect(coveringProfileName(text, "/home/alice/chrome")).toBe(null);
+  });
+});
+
+describe("profileGrantsUserns", () => {
+  it("true for a plain userns allow rule (and `userns create,`)", () => {
+    expect(profileGrantsUserns("  userns,")).toBe(true);
+    expect(profileGrantsUserns("  userns create,")).toBe(true);
+    expect(profileGrantsUserns("  allow userns,")).toBe(true);
+    expect(profileGrantsUserns("  audit userns,")).toBe(true);
+  });
+
+  it("false for deny rules, comments, and bare mentions", () => {
+    expect(profileGrantsUserns("  deny userns,")).toBe(false);
+    expect(profileGrantsUserns("  audit deny userns,")).toBe(false);
+    expect(profileGrantsUserns("  # userns is granted elsewhere")).toBe(false);
+    expect(profileGrantsUserns("  network, # userns")).toBe(false);
+    expect(profileGrantsUserns("  capability sys_admin,")).toBe(false);
   });
 
   it("parses a multi-account profile whose glob ends in `}` (regression)", () => {
