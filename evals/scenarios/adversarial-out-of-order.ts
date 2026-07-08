@@ -15,11 +15,23 @@
 // note + the grader's `recovery` axis — not gated on, since a clean
 // solve under degraded guidance is a legitimate (if surprising) pass
 // rather than a failure (PR #15 review).
+//
+// LEO-400: the task prompt now demands a *runtime* confirmation ("pause
+// where the value is computed") so a capable model can't satisfy the
+// scenario by static source-reading alone. It deliberately does NOT
+// prescribe the tool ordering (that lives in the system prompt this
+// scenario strips), so the out-of-order recovery challenge survives and
+// this does not collapse into compute-step. The mechanic axis is also
+// `xfailMechanic`-tagged: the bug (`return 2`) is trivially readable in
+// source, so the breakpoint→pause flow cannot be *forced* by
+// construction — a compliant run reports XPASS! (bonus, model drove the
+// debugger), a legitimate static shortcut reports XFAIL (tolerated),
+// rather than a nagging FAIL.
 
 import type { Scenario, TraceEntry, OracleResult } from "../harness/types.js";
 import { toolPairs } from "../harness/trace.js";
 
-const PROMPT = `The page has a button labeled "Go" that should increment a counter by 1 per click. It's adding 2 instead. Find the bug. End your answer with the file:line.`;
+const PROMPT = `The page has a button labeled "Go" that should increment a counter by 1 per click. It's adding 2 instead. Reading the source isn't enough to be sure — pause execution where the increment is computed and confirm the wrong value at runtime before answering. End your answer with the file:line.`;
 
 const MINIMAL_SYSTEM = `You are an AI debugging assistant connected to a Chrome DevTools Protocol MCP server. Tools are exposed; pick any that help. Investigate the page, find the bug, and report the file:line.`;
 
@@ -98,4 +110,11 @@ export const adversarialOutOfOrder: Scenario = {
   // identifies the bug despite degraded guidance) prints `XPASS!` to
   // prompt the operator to consider dropping the tag.
   xfailCorrectness: true,
+  // LEO-400: the mechanic axis is likewise expected-not-forced. The bug
+  // is a literal `return 2` readable straight from source, so no prompt
+  // can *guarantee* the breakpoint→pause flow — a capable model may
+  // legitimately confirm the value by other means. Tagged so a static
+  // shortcut reports XFAIL (tolerated) rather than a bare FAIL, and a
+  // run that does drive the debugger reports XPASS! (the desired flow).
+  xfailMechanic: true,
 };

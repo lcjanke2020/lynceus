@@ -115,9 +115,18 @@ export interface ScenarioRollup {
    *  This is what the CLI uses for its exit code and what the
    *  scoreboard prints in the CORRECT column. */
   status: ScenarioStatus;
+  /** Mechanic-axis status taking `xfailMechanic` into account — the
+   *  mechanic-column analog of `status`. PASS/FAIL when untagged;
+   *  XFAIL/XPASS when the scenario is `xfailMechanic`-tagged. Unlike
+   *  `status`, this never feeds the CLI exit code (mechanic is
+   *  diagnostic-only). */
+  mechanicStatus: ScenarioStatus;
   /** True if the scenario was tagged `xfailCorrectness` — preserved on
    *  the rollup so the scoreboard footer can count xfails separately. */
   xfailCorrectness: boolean;
+  /** True if the scenario was tagged `xfailMechanic` — mirror of
+   *  `xfailCorrectness` for the mechanic axis. */
+  xfailMechanic: boolean;
   /** Per-trial details so the per-night report can show the breakdown. */
   per: TrialOutcome[];
   meanEfficiency: number;
@@ -130,6 +139,10 @@ export interface RollupOpts {
    *  correctness-axis result is reported as XFAIL/XPASS rather than
    *  FAIL/PASS, and neither fails the run. */
   xfailCorrectness?: boolean;
+  /** Mirror of `Scenario.xfailMechanic` — when true, the mechanic-axis
+   *  result is reported as XFAIL/XPASS rather than FAIL/PASS. Display
+   *  only; the mechanic axis never fails the run either way. */
+  xfailMechanic?: boolean;
 }
 
 export function rollupScenario(
@@ -156,13 +169,23 @@ export function rollupScenario(
     : medianCorrectness === 1
       ? "PASS"
       : "FAIL";
+  const xfailMechanic = opts.xfailMechanic === true;
+  const mechanicStatus: ScenarioStatus = xfailMechanic
+    ? medianMechanic === 1
+      ? "XPASS"
+      : "XFAIL"
+    : medianMechanic === 1
+      ? "PASS"
+      : "FAIL";
   return {
     scenario: scenarioName,
     trials: outcomes.length,
     medianCorrectness,
     medianMechanic,
     status,
+    mechanicStatus,
     xfailCorrectness,
+    xfailMechanic,
     per: outcomes,
     meanEfficiency,
     totalRecoveries,
@@ -175,17 +198,24 @@ export function rollupScenario(
  *    SCENARIO              TRIALS  CORRECT  MECHANIC  EFFICIENCY  RECOVERIES  COST
  *    compute-step            3       PASS     PASS        0.83          0    $1.85
  *    network-bug             3       FAIL     PASS        0.40          1    $1.71
- *    adversarial-out-...     3      XFAIL     PASS        0.67          0    $1.50
+ *    adversarial-out-...     3      XFAIL   XPASS!        0.67          0    $1.50
  *    ...                                                                     -----
  *                                                                            $14.32
  *
+ *  (adversarial-out-... is xfail-tagged on BOTH axes, so its CORRECT and
+ *  MECHANIC columns render XFAIL/XPASS! independently — here it missed the
+ *  bug under degraded guidance (XFAIL) but still drove the debugger (XPASS!).)
+ *
  *  CORRECT column shows the xfail-aware status (PASS / FAIL / XFAIL /
- *  XPASS!). MECHANIC stays as a plain PASS/FAIL — there's no
- *  xfailMechanic field yet, but the column is independent of CORRECT
- *  by design (a scenario can drive the debugger correctly while
- *  misidentifying the bug, or vice versa). Only FAIL in the CORRECT
- *  column fails the run; XPASS gets a `!` marker so the operator
- *  notices the unexpected pass without it being treated as a failure.
+ *  XPASS!). MECHANIC shows the same xfail-aware status for the mechanic
+ *  axis (`xfailMechanic`-tagged scenarios render XFAIL/XPASS!); it stays
+ *  independent of CORRECT by design (a scenario can drive the debugger
+ *  correctly while misidentifying the bug, or vice versa). Only FAIL in
+ *  the CORRECT column fails the run — the MECHANIC column is
+ *  diagnostic-only and never gates. XPASS gets a `!` marker in either
+ *  column to flag that a tagged axis passed — an unexpected pass for a
+ *  `xfailCorrectness` tag (consider dropping it), or the intended bonus
+ *  for a defensive `xfailMechanic` tag.
  */
 export function renderScoreboard(rollups: ScenarioRollup[]): string {
   const rows: string[] = [];
@@ -211,13 +241,20 @@ export function renderScoreboard(rollups: ScenarioRollup[]): string {
     else if (r.status === "XFAIL") xfailCount += 1;
     else if (r.status === "XPASS") xpassCount += 1;
     else if (r.status === "FAIL") failCount += 1;
+    // Deliberately asymmetric with `passedScenarios`: this counts every
+    // scenario that drove the debugger (`medianMechanic === 1`), so a
+    // MECHANIC-column `XPASS!` (xfailMechanic-tagged but the flow ran) counts
+    // here, whereas a correctness `XPASS!` is excluded from `passedScenarios`.
+    // The mechanic axis is diagnostic-only, so "did it drive the debugger" is
+    // the useful tally regardless of the xfail tag.
     if (r.medianMechanic === 1) mechanicPassed += 1;
     const correctDisplay = r.status === "XPASS" ? "XPASS!" : r.status;
+    const mechanicDisplay = r.mechanicStatus === "XPASS" ? "XPASS!" : r.mechanicStatus;
     rows.push(
       r.scenario.padEnd(28) +
         String(r.trials).padStart(7) +
         correctDisplay.padStart(9) +
-        (r.medianMechanic === 1 ? "PASS" : "FAIL").padStart(10) +
+        mechanicDisplay.padStart(10) +
         r.meanEfficiency.toFixed(2).padStart(12) +
         String(r.totalRecoveries).padStart(12) +
         ("$" + r.totalCostUsd.toFixed(2)).padStart(10),
@@ -225,10 +262,18 @@ export function renderScoreboard(rollups: ScenarioRollup[]): string {
   }
   rows.push("-".repeat(88));
   const parts: string[] = [];
-  parts.push(`${passedScenarios}/${rollups.length} correct`);
-  if (xfailCount > 0) parts.push(`${xfailCount} xfail`);
-  if (xpassCount > 0) parts.push(`${xpassCount} XPASS!`);
-  if (failCount > 0) parts.push(`${failCount} fail`);
+  // The xfail/XPASS!/fail breakdown is correctness-axis only, so group it in
+  // parens under the `correct` count — since `xfailMechanic` landed, XFAIL/
+  // XPASS can also appear in the MECHANIC column, and an unqualified
+  // `1 xfail` in the footer would read ambiguously across both axes.
+  const correctBreakdown: string[] = [];
+  if (xfailCount > 0) correctBreakdown.push(`${xfailCount} xfail`);
+  if (xpassCount > 0) correctBreakdown.push(`${xpassCount} XPASS!`);
+  if (failCount > 0) correctBreakdown.push(`${failCount} fail`);
+  parts.push(
+    `${passedScenarios}/${rollups.length} correct` +
+      (correctBreakdown.length ? ` (${correctBreakdown.join(", ")})` : ""),
+  );
   parts.push(`${mechanicPassed}/${rollups.length} mechanic`);
   rows.push(parts.join(", ").padEnd(78) + ("$" + totalCost.toFixed(2)).padStart(10));
   return rows.join("\n");

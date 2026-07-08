@@ -396,8 +396,9 @@ async function main(): Promise<void> {
         const correct = outcome.oracle.correctness === 1 ? "PASS" : "FAIL";
         const mech = outcome.oracle.mechanic === 1 ? "PASS" : "FAIL";
         const xfailTag = scenario.xfailCorrectness ? " [xfail-correctness]" : "";
+        const xfailMechTag = scenario.xfailMechanic ? " [xfail-mechanic]" : "";
         console.error(
-          `  ${scenario.name} trial ${trial}/${args.trials}: correct=${correct}${xfailTag} mechanic=${mech} cost=$${outcome.costUsd.toFixed(3)} elapsed=${outcome.elapsedMs}ms`,
+          `  ${scenario.name} trial ${trial}/${args.trials}: correct=${correct}${xfailTag} mechanic=${mech}${xfailMechTag} cost=$${outcome.costUsd.toFixed(3)} elapsed=${outcome.elapsedMs}ms`,
         );
       } catch (e) {
         if (e instanceof BudgetExceeded) {
@@ -416,14 +417,15 @@ async function main(): Promise<void> {
     }
   }
 
-  // Rollup + scoreboard. Pass each scenario's xfailCorrectness flag
-  // through to the rollup so XFAIL/XPASS are surfaced in place of
-  // FAIL/PASS for tagged scenarios — adversarial-out-of-order being
-  // the current (and only) example.
+  // Rollup + scoreboard. Pass each scenario's xfail flags through to the
+  // rollup so XFAIL/XPASS are surfaced in place of FAIL/PASS for tagged
+  // scenarios — adversarial-out-of-order being the current example for
+  // both the correctness and (LEO-400) the mechanic axis.
   const rollups = Object.entries(byScenario).map(([name, outcomes]) => {
     const scenario = lookupScenario(name);
     return rollupScenario(name, outcomes, {
       xfailCorrectness: scenario.xfailCorrectness,
+      xfailMechanic: scenario.xfailMechanic,
     });
   });
   console.log("\n" + renderScoreboard(rollups));

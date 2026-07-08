@@ -77,9 +77,19 @@ export interface Scenario {
    *  causes the CLI to exit nonzero. Mechanic, efficiency, and recovery
    *  axes still score normally. Used by adversarial-out-of-order, where
    *  the deliberately-degraded system prompt makes the correctness=0
-   *  outcome design intent rather than a regression. Field name leaves
-   *  room for a future `xfailMechanic` without renaming. */
+   *  outcome design intent rather than a regression. See its sibling
+   *  `xfailMechanic` for the same treatment of the mechanic axis. */
   xfailCorrectness?: boolean;
+  /** Optional: this scenario's mechanic axis is *expected* to not be
+   *  forced. When true, the rollup reports the mechanic column as XFAIL
+   *  (median mechanic=0) or XPASS (median mechanic=1) instead of
+   *  FAIL / PASS. Like `xfailCorrectness`, this is display-only — the
+   *  mechanic axis never gates the CLI exit code regardless. Used by
+   *  adversarial-out-of-order (LEO-400), where the bug is statically
+   *  readable so the breakpoint→pause flow can't be forced by
+   *  construction: a static-shortcut solve is tolerated (XFAIL), a run
+   *  that drives the debugger is the desired bonus (XPASS). */
+  xfailMechanic?: boolean;
 }
 
 export type TraceEntry =
