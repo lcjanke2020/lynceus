@@ -213,7 +213,9 @@ export function rollupScenario(
  *  correctly while misidentifying the bug, or vice versa). Only FAIL in
  *  the CORRECT column fails the run — the MECHANIC column is
  *  diagnostic-only and never gates. XPASS gets a `!` marker in either
- *  column so the operator notices the unexpected pass.
+ *  column to flag that a tagged axis passed — an unexpected pass for a
+ *  `xfailCorrectness` tag (consider dropping it), or the intended bonus
+ *  for a defensive `xfailMechanic` tag.
  */
 export function renderScoreboard(rollups: ScenarioRollup[]): string {
   const rows: string[] = [];

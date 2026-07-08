@@ -239,7 +239,7 @@ A scenario can mark an axis as **expected to fail** (the harness equivalent of p
 
 | Status   | Means (for the tagged axis)                                | Fails the run? |
 |----------|------------------------------------------------------------|----------------|
-| `PASS`   | not xfail-tagged; median=1                                 | corr: **yes** · mech: no |
+| `PASS`   | not xfail-tagged; median=1                                 | no             |
 | `FAIL`   | not xfail-tagged; median=0                                 | corr: **yes** · mech: no |
 | `XFAIL`  | xfail-tagged; median=0 (the expected outcome)              | no             |
 | `XPASS!` | xfail-tagged; median=1 (passed the tagged axis)            | no             |
