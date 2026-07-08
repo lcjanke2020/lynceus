@@ -53,4 +53,8 @@ describe("adversarial-out-of-order oracle", () => {
     expect(out.correctness).toBe(1);
     expect(out.mechanic).toBe(0);
   });
+
+  it("is tagged xfailMechanic (a statically-readable bug can't force the pause flow — LEO-400)", () => {
+    expect(adversarialOutOfOrder.xfailMechanic).toBe(true);
+  });
 });

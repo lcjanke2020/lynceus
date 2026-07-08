@@ -260,3 +260,74 @@ describe("rollupScenario — xfailCorrectness status", () => {
     expect(board).toMatch(/1 fail/);
   });
 });
+
+describe("rollupScenario — xfailMechanic status", () => {
+  // correctness is held fixed (=1) so `status` stays PASS and any XFAIL/
+  // XPASS we assert can only originate from the mechanic axis.
+  function outcome(mechanic: 0 | 1, costUsd = 1): TrialOutcome {
+    return {
+      scenario: "s",
+      trial: 0,
+      oracle: { correctness: 1, mechanic, efficiency: 1, recovery: 0, notes: "" },
+      elapsedMs: 100,
+      costUsd,
+      tracePath: "/tmp/x.ndjson",
+    };
+  }
+
+  it("untagged scenario → mechanicStatus PASS when median mechanic=1", () => {
+    const r = rollupScenario("s", [outcome(1), outcome(1), outcome(0)]);
+    expect(r.mechanicStatus).toBe("PASS");
+    expect(r.xfailMechanic).toBe(false);
+  });
+
+  it("untagged scenario → mechanicStatus FAIL when median mechanic=0", () => {
+    const r = rollupScenario("s", [outcome(0), outcome(0), outcome(1)]);
+    expect(r.mechanicStatus).toBe("FAIL");
+    expect(r.xfailMechanic).toBe(false);
+  });
+
+  it("xfailMechanic-tagged → XFAIL when median mechanic=0 (static-shortcut solve, tolerated)", () => {
+    const r = rollupScenario("s", [outcome(0), outcome(0), outcome(1)], {
+      xfailMechanic: true,
+    });
+    expect(r.mechanicStatus).toBe("XFAIL");
+    expect(r.medianMechanic).toBe(0);
+    expect(r.xfailMechanic).toBe(true);
+  });
+
+  it("xfailMechanic-tagged → XPASS when median mechanic=1 (drove the debugger, bonus)", () => {
+    const r = rollupScenario("s", [outcome(1), outcome(1), outcome(0)], {
+      xfailMechanic: true,
+    });
+    expect(r.mechanicStatus).toBe("XPASS");
+    expect(r.medianMechanic).toBe(1);
+    expect(r.xfailMechanic).toBe(true);
+  });
+
+  it("mechanic xfail is independent of the correctness status", () => {
+    // correctness=1 (untagged) → status PASS; mechanic=0 xfail → XFAIL.
+    const r = rollupScenario("s", [outcome(0), outcome(0), outcome(0)], {
+      xfailMechanic: true,
+    });
+    expect(r.status).toBe("PASS");
+    expect(r.mechanicStatus).toBe("XFAIL");
+  });
+
+  it("scoreboard renders XFAIL / XPASS! in the MECHANIC column for xfailMechanic scenarios", () => {
+    // correctness=1 everywhere → the CORRECT column is PASS for both rows,
+    // so any XFAIL / XPASS! in the board must come from the MECHANIC column.
+    const board = renderScoreboard([
+      rollupScenario("adversarial", [outcome(0, 0.3), outcome(0, 0.3), outcome(0, 0.3)], {
+        xfailMechanic: true,
+      }),
+      rollupScenario("driving", [outcome(1, 0.2), outcome(1, 0.2), outcome(1, 0.2)], {
+        xfailMechanic: true,
+      }),
+    ]);
+    expect(board).toContain("XFAIL");
+    expect(board).toContain("XPASS!");
+    // Both rows are correctness PASS — confirm no correctness-side xfail leaked in.
+    expect(board).toMatch(/2\/2 correct/);
+  });
+});
