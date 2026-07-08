@@ -228,13 +228,42 @@ describe("wait_for_pause", () => {
     expect(r.call_stack[0].function_name).toBe("computeStep");
   });
 
-  it("times out: PauseTracker.waitForPause rejects, the error envelope surfaces", async () => {
+  it("times out: PauseTracker.waitForPause rejects, the error envelope surfaces as pause_timeout", async () => {
     setupSession();
     // wait_for_pause uses waitForPause (not waitForPauseOrResume), which
-    // REJECTS on timeout. The error envelope kicks in.
+    // REJECTS on timeout. The handler enriches it into a pause_timeout error.
     const r = await waitForPause.handler({ timeout_ms: 30 });
     const err = parseErrorEnvelope(r);
+    expect(err?.error).toBe("pause_timeout");
     expect(err?.message).toMatch(/Timed out/);
+  });
+
+  it("timeout diagnostic: reports that an owned Node target already exited", async () => {
+    setupSession({ kind: "node" });
+    // Simulate a launch_node child that ran to completion before pausing.
+    sessionState.ownedProcess = { kind: "node", handle: { exitCode: 0, signalCode: null } as any };
+    const err = parseErrorEnvelope(await waitForPause.handler({ timeout_ms: 20 }));
+    expect(err?.error).toBe("pause_timeout");
+    expect(err?.message).toMatch(/exited/i);
+    expect(err?.message).toContain("exit code 0");
+  });
+
+  it("timeout diagnostic: lists never-fired conditional breakpoints with resolved TS location + condition", async () => {
+    setupSession();
+    sessionState.breakpoints.set("bp_1", {
+      id: "bp_1",
+      file: "conditional-bp.ts",
+      line: 14,
+      condition: "i === 3",
+      resolvedLocations: [{ file: "conditional-bp.ts", line: 15, column: 0 }],
+      bindings: [],
+    });
+    const err = parseErrorEnvelope(await waitForPause.handler({ timeout_ms: 20 }));
+    expect(err?.error).toBe("pause_timeout");
+    expect(err?.message).toContain("bp_1");
+    expect(err?.message).toContain("conditional-bp.ts:15");
+    expect(err?.message).toContain("i === 3");
+    expect(err?.message).toContain("get_source");
   });
 
   it("returns the session_id of the paused frame so agents can route follow-on calls", async () => {

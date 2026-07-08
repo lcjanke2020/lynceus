@@ -108,7 +108,7 @@ async function fetchMap(
 // attach_node always sets it explicitly to one of these strings or the
 // user-provided host. Conservative exact-match: 127.0.0.2 etc. would also
 // be loopback but require deliberate opt-in we can't reasonably guess at.
-function isLoopbackHost(host: string | null): boolean {
+export function isLoopbackHost(host: string | null): boolean {
   return host === null || host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 

@@ -286,7 +286,13 @@ export async function mapOriginalToGenerated(
   return out;
 }
 
-function pickSourceKey(script: ScriptInfo, file: string): string | null {
+// The raw source key the consumer indexes this file under — i.e. the entry
+// of `consumer.sources` (with whatever prefix / resolution the map applied)
+// that `pathMatches` folds to the caller's `file`. Both `allGeneratedPositionsFor`
+// and `sourceContentFor` are keyed by this exact string, so exposing it keeps
+// coordinate translation (mapOriginalToGenerated) and source retrieval
+// (get_source) reading the same key.
+export function pickSourceKey(script: ScriptInfo, file: string): string | null {
   if (!script.consumer) return null;
   // We want the source as it appears in the map (with whatever prefix it had)
   // so the consumer can look it up.

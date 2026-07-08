@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { requireSession, ROOT_SESSION_KEY, type BreakpointRecord, type BreakpointBinding } from "../session/state.js";
 import { mapOriginalToGenerated, mapCdpToOriginal, type GeneratedLocation } from "../sourcemap/store.js";
+import { pathMatches } from "../sourcemap/normalize.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 
@@ -30,13 +31,38 @@ function genKey(g: GeneratedLocation): string {
   return `${g.sessionId ?? ""}|${g.scriptUrl}|${g.lineNumber}:${g.columnNumber}`;
 }
 
+// CDP slides a breakpoint to the next executable location when the requested
+// line has no code (a blank line, a comment, or a `function foo() {` header).
+// That slide is ALSO the fingerprint of a JS line number — read off
+// get_script_source (compiled JS) — mistakenly used as a TS line. Compare the
+// requested TS line to where CDP actually bound (mapped back to TS) and warn
+// when they differ so the agent doesn't silently debug the wrong line. See
+// GitHub #46: an agent set a conditional bp at the JS call-site line, which
+// resolved onto a loop header where the condition could never be true.
+function lineDriftWarning(r: BreakpointRecord): string | undefined {
+  // Only compare resolved locations in the SAME source file; a bp that binds
+  // into a different original file (unusual) isn't a line-number mix-up.
+  const sameFile = r.resolvedLocations.filter((l) => pathMatches(l.file, r.file));
+  if (sameFile.length === 0) return undefined; // pending / cross-file — don't guess
+  if (sameFile.some((l) => l.line === r.line)) return undefined; // bound where asked
+  const boundLines = Array.from(new Set(sameFile.map((l) => l.line))).sort((a, b) => a - b);
+  return (
+    `Requested ${r.file}:${r.line} but the breakpoint bound at line ${boundLines.join(", ")}. ` +
+    `CDP slides a breakpoint to the next executable line, so it pauses at the BOUND line, not the requested one. ` +
+    `If this line number came from get_script_source, note that returns compiled JS — set_breakpoint takes TypeScript coordinates; read the TS with get_source to pick the right line.`
+  );
+}
+
 function breakpointEnvelope(r: BreakpointRecord, status: "set" | "already-set") {
+  const warning = lineDriftWarning(r);
   return {
     id: r.id,
+    requested: { file: r.file, line: r.line, column: r.column ?? 0 },
     resolved_locations: r.resolvedLocations,
     binding_count: r.bindings.length,
     sessions_bound: Array.from(new Set(r.bindings.map((b) => b.sessionId ?? ROOT_SESSION_KEY))),
     status,
+    ...(warning ? { warning } : {}),
   };
 }
 

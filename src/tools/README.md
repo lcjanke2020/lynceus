@@ -2,7 +2,7 @@
 
 **Last updated: 2026-07-08**
 
-All 51 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool). Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
+All 52 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool). Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
 ## The `registerJsonTool` pattern
 
@@ -48,7 +48,7 @@ Everything else (the `Runtime` / `Debugger` surface — breakpoints, execution s
 - **Buffered tools** (`get_console_logs`, `get_network_requests`) paginate via `since` cursor — pass back the previous `cursor` value to get only new entries.
 - **Compact previews.** Use `previewRemoteObject()` and `truncate()` from `src/util/format.ts`. Lists capped at sensible defaults; bodies lazy-loaded via dedicated tools, never inlined in list responses.
 
-## Tool catalog (51 tools)
+## Tool catalog (52 tools)
 
 The **Kind** column reflects which session kind a tool is meaningful for. **Shared** = works on both browser and Node sessions (the Runtime + Debugger surface). **Browser** = only meaningful against a browser session — the 25 tools in `BROWSER_ONLY` (`src/session/capabilities.ts`, including `select_target`) return `error: "unsupported_target"` when called against a Node session, and `launch_chrome` / `attach_chrome` are session-startup tools listed Browser for the same affinity reason. **Node** = only meaningful against a Node session — `attach_node` / `launch_node` are session-startup, and `get_node_output` is in `NODE_ONLY` (returns `unsupported_target` on a browser session).
 
@@ -65,7 +65,8 @@ The **Kind** column reflects which session kind a tool is meaningful for. **Shar
 | | `reload` | Browser | Reload the active page (optional cache bypass). |
 | | `get_url` | Browser | Current top-frame URL. |
 | `source.ts` | `list_scripts` | Shared | Parsed scripts with source-map status. |
-| | `get_script_source` | Shared | Raw generated (JS) source by script ID. |
+| | `get_script_source` | Shared | Raw generated (JS) source by script ID — compiled JS, NOT set_breakpoint coordinates. |
+| | `get_source` | Shared | Original **TypeScript** source by TS path/fragment (via source maps: embedded `sourcesContent`, else on-disk for loopback). Read TS line numbers for set_breakpoint here, not from get_script_source. |
 | | `resolve_source_position` | Shared | TS → JS coordinate translation (diagnostic; useful when a breakpoint didn't bind). |
 | `breakpoints.ts` | `set_breakpoint` | Shared | Set in TS source; binds in every mapping script (page + workers + iframes). Optional `condition`, `log_message` (logpoint). Idempotent: identical re-call returns same id with `status: "already-set"`; same location + different condition/log_message returns `error: "breakpoint_conflict"`. |
 | | `remove_breakpoint` | Shared | Remove by ID. |

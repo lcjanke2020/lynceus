@@ -22,6 +22,11 @@ export function seedMappedScript(opts: {
   tsLine?: number;
   /** JS line in the generated source (1-based for source-map). Default 1. */
   jsLine?: number;
+  /** Embed the original TS text in the map (`sourcesContent`). Omit for a
+   *  `tsc --sourceMap`-style map that carries `sources` but no content. */
+  sourceContent?: string;
+  /** Source map URL to parse the map against (resolves relative `sources`). */
+  sourceMapURL?: string;
 }) {
   const tsLine = opts.tsLine ?? 7;
   const jsLine = opts.jsLine ?? 1;
@@ -34,6 +39,7 @@ export function seedMappedScript(opts: {
     endColumn: 0,
     executionContextId: 1,
     hash: `h-${opts.scriptId}`,
+    ...(opts.sourceMapURL ? { sourceMapURL: opts.sourceMapURL } : {}),
     ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
   });
   const gen = new SourceMapGenerator({ file: opts.url });
@@ -42,6 +48,10 @@ export function seedMappedScript(opts: {
     original: { line: tsLine, column: 0 },
     source: opts.source,
   });
+  if (opts.sourceContent !== undefined) gen.setSourceContent(opts.source, opts.sourceContent);
+  // No mapUrl here so the consumer keeps `sources` as-given (relative) — the
+  // disk-fallback path then resolves them via ScriptInfo.sourceMapURL + url,
+  // mirroring the production branch where consumer.sources aren't pre-resolved.
   sessionState.scripts.attachMap(opts.scriptId, opts.sessionId, gen.toString());
   return { tsLine, jsLine };
 }

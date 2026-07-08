@@ -7,6 +7,7 @@ import {
   waitForConsumer,
   MAP_LOAD_WAIT_MS,
 } from "../sourcemap/store.js";
+import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 
 export function registerExecutionTools(server: McpServer) {
@@ -102,10 +103,75 @@ export function registerExecutionTools(server: McpServer) {
     { timeout_ms: z.number().int().positive().optional().describe("Default 30000") },
     async (input: { timeout_ms?: number }) => {
       const s = requireSession();
-      const state = await s.pause.waitForPause(input.timeout_ms ?? 30000);
+      const timeoutMs = input.timeout_ms ?? 30000;
+      let state;
+      try {
+        state = await s.pause.waitForPause(timeoutMs);
+      } catch (e) {
+        // A bare timeout is uninformative when nothing paused — most often a
+        // conditional breakpoint that could never match, or a target that ran
+        // to completion. Enrich it with state read AT timeout time (none of it
+        // is captured beforehand). Non-timeout rejections (e.g. "Session
+        // closed") pass through unchanged.
+        throw enrichPauseTimeout(s, e, timeoutMs);
+      }
       return await summarizePause(s, state.reason, state.hitBreakpoints, state.data, state.callFrames, state.sessionId);
     },
   );
+}
+
+// Turn a bare wait_for_pause timeout into an actionable diagnosis. Reads live
+// session state (owned-target exit + the conditional-breakpoint registry) so
+// the two silent failure modes behind GitHub #46 — a never-true conditional
+// bp, and a target that exited before pausing — stop looking like a generic
+// timeout. Anything that isn't the timeout is returned as-is.
+/** @internal exported for unit tests; not part of the MCP tool surface. */
+export function enrichPauseTimeout(
+  s: ReturnType<typeof requireSession>,
+  err: unknown,
+  timeoutMs: number,
+): Error {
+  const original = err instanceof Error ? err : new Error(String(err));
+  if (!/Timed out/.test(original.message)) return original;
+
+  const parts: string[] = [`Timed out after ${timeoutMs}ms waiting for pause.`];
+
+  // Owned Node target exit — a synchronous, reliable read (no event wiring).
+  // attach_node leaves ownedProcess null, so this only fires for launch_node.
+  const owned = s.ownedProcess;
+  if (owned?.kind === "node") {
+    const h = owned.handle;
+    if (h.exitCode != null || h.signalCode != null) {
+      const how = h.signalCode ? `signal ${h.signalCode}` : `exit code ${h.exitCode}`;
+      parts.push(
+        `The Node target has already exited (${how}) — it ran to completion without pausing. ` +
+          `A breakpoint set after its line already ran, or a conditional breakpoint whose condition was never true, will never pause.`,
+      );
+    }
+  }
+
+  // Conditional breakpoints that are set but didn't fire. Surface each one's
+  // resolved TS location + condition so a wrong line (or an out-of-scope
+  // variable) is diagnosable.
+  const conditional = Array.from(s.breakpoints.values()).filter((b) => b.condition);
+  if (conditional.length > 0) {
+    const summary = conditional
+      .map((b) => {
+        const where =
+          b.resolvedLocations.length > 0
+            ? b.resolvedLocations.map((l) => `${l.file}:${l.line}`).join(", ")
+            : `${b.file}:${b.line} (unresolved)`;
+        return `  - ${b.id} bound at ${where}, condition: ${b.condition}`;
+      })
+      .join("\n");
+    parts.push(
+      `${conditional.length} conditional breakpoint(s) are set but none paused:\n${summary}\n` +
+        `A conditional breakpoint fires only when its bound line is executed AND the condition is truthy there. ` +
+        `If a bound line isn't the one you intended, the number may have come from compiled JS (get_script_source) rather than TS — read the TS with get_source and confirm the line, or remove the condition to check the line binds at all.`,
+    );
+  }
+
+  return new ToolError("pause_timeout", parts.join("\n"));
 }
 
 async function stepThen(

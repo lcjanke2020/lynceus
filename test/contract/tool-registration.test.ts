@@ -7,7 +7,7 @@
 //   - The structured {error, message} envelope survives the full round trip
 //     through the SDK's content/result framing — not just the inner handler's
 //     direct return.
-//   - The exact total tool count matches the documented surface (51 tools).
+//   - The exact total tool count matches the documented surface (52 tools).
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -32,9 +32,9 @@ afterAll(async () => {
 });
 
 describe("tools/list", () => {
-  it("returns exactly 51 tools (the documented surface)", async () => {
+  it("returns exactly 52 tools (the documented surface)", async () => {
     const r = await client.listTools();
-    expect(r.tools).toHaveLength(51);
+    expect(r.tools).toHaveLength(52);
   });
 
   it("every tool has a non-empty description", async () => {
@@ -52,7 +52,7 @@ describe("tools/list", () => {
       // nav
       "navigate", "reload", "get_url",
       // source
-      "list_scripts", "get_script_source", "resolve_source_position",
+      "list_scripts", "get_script_source", "get_source", "resolve_source_position",
       // breakpoints
       "set_breakpoint", "remove_breakpoint", "list_breakpoints", "set_pause_on_exceptions",
       // execution
