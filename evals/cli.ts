@@ -19,6 +19,12 @@ import {
   type BudgetTracker,
 } from "./harness/runner.js";
 import { rollupScenario, renderScoreboard } from "./harness/grader.js";
+import {
+  decideEvalSandbox,
+  formatSandboxHeader,
+  type SandboxDecision,
+} from "./harness/sandbox.js";
+import { resolveBrowser } from "../src/util/browser-resolve.js";
 import { lookupScenario, SCENARIOS } from "./scenarios/index.js";
 import {
   readBudgetUsd,
@@ -185,6 +191,21 @@ Env:
   EVAL_REASONING_BUDGET   override the per-request thinking budget
                           (positive integer ≥ 1024). Used alone, the
                           level is tagged 'custom'.
+  EVAL_SANDBOX            Chromium sandbox posture for the model-driven
+                          browser (browser scenarios only). Tri-state:
+                            unset / 'auto'   auto-detect — sandbox ON when the
+                                             host has a usable sandbox path
+                                             (unprivileged userns, an AppArmor
+                                             profile granting userns to the
+                                             resolved binary, or a SUID helper),
+                                             else OFF (--no-sandbox) with a
+                                             logged reason.
+                            'true'/'1'/'on'  force ON — fails fast if the host
+                                             lacks a sandbox path (no silent
+                                             downgrade). Back-compat alias.
+                            'false'/'0'/'off' force OFF (--no-sandbox).
+                          The chosen posture + its source is printed in the run
+                          header. See docs/chromium-sandboxing.md.
 
   When extended thinking is enabled, Anthropic requires temperature=1,
   so runs become non-deterministic — use --trials ≥ 3 to characterize
@@ -279,6 +300,20 @@ async function main(): Promise<void> {
     `L4 eval — model=${effectiveModel} ${reasoningTag} scenarios=[${args.scenarios.join(",")}] trials=${args.trials} budget=$${args.budgetUsd} out=${outDir}`,
   );
 
+  // Sandbox posture — resolve ONCE so the header reports it unconditionally and
+  // a force-on request (EVAL_SANDBOX=on) fails fast before any trial rather than
+  // silently downgrading. Only meaningful when at least one scenario drives a
+  // browser (Node trials never launch Chromium); resolving the browser here for
+  // an all-Node run would needlessly require Chromium to be installed.
+  let sandboxDecision: SandboxDecision | undefined;
+  const anyBrowser = args.scenarios.some(
+    (n) => resolveTarget(lookupScenario(n)).kind === "browser",
+  );
+  if (anyBrowser) {
+    sandboxDecision = decideEvalSandbox(resolveBrowser().binaryPath);
+    console.error(formatSandboxHeader(sandboxDecision));
+  }
+
   const budget: BudgetTracker = { spentUsd: 0, ceilingUsd: args.budgetUsd };
   const byScenario: Record<string, TrialOutcome[]> = {};
   if (provider) {
@@ -355,6 +390,7 @@ async function main(): Promise<void> {
           budget,
           target,
           ...(provider ? { adapter: provider } : {}),
+          ...(sandboxDecision ? { sandboxDecision } : {}),
         });
         outcomes.push(outcome);
         const correct = outcome.oracle.correctness === 1 ? "PASS" : "FAIL";
