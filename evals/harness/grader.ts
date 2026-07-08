@@ -198,9 +198,13 @@ export function rollupScenario(
  *    SCENARIO              TRIALS  CORRECT  MECHANIC  EFFICIENCY  RECOVERIES  COST
  *    compute-step            3       PASS     PASS        0.83          0    $1.85
  *    network-bug             3       FAIL     PASS        0.40          1    $1.71
- *    adversarial-out-...     3      XFAIL     PASS        0.67          0    $1.50
+ *    adversarial-out-...     3      XFAIL   XPASS!        0.67          0    $1.50
  *    ...                                                                     -----
  *                                                                            $14.32
+ *
+ *  (adversarial-out-... is xfail-tagged on BOTH axes, so its CORRECT and
+ *  MECHANIC columns render XFAIL/XPASS! independently — here it missed the
+ *  bug under degraded guidance (XFAIL) but still drove the debugger (XPASS!).)
  *
  *  CORRECT column shows the xfail-aware status (PASS / FAIL / XFAIL /
  *  XPASS!). MECHANIC shows the same xfail-aware status for the mechanic
@@ -250,10 +254,18 @@ export function renderScoreboard(rollups: ScenarioRollup[]): string {
   }
   rows.push("-".repeat(88));
   const parts: string[] = [];
-  parts.push(`${passedScenarios}/${rollups.length} correct`);
-  if (xfailCount > 0) parts.push(`${xfailCount} xfail`);
-  if (xpassCount > 0) parts.push(`${xpassCount} XPASS!`);
-  if (failCount > 0) parts.push(`${failCount} fail`);
+  // The xfail/XPASS!/fail breakdown is correctness-axis only, so group it in
+  // parens under the `correct` count — since `xfailMechanic` landed, XFAIL/
+  // XPASS can also appear in the MECHANIC column, and an unqualified
+  // `1 xfail` in the footer would read ambiguously across both axes.
+  const correctBreakdown: string[] = [];
+  if (xfailCount > 0) correctBreakdown.push(`${xfailCount} xfail`);
+  if (xpassCount > 0) correctBreakdown.push(`${xpassCount} XPASS!`);
+  if (failCount > 0) correctBreakdown.push(`${failCount} fail`);
+  parts.push(
+    `${passedScenarios}/${rollups.length} correct` +
+      (correctBreakdown.length ? ` (${correctBreakdown.join(", ")})` : ""),
+  );
   parts.push(`${mechanicPassed}/${rollups.length} mechanic`);
   rows.push(parts.join(", ").padEnd(78) + ("$" + totalCost.toFixed(2)).padStart(10));
   return rows.join("\n");

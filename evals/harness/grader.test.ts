@@ -253,11 +253,10 @@ describe("rollupScenario — xfailCorrectness status", () => {
     ]);
     expect(board).toContain("XFAIL");
     expect(board).toContain("XPASS!");
-    // Footer: 1 PASS, 1 XFAIL, 1 XPASS, 1 FAIL
-    expect(board).toMatch(/1\/4 correct/);
-    expect(board).toMatch(/1 xfail/);
-    expect(board).toMatch(/1 XPASS!/);
-    expect(board).toMatch(/1 fail/);
+    // Footer: 1 PASS, 1 XFAIL, 1 XPASS, 1 FAIL — the xfail/XPASS!/fail
+    // breakdown is grouped in parens under `correct` so it reads as
+    // correctness-axis only (mechanic can also show XFAIL/XPASS now).
+    expect(board).toMatch(/1\/4 correct \(1 xfail, 1 XPASS!, 1 fail\)/);
   });
 });
 
