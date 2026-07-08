@@ -136,7 +136,7 @@ describe("get_source", () => {
     expect(r.file).toBe("src/foo.ts");
     expect(r.script_id).toBe("s1");
     expect(r.session_id).toBeNull();
-    expect(r.line_count).toBe(4); // three lines + trailing newline
+    expect(r.line_count).toBe(3); // three addressable lines; trailing newline is not a 4th
   });
 
   it("no_source error (no_match) when no script's map references the file", async () => {

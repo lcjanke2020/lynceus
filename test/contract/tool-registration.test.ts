@@ -74,7 +74,7 @@ describe("tools/list", () => {
       "get_node_output",
     ];
     // Bidirectional check: every expected name is present AND no unexpected
-    // name is registered. The "exactly 51 tools" count check above catches
+    // name is registered. The "exactly 52 tools" count check above catches
     // accidental additions, but a renamed tool could still pass `has(name)`
     // for one expected entry while a stale entry remains in `expected`.
     // Set equality catches both directions in one assertion.
@@ -139,7 +139,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
   // payload through the SDK's content/result framing — not just the inner
   // handler's direct return shape.
   //
-  // Using a representative subset (one per category) rather than all 51 to
+  // Using a representative subset (one per category) rather than all 52 to
   // keep the contract test fast.
   const noSessionCases: Array<{ tool: string; args: Record<string, unknown> }> = [
     { tool: "navigate", args: { url: "http://x" } },

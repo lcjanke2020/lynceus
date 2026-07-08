@@ -52,6 +52,7 @@ describe("readOriginalSource", () => {
       sourceMapURL: "conditional-bp.js.map",
       // no sourceContent → forces the disk fallback
     });
+    sessionState.kind = "node";
     sessionState.chromeHost = "127.0.0.1"; // loopback
     const r = await readOriginalSource(sessionState, "conditional-bp.ts");
     expect(r.ok).toBe(true);
@@ -62,7 +63,7 @@ describe("readOriginalSource", () => {
     expect(r.value.content).toContain("i * 10");
   });
 
-  it("refuses the disk read for a non-loopback session (no_content)", async () => {
+  it("refuses the disk read for a non-loopback Node session (no_content)", async () => {
     const jsUrl = pathToFileURL(
       join(REPO_ROOT, "examples/sample-node-app/dist/conditional-bp.js"),
     ).toString();
@@ -72,7 +73,28 @@ describe("readOriginalSource", () => {
       source: "../src/conditional-bp.ts",
       sourceMapURL: "conditional-bp.js.map",
     });
+    sessionState.kind = "node";
     sessionState.chromeHost = "10.1.2.3"; // NOT loopback → refuse file:// read
+    const r = await readOriginalSource(sessionState, "conditional-bp.ts");
+    expect(r).toEqual({ ok: false, reason: "no_content" });
+  });
+
+  it("SECURITY: never reads disk for a browser session, even loopback (untrusted map cannot exfiltrate local files)", async () => {
+    // A browser page + its source maps are (potentially untrusted) HTTP
+    // content; a malicious map could advertise a file:// source pointing at an
+    // arbitrary local file. The disk fallback is Node-only, so this must return
+    // no_content, NOT the file bytes. (codex + Copilot review, GH #46 PR.)
+    const jsUrl = pathToFileURL(
+      join(REPO_ROOT, "examples/sample-node-app/dist/conditional-bp.js"),
+    ).toString();
+    seedMappedScript({
+      scriptId: "s1",
+      url: jsUrl,
+      source: "../src/conditional-bp.ts",
+      sourceMapURL: "conditional-bp.js.map",
+    });
+    sessionState.kind = "browser"; // the vulnerable case
+    sessionState.chromeHost = "127.0.0.1"; // loopback — the disk read would otherwise fire
     const r = await readOriginalSource(sessionState, "conditional-bp.ts");
     expect(r).toEqual({ ok: false, reason: "no_content" });
   });

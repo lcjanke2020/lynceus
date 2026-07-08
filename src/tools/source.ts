@@ -6,6 +6,19 @@ import { readOriginalSource } from "../sourcemap/original-source.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 
+// Highest addressable 1-based line, i.e. the largest line number
+// set_breakpoint could bind. A trailing newline yields an empty final segment
+// that is NOT a real line, so it isn't counted ("a\nb\nc\n" -> 3, not 4);
+// content without a final newline counts its last line ("a\nb\nc" -> 3). Empty
+// file -> 0. (Copilot review: split("\n").length over-reported by one and could
+// suggest a non-existent last line was addressable.)
+function addressableLineCount(text: string): number {
+  if (text.length === 0) return 0;
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines.length;
+}
+
 export function registerSourceTools(server: McpServer) {
   registerJsonTool(
     server,
@@ -62,8 +75,6 @@ export function registerSourceTools(server: McpServer) {
         throw new ToolError("no_source", hint);
       }
       const { value } = res;
-      // 1-based line count; an empty file is 0 lines (not 1).
-      const lineCount = value.content.length === 0 ? 0 : value.content.split("\n").length;
       return {
         file: value.file,
         script_id: value.scriptId,
@@ -71,7 +82,7 @@ export function registerSourceTools(server: McpServer) {
         script_url: value.scriptUrl,
         // "source_map" = embedded sourcesContent; "disk" = read from the local .ts.
         origin: value.origin,
-        line_count: lineCount,
+        line_count: addressableLineCount(value.content),
         source: value.content,
       };
     },

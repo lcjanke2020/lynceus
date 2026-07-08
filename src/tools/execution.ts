@@ -132,7 +132,10 @@ export function enrichPauseTimeout(
   timeoutMs: number,
 ): Error {
   const original = err instanceof Error ? err : new Error(String(err));
-  if (!/Timed out/.test(original.message)) return original;
+  // Match PauseTracker.waitForPause's exact timeout message (pause.ts) and
+  // nothing else — anchored so a future unrelated error containing "timed out"
+  // (or the "Session closed" reject from reset()) passes through untouched.
+  if (!/^Timed out after \d+ms waiting for pause$/.test(original.message)) return original;
 
   const parts: string[] = [`Timed out after ${timeoutMs}ms waiting for pause.`];
 

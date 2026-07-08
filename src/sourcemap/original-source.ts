@@ -53,15 +53,13 @@ export async function readOriginalSource(
     () => s.scripts.findByOriginalSource(file).length > 0,
     Date.now() + MAP_LOAD_WAIT_MS,
   );
-  let matches = s.scripts.findByOriginalSource(file);
-  // When session_id is supplied, restrict to that session's scripts so a
-  // worker/iframe copy is disambiguated from the root's (CDP scriptIds and
-  // sources collide across sessions). `undefined` (omitted) means "don't
-  // filter"; `null` means the root explicitly.
-  if (sessionId !== undefined) {
-    const want = sessionId ?? undefined;
-    matches = matches.filter((sc) => sc.sessionId === want);
-  }
+  // Omitting session_id — like an explicit null — means the ROOT target,
+  // matching the repo-wide session_id convention and get_script_source. NOT
+  // "search every session": that let a worker/iframe copy of the same TS path
+  // shadow the root (codex review — omitted returned the worker source while an
+  // explicit null returned root). Pass a session_id to read a child's copy.
+  const want = sessionId ?? undefined;
+  const matches = s.scripts.findByOriginalSource(file).filter((sc) => sc.sessionId === want);
   if (matches.length === 0) return { ok: false, reason: "no_match" };
 
   let sawCandidate = false;
@@ -77,11 +75,23 @@ export async function readOriginalSource(
       return { ok: true, value: makeValue(script, rawKey, embedded, "source_map") };
     }
 
-    // 2) Disk fallback. `tsc --sourceMap` (default) emits `sources` but no
-    //    `sourcesContent`, so the .ts is only on disk. Resolve the raw source
-    //    against the map URL and read it — loopback file:// only.
+    // 2) Disk fallback — NODE sessions only. `tsc --sourceMap` (default) emits
+    //    `sources` without `sourcesContent`, and for a loopback Node session
+    //    the .ts is a local build artifact we can read (mirrors loader.ts's
+    //    Node-only file:// source-map read). We must NOT read disk for a
+    //    browser session: the page and its source maps are (potentially
+    //    untrusted) HTTP content, so a malicious map advertising e.g.
+    //    `sources: ["file:///etc/passwd"]` would otherwise turn get_source into
+    //    an arbitrary local-file read on the developer's machine (codex +
+    //    Copilot review). A browser map without sourcesContent just yields
+    //    no_content — the agent falls back to get_script_source.
     const diskUrl = resolveSourceUrl(script, rawKey);
-    if (diskUrl && diskUrl.startsWith("file://") && isLoopbackHost(s.chromeHost)) {
+    if (
+      diskUrl &&
+      diskUrl.startsWith("file://") &&
+      s.kind === "node" &&
+      isLoopbackHost(s.chromeHost)
+    ) {
       try {
         const content = await readFile(fileURLToPath(diskUrl), "utf8");
         return { ok: true, value: makeValue(script, rawKey, content, "disk") };
@@ -115,6 +125,9 @@ function makeValue(
 // base is the script URL itself. Already-absolute sources pass through.
 function resolveSourceUrl(script: ScriptInfo, rawSource: string): string | null {
   try {
+    // Already-absolute source (has a "scheme://" — file://, webpack://,
+    // http://, …) passes through unchanged; relative sources resolve against
+    // the map URL below.
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawSource)) return new URL(rawSource).toString();
     const smu = script.sourceMapURL;
     const base =

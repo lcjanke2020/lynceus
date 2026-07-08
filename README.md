@@ -12,7 +12,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 ## What it gives an agent
 
-Across 51 tools:
+Across 52 tools:
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.
@@ -23,7 +23,7 @@ Across 51 tools:
 - **Structured DOM querying** — Playwright-inspired `locate` (LocatorSpec: CSS, text, role, test-id, label, placeholder, name), `wait_for` (poll until DOM state), `get_form_state` (read named form fields).
 - **Form driving** — `fill`, `check` / `uncheck`, `select_option`, plus `suggest_locator` to get a robust semantic locator for an element.
 - **Session portability** — `export_storage_state` / `load_storage_state` carry a logged-in session (cookies + localStorage) across runs; `get_cookies` / `set_cookies` read and set cookies directly (`get_cookies` redacts likely-auth / HttpOnly values for safe logging).
-- **Source-map diagnostics** — `list_scripts`, `resolve_source_position`, `get_script_source`.
+- **TS source + source-map diagnostics** — `get_source` (original TypeScript by file, the coordinates `set_breakpoint` uses), `list_scripts`, `resolve_source_position`, `get_script_source` (compiled JS).
 
 Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true })`.
 
