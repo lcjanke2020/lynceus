@@ -64,8 +64,10 @@ export function registerInspectTools(server: McpServer) {
       if (!frame) throw new ToolError("bad_frame", `Frame ${idx} out of range (${state.callFrames.length} frames)`);
       const max = input.max_props ?? 50;
 
-      // Fetch a scope object's properties (raw CDP descriptors, symbols
-      // included so `truncated` counts the way it always has).
+      // Fetch one scope object's raw CDP property descriptors (symbols
+      // included). Callers do their own symbol-filtering: the explicit path
+      // counts raw descriptor length for `truncated` (unchanged from before);
+      // the merged path counts its deduped, symbol-filtered list.
       const fetchRaw = async (objectId: string): Promise<Protocol.Runtime.PropertyDescriptor[]> => {
         const result = await s.client!.send(
           "Runtime.getProperties",
@@ -139,6 +141,13 @@ export function registerInspectTools(server: McpServer) {
           seen.add(p.name);
           merged.push(p);
         }
+        // Once we have more than `max` unique bindings the result is already
+        // truncated and any further scopes' bindings would be sliced off, so
+        // stop fetching outer scopes (saves Runtime.getProperties round-trips
+        // while paused). Breaking at the scope boundary — not mid-scope —
+        // keeps the innermost-wins slice identical to the non-short-circuit
+        // walk.
+        if (merged.length > max) break;
       }
       return {
         frame_index: idx,

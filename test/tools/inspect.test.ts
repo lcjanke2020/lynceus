@@ -185,6 +185,27 @@ describe("get_scope", () => {
     expect(r.merged_scope_types).toBeUndefined();
     expect(r.items.map((i) => i.name)).toEqual(["i"]);
   });
+
+  it("merged default short-circuits: stops fetching outer scopes once max_props is exceeded", async () => {
+    const { fake } = setupSession();
+    sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
+    fake.respond("Runtime.getProperties", (params: any) => {
+      if (params.objectId === "scope-block")
+        return { result: Array.from({ length: 60 }, (_, n) => ({ name: `b${n}`, value: { type: "number", value: n } })) };
+      // If the merge reaches `local` it would blow up the assertion below.
+      if (params.objectId === "scope-local")
+        return { result: [{ name: "v", value: { type: "number", value: 30 } }] };
+      return { result: [] };
+    });
+    fake.clearSentCalls();
+    const r = parseOkEnvelope<{ items: any[]; truncated: boolean }>(await scope.handler({})); // default max 50
+    expect(r.items).toHaveLength(50);
+    expect(r.truncated).toBe(true);
+    // The inner block already exceeds max, so `local` is never fetched.
+    expect(
+      fake.sentCalls.filter((c) => c.method === "Runtime.getProperties").map((c) => c.params.objectId),
+    ).toEqual(["scope-block"]);
+  });
 });
 
 describe("evaluate", () => {
