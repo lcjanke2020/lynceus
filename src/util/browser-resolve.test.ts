@@ -5,7 +5,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  CHROME_LAUNCHER_DEFAULT_MARKER,
   detectSandboxCapability,
+  isUsableSuidHelper,
   matchAppArmorPath,
   parseAppArmorProfiles,
   profileGrantsUserns,
@@ -33,6 +35,31 @@ describe("detectSandboxCapability", () => {
       expect(cap.capable).toBe(true);
       expect(cap.reason).toContain(plat);
     }
+  });
+
+  it("exotic non-Linux platforms are NOT assumed capable", () => {
+    // NodeJS.Platform includes freebsd/openbsd/sunos/android/… — no verified
+    // sandbox story, so stay conservative rather than claim capable.
+    for (const plat of ["freebsd", "openbsd", "android", "sunos"] as const) {
+      const cap = detectSandboxCapability(
+        BIN,
+        probe({ platform: () => plat as NodeJS.Platform }),
+      );
+      expect(cap.capable).toBe(false);
+      expect(cap.reason).toContain(plat);
+    }
+  });
+
+  it("the chrome-launcher-default marker path is not probed (incapable)", () => {
+    // CDP_TEST_BROWSER=chrome yields a marker, not a real path. Even on an
+    // otherwise-capable Linux host we can't verify a sandbox path for an
+    // unknown binary, so it must not claim capable (and force-on must fail).
+    const cap = detectSandboxCapability(
+      CHROME_LAUNCHER_DEFAULT_MARKER,
+      probe({ platform: () => "linux", readSysctlInt: () => 20000 }),
+    );
+    expect(cap.capable).toBe(false);
+    expect(cap.reason).toContain("CDP_TEST_BROWSER_PATH");
   });
 
   it("a SUID-root helper makes the host capable regardless of userns", () => {
@@ -120,6 +147,22 @@ describe("detectSandboxCapability", () => {
     );
     expect(cap.capable).toBe(true);
     expect(cap.reason).toContain("apparmor_restrict_unprivileged_userns=0");
+  });
+});
+
+describe("isUsableSuidHelper", () => {
+  it("true only for a root-owned regular file with setuid AND an execute bit", () => {
+    expect(isUsableSuidHelper({ isFile: true, uid: 0, mode: 0o4755 })).toBe(true);
+  });
+
+  it("false for setuid but non-executable (the flagged false positive)", () => {
+    expect(isUsableSuidHelper({ isFile: true, uid: 0, mode: 0o4644 })).toBe(false);
+  });
+
+  it("false for executable but no setuid bit, non-root owner, or non-file", () => {
+    expect(isUsableSuidHelper({ isFile: true, uid: 0, mode: 0o0755 })).toBe(false); // no setuid
+    expect(isUsableSuidHelper({ isFile: true, uid: 1000, mode: 0o4755 })).toBe(false); // not root
+    expect(isUsableSuidHelper({ isFile: false, uid: 0, mode: 0o4755 })).toBe(false); // not a file
   });
 });
 

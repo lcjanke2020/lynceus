@@ -30,6 +30,11 @@ import { dirname, join } from "node:path";
 
 export type BrowserChoice = "chromium" | "chrome";
 
+/** Sentinel `binaryPath` returned by `resolveBrowser()` when it defers binary
+ *  detection to chrome-launcher (`CDP_TEST_BROWSER=chrome`). It is NOT a real
+ *  filesystem path — there is no resolved binary to probe until launch. */
+export const CHROME_LAUNCHER_DEFAULT_MARKER = "chrome-launcher-default";
+
 export interface ResolvedBrowser {
   /** Absolute path to the Chrome/Chromium executable. */
   binaryPath: string;
@@ -124,7 +129,7 @@ export function resolveBrowser(choice: BrowserChoice = getBrowserChoice()): Reso
     // and the L4 runner at evals/harness/runner.ts omits CHROME_PATH from
     // the subprocess env via isChromeLauncherDefault().
     return {
-      binaryPath: "chrome-launcher-default",
+      binaryPath: CHROME_LAUNCHER_DEFAULT_MARKER,
       choice,
       snapConfined: false,
       source: "chrome-launcher-default",
@@ -348,13 +353,32 @@ export function detectSandboxCapability(
   binaryPath: string,
   probe: SandboxProbe = defaultSandboxProbe,
 ): SandboxCapability {
+  // No resolved binary to probe (chrome-launcher will detect Chrome at launch).
+  // We can't verify a sandbox path for an unknown binary, so stay conservative:
+  // incapable → --no-sandbox, and force-on fails fast with actionable guidance.
+  if (binaryPath === CHROME_LAUNCHER_DEFAULT_MARKER) {
+    return {
+      capable: false,
+      reason:
+        "browser path is chrome-launcher's own detection marker (CDP_TEST_BROWSER=chrome); the actual binary is unknown until launch — set CDP_TEST_BROWSER_PATH to probe or force the sandbox",
+    };
+  }
+
   const plat = probe.platform();
-  if (plat !== "linux") {
+  if (plat === "darwin" || plat === "win32") {
     // macOS/Windows: Chromium's sandbox works without the unprivileged-userns
     // / AppArmor gymnastics that make Linux the hard case.
     return {
       capable: true,
       reason: `${plat}: Chromium's sandbox works without host userns/AppArmor setup`,
+    };
+  }
+  if (plat !== "linux") {
+    // Exotic platform (freebsd/openbsd/sunos/android/…): no verified Chromium
+    // sandbox story here, so don't claim capable. Falls back to --no-sandbox.
+    return {
+      capable: false,
+      reason: `${plat}: no verified Chromium sandbox path — defaulting to --no-sandbox`,
     };
   }
 
@@ -438,10 +462,9 @@ const defaultSandboxProbe: SandboxProbe = {
     for (const c of candidates) {
       try {
         const st = statSync(c);
-        // Functional setuid sandbox = regular file, owned by root, setuid bit
-        // set. Playwright ships a chrome_sandbox next to the binary but does
-        // NOT set it setuid, so this correctly excludes the non-working copy.
-        if (st.isFile() && st.uid === 0 && (st.mode & 0o4000) !== 0) return c;
+        if (isUsableSuidHelper({ isFile: st.isFile(), uid: st.uid, mode: st.mode })) {
+          return c;
+        }
       } catch {
         /* missing/unreadable candidate — skip */
       }
@@ -514,6 +537,25 @@ export function parseAppArmorProfiles(
     out.push({ name: m[1] ?? attach, attach, body: bodyLines.join("\n") });
   }
   return out;
+}
+
+/** True when a stat result describes a *usable* SUID-root sandbox helper: a
+ *  regular file owned by root (uid 0) with BOTH the setuid bit AND at least one
+ *  execute bit. The execute-bit requirement rejects a setuid-but-non-executable
+ *  file, which could not actually run as the sandbox helper. Playwright ships a
+ *  `chrome_sandbox` next to the binary but does not set it setuid, so that copy
+ *  is correctly excluded too. Exported for unit testing. */
+export function isUsableSuidHelper(st: {
+  isFile: boolean;
+  uid: number;
+  mode: number;
+}): boolean {
+  return (
+    st.isFile &&
+    st.uid === 0 &&
+    (st.mode & 0o4000) !== 0 && // setuid bit
+    (st.mode & 0o111) !== 0 // at least one execute bit (owner/group/other)
+  );
 }
 
 /** True when an AppArmor profile body contains an ALLOW rule that grants the

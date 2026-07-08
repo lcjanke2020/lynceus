@@ -56,11 +56,18 @@ deliberately conservative (a false negative degrades to the working
 - non-Linux (macOS/Windows) — the sandbox works natively; or
 - a SUID-root `chrome_sandbox`/`chrome-sandbox` helper sits next to the binary
   (works even when unprivileged userns is locked down); or
-- unprivileged user namespaces are usable: `user.max_user_namespaces` is nonzero
-  **and** either `kernel.apparmor_restrict_unprivileged_userns` is `0`/absent, or
-  it is `1` but a loaded AppArmor profile both **attaches to the resolved binary
-  path** (glob-matched — the profile's path glob must cover the *actual* path,
-  the failure mode that bit the multi-account eval hosts) **and** grants `userns`.
+- unprivileged user namespaces are usable: `user.max_user_namespaces` is a
+  readable nonzero value **and** either `kernel.apparmor_restrict_unprivileged_userns`
+  is `0`/absent, or it is `1` but a loaded AppArmor profile both **attaches to the
+  resolved binary path** (glob-matched — the profile's path glob must cover the
+  *actual* path, the failure mode that bit the multi-account eval hosts) **and**
+  grants `userns` via an allow rule.
+
+Anything the detector cannot positively verify stays **incapable** (→
+`--no-sandbox`, or a fail-fast under `EVAL_SANDBOX=on`): an unreadable
+`max_user_namespaces`, an unrecognized platform, or `CDP_TEST_BROWSER=chrome`
+(chrome-launcher resolves the binary itself, so there is no path to probe — set
+`CDP_TEST_BROWSER_PATH` if you want the sandbox on for a Chrome-stable run).
 
 `EVAL_SANDBOX` is a tri-state intent control (browser scenarios only):
 
