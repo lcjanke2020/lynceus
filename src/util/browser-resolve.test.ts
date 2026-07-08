@@ -296,23 +296,6 @@ describe("parseAppArmorProfiles", () => {
     const text = "profile pw /home/alice/chrome flags=(unconfined) {\n  deny userns,\n}";
     expect(coveringProfileName(text, "/home/alice/chrome")).toBe(null);
   });
-});
-
-describe("profileGrantsUserns", () => {
-  it("true for a plain userns allow rule (and `userns create,`)", () => {
-    expect(profileGrantsUserns("  userns,")).toBe(true);
-    expect(profileGrantsUserns("  userns create,")).toBe(true);
-    expect(profileGrantsUserns("  allow userns,")).toBe(true);
-    expect(profileGrantsUserns("  audit userns,")).toBe(true);
-  });
-
-  it("false for deny rules, comments, and bare mentions", () => {
-    expect(profileGrantsUserns("  deny userns,")).toBe(false);
-    expect(profileGrantsUserns("  audit deny userns,")).toBe(false);
-    expect(profileGrantsUserns("  # userns is granted elsewhere")).toBe(false);
-    expect(profileGrantsUserns("  network, # userns")).toBe(false);
-    expect(profileGrantsUserns("  capability sys_admin,")).toBe(false);
-  });
 
   it("parses a multi-account profile whose glob ends in `}` (regression)", () => {
     // A real-world shape: brace-expanded home dirs AND a brace-expanded binary
@@ -348,5 +331,22 @@ describe("profileGrantsUserns", () => {
         "/home/carol/.cache/ms-playwright/chromium-1/chrome-linux/chrome",
       ),
     ).toBe(false);
+  });
+});
+
+describe("profileGrantsUserns", () => {
+  it("true for a plain userns allow rule (and `userns create,`)", () => {
+    expect(profileGrantsUserns("  userns,")).toBe(true);
+    expect(profileGrantsUserns("  userns create,")).toBe(true);
+    expect(profileGrantsUserns("  allow userns,")).toBe(true);
+    expect(profileGrantsUserns("  audit userns,")).toBe(true);
+  });
+
+  it("false for deny rules, comments, and bare mentions", () => {
+    expect(profileGrantsUserns("  deny userns,")).toBe(false);
+    expect(profileGrantsUserns("  audit deny userns,")).toBe(false);
+    expect(profileGrantsUserns("  # userns is granted elsewhere")).toBe(false);
+    expect(profileGrantsUserns("  network, # userns")).toBe(false);
+    expect(profileGrantsUserns("  capability sys_admin,")).toBe(false);
   });
 });
