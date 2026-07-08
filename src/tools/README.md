@@ -1,6 +1,6 @@
 # src/tools/
 
-**Last updated: 2026-07-05**
+**Last updated: 2026-07-08**
 
 All 51 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool). Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
@@ -78,7 +78,7 @@ The **Kind** column reflects which session kind a tool is meaningful for. **Shar
 | | `pause` | Shared | Pause manually; `session_id` arg targets a worker/iframe. |
 | | `wait_for_pause` | Shared | Block until the debugger pauses (or times out). Authoritative sync point. |
 | `inspect.ts` | `get_call_stack` | Shared | TS-mapped frames with `session_id` per frame. |
-| | `get_scope` | Shared | Variables at a paused frame (`local` default; other scope types selectable). |
+| | `get_scope` | Shared | Variables at a paused frame. Default (no `scope_type`) returns the merged lexical view (inner block/catch/with + function local, innermost wins), so block-scoped `let`/loop vars are included; pass a `scope_type` to read exactly one scope. |
 | | `evaluate` | Shared | Auto-routes: paused → `Debugger.evaluateOnCallFrame` on the top frame (override with `frame_index`); not paused → `Runtime.evaluate`. `frame_index` while not paused → `not_paused`. |
 | | `get_object_properties` | Shared | Inspect a `RemoteObject` by ID. Strict `session_id` provenance. |
 | `console.ts` | `get_console_logs` | Shared | Buffered console + uncaught exceptions; filter by `level` / `search`; paginate via `since`. |
