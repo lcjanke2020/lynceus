@@ -127,7 +127,7 @@ export function registerInspectTools(server: McpServer) {
       if (lexicalScopes.length === 0) {
         throw new ToolError(
           "no_scope",
-          `Frame ${idx} has no local/block scope. Available: ${frame.scopeChain
+          `Frame ${idx} has no lexical (block/catch/with/local) scope. Available: ${frame.scopeChain
             .map((sc) => sc.type)
             .join(", ")}`,
         );

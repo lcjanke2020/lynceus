@@ -80,7 +80,7 @@ describe("node conditional breakpoint (e2e)", () => {
     // covers the full-chain path.
     const scopeDefault = await call<{
       scope_type: string;
-      merged_scope_types?: string[];
+      merged_scope_types: string[];
       items: Array<{ name: string; preview?: string; value?: unknown }>;
     }>(tools, "get_scope", {});
     const iEntry = scopeDefault.items.find((it) => it.name === "i");

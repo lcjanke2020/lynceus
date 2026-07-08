@@ -186,6 +186,34 @@ describe("get_scope", () => {
     expect(r.items.map((i) => i.name)).toEqual(["i"]);
   });
 
+  it("merged default throws no_scope naming the lexical set when the frame has no lexical scope", async () => {
+    const { fake } = setupSession();
+    // A frame whose innermost scope is non-lexical (module/global only) — the
+    // merge set is empty, so the default path throws no_scope.
+    sessionState.pause.onPaused(
+      fake.makePauseState({
+        callFrames: [
+          {
+            callFrameId: "frame-mod-0",
+            functionName: "",
+            functionLocation: { scriptId: "s1", lineNumber: 0, columnNumber: 0 },
+            location: { scriptId: "s1", lineNumber: 0, columnNumber: 0 },
+            url: "http://localhost/top.js",
+            scopeChain: [
+              { type: "module", object: { type: "object", objectId: "scope-module" } },
+              { type: "global", object: { type: "object", objectId: "scope-global" } },
+            ],
+            this: { type: "object", objectId: "this-0" },
+          },
+        ] as any,
+      }),
+    );
+    const err = parseErrorEnvelope(await scope.handler({}));
+    expect(err?.error).toBe("no_scope");
+    expect(err?.message).toContain("block/catch/with/local");
+    expect(err?.message).toContain("module, global"); // available scopes listed
+  });
+
   it("merged default short-circuits: stops fetching outer scopes once max_props is exceeded", async () => {
     const { fake } = setupSession();
     sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
