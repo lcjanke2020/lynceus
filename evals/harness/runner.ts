@@ -58,6 +58,11 @@ import {
   resolveBrowser,
   isChromeLauncherDefault,
 } from "../../src/util/browser-resolve.js";
+import {
+  decideEvalSandbox,
+  formatSandboxHeader,
+  type SandboxDecision,
+} from "./sandbox.js";
 import { TOOL_KIND_SUPPORT } from "../../src/session/capabilities.js";
 import type {
   Scenario,
@@ -97,6 +102,11 @@ export interface RunTrialOpts {
   target: ScenarioTarget;
   /** Optional override for the spawned MCP server path. */
   serverPath?: string;
+  /** Sandbox launch decision, resolved once per run in cli.ts (so the header
+   *  logs once and a force-on/incapable mismatch fails fast before any trial).
+   *  Browser trials only. Omitted by direct callers (unit/e2e), in which case
+   *  the browser branch detects it from the resolved binary and logs it. */
+  sandboxDecision?: SandboxDecision;
   /** Test seam — inject a fake vendor adapter for unit tests. Defaults
    *  to a live Anthropic adapter using ANTHROPIC_API_KEY. The adapter's
    *  `vendor` + `model` are the single source of truth for
@@ -301,20 +311,23 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
     extraEnv = isChromeLauncherDefault(browser)
       ? {}
       : { CHROME_PATH: browser.binaryPath };
-    // Opt-in: run the model-launched Chromium WITH the sandbox. Default OFF —
-    // the automation default is --no-sandbox (docs/chromium-sandboxing.md). The
-    // model controls launch_chrome's `sandbox` arg and normally omits it, so to
-    // run a whole suite sandbox-on without prompt-injecting every scenario we
-    // plumb CDP_SANDBOX=true to the server, which uses it as the launch default.
-    // Use only on a host with a working sandbox path (AppArmor userns allowance
-    // or SUID chrome_sandbox helper). Browser-only: a Node trial never launches
-    // Chromium, so this stays inside the browser branch — Node targets must not
-    // inherit CDP_SANDBOX.
-    if (process.env.EVAL_SANDBOX === "true" || process.env.EVAL_SANDBOX === "1") {
-      extraEnv.CDP_SANDBOX = "true";
-      process.stderr.write(
-        `[eval] EVAL_SANDBOX set — launching Chromium with the sandbox on (CDP_SANDBOX=true)\n`,
-      );
+    // Sandbox posture: plumb the resolved decision to the server via
+    // CDP_SANDBOX, which launch_chrome uses as its launch default. The model
+    // controls launch_chrome's `sandbox` arg and normally omits it, so setting
+    // the server default is how a whole suite runs sandbox-on/off without
+    // prompt-injecting every scenario. Default is now auto-detect (sandbox-on
+    // when the host supports it) — see evals/harness/sandbox.ts and
+    // docs/chromium-sandboxing.md. Browser-only: a Node trial never launches
+    // Chromium, so this stays inside the browser branch (Node targets must not
+    // inherit CDP_SANDBOX). The decision is normally resolved once per run in
+    // cli.ts and threaded in; direct callers (tests) let us detect it here.
+    const sandboxDecision =
+      opts.sandboxDecision ?? decideEvalSandbox(browser.binaryPath);
+    extraEnv.CDP_SANDBOX = sandboxDecision.enabled ? "true" : "false";
+    if (!opts.sandboxDecision) {
+      // Only log here when we computed the decision ourselves; when cli.ts
+      // supplied it, the run header already reported the posture once.
+      process.stderr.write(formatSandboxHeader(sandboxDecision) + "\n");
     }
     process.stderr.write(
       `[eval] resolved browser: ${browser.binaryPath} (source=${browser.source})\n`,

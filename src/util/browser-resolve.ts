@@ -24,14 +24,31 @@
 //   5. Fail with an actionable install hint.
 
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export type BrowserChoice = "chromium" | "chrome";
 
+/** Sentinel `binaryPath` returned by `resolveBrowser()` when it defers binary
+ *  detection to chrome-launcher (`CDP_TEST_BROWSER=chrome`). It is NOT a real
+ *  filesystem path — there is no resolved binary to probe until launch. */
+export const CHROME_LAUNCHER_DEFAULT_MARKER = "chrome-launcher-default";
+
 export interface ResolvedBrowser {
-  /** Absolute path to the Chrome/Chromium executable. */
+  /** Absolute path to the Chrome/Chromium executable — or, when `source` is
+   *  `"chrome-launcher-default"`, the `CHROME_LAUNCHER_DEFAULT_MARKER`
+   *  sentinel, which is NOT a filesystem path (chrome-launcher detects the
+   *  binary itself at launch). Callers that treat this as a path must handle
+   *  the sentinel (see `isChromeLauncherDefault`/`detectSandboxCapability`). */
   binaryPath: string;
   /** Which logical browser this binary represents. */
   choice: BrowserChoice;
@@ -124,7 +141,7 @@ export function resolveBrowser(choice: BrowserChoice = getBrowserChoice()): Reso
     // and the L4 runner at evals/harness/runner.ts omits CHROME_PATH from
     // the subprocess env via isChromeLauncherDefault().
     return {
-      binaryPath: "chrome-launcher-default",
+      binaryPath: CHROME_LAUNCHER_DEFAULT_MARKER,
       choice,
       snapConfined: false,
       source: "chrome-launcher-default",
@@ -302,6 +319,358 @@ function pickPlaywrightExe(chromiumDir: string): string | null {
 /** True when the given binary is the snap-marker returned by step 4. */
 export function isChromeLauncherDefault(b: ResolvedBrowser): boolean {
   return b.source === "chrome-launcher-default";
+}
+
+// ---------------------------------------------------------------------------
+// Chromium sandbox capability detection
+//
+// Answers "can THIS resolved Chromium binary create a usable sandbox on THIS
+// host?" — a host+binary decision, not a Chrome flag (docs/chromium-
+// sandboxing.md). Consumed by the L4 eval harness to default the model-driven
+// Chromium to sandbox-on when the host supports it (evals/harness/sandbox.ts)
+// and by any caller that wants to avoid the `zygote_host_impl_linux.cc: No
+// usable sandbox!` FATAL + chrome-launcher ECONNREFUSED that follows a
+// sandbox-on launch on an incapable host.
+//
+// Detection is STATIC (reads sysctls + AppArmor profiles); it does not launch
+// Chromium. It is deliberately conservative — it only reports `capable: true`
+// when a known-good path exists, so a false negative degrades to the working
+// `--no-sandbox` default rather than a hard launch failure.
+// ---------------------------------------------------------------------------
+
+export interface SandboxCapability {
+  /** True when a working Chromium sandbox path exists for this binary+host. */
+  capable: boolean;
+  /** Human-readable rationale — surfaced in the eval run header. */
+  reason: string;
+}
+
+/** Injection seam so the detector is unit-testable without a real host.
+ *  Every method has a real-filesystem default (see `defaultSandboxProbe`). */
+export interface SandboxProbe {
+  platform: () => NodeJS.Platform;
+  /** Read a sysctl-style integer file; null if absent/unreadable/empty. */
+  readSysctlInt: (path: string) => number | null;
+  /** Path to a working SUID-root chrome sandbox helper for `binaryPath`, or
+   *  null. A functional setuid helper makes the sandbox work independently of
+   *  unprivileged user namespaces. */
+  suidSandboxHelper: (binaryPath: string) => string | null;
+  /** Name of an AppArmor profile that attaches to `binaryPath` AND grants
+   *  the `userns` permission, or null. NOTE: the default probe infers this
+   *  from /etc/apparmor.d — where profiles auto-load at boot — and does NOT
+   *  verify the kernel's loaded-profile state (that list is root-only). A
+   *  profile dropped in since boot and never `apparmor_parser`-loaded can
+   *  therefore still be reported here. Relevant only when the kernel
+   *  restricts unprivileged user namespaces (Ubuntu 23.10+/24.04). */
+  appArmorUsernsProfile: (binaryPath: string) => string | null;
+}
+
+export function detectSandboxCapability(
+  binaryPath: string,
+  probe: SandboxProbe = defaultSandboxProbe,
+): SandboxCapability {
+  // No resolved binary to probe (chrome-launcher will detect Chrome at launch).
+  // We can't verify a sandbox path for an unknown binary, so stay conservative:
+  // incapable → --no-sandbox, and force-on fails fast with actionable guidance.
+  if (binaryPath === CHROME_LAUNCHER_DEFAULT_MARKER) {
+    return {
+      capable: false,
+      reason:
+        "browser path is chrome-launcher's own detection marker (CDP_TEST_BROWSER=chrome); the actual binary is unknown until launch. Set CDP_TEST_BROWSER_PATH to a concrete binary so it can be probed; request sandbox-on separately via EVAL_SANDBOX=on",
+    };
+  }
+
+  const plat = probe.platform();
+  if (plat === "darwin" || plat === "win32") {
+    // macOS/Windows: Chromium's sandbox works without the unprivileged-userns
+    // / AppArmor gymnastics that make Linux the hard case.
+    return {
+      capable: true,
+      reason: `${plat}: Chromium's sandbox works without host userns/AppArmor setup`,
+    };
+  }
+  if (plat !== "linux") {
+    // Exotic platform (freebsd/openbsd/sunos/android/…): no verified Chromium
+    // sandbox story here, so don't claim capable. Falls back to --no-sandbox.
+    return {
+      capable: false,
+      reason: `${plat}: no verified Chromium sandbox path — defaulting to --no-sandbox`,
+    };
+  }
+
+  // A SUID-root sandbox helper is a working sandbox path on its own, even when
+  // unprivileged user namespaces are locked down.
+  const suid = probe.suidSandboxHelper(binaryPath);
+  if (suid) {
+    return { capable: true, reason: `SUID-root chrome sandbox helper present (${suid})` };
+  }
+
+  // Otherwise the sandbox relies on unprivileged user namespaces. Require
+  // POSITIVE evidence they are usable: a readable, nonzero
+  // user.max_user_namespaces. Unreadable/absent (null) is unknown, and an
+  // unknown userns state must degrade to incapable (→ --no-sandbox), not be
+  // assumed available — the detector's whole job is to avoid claiming capable
+  // on a host where the sandbox-on launch would then FATAL.
+  const maxUserns = probe.readSysctlInt("/proc/sys/user/max_user_namespaces");
+  if (maxUserns === null) {
+    return {
+      capable: false,
+      reason:
+        "could not read user.max_user_namespaces and no SUID sandbox helper is present — cannot confirm a usable sandbox path",
+    };
+  }
+  if (maxUserns === 0) {
+    return {
+      capable: false,
+      reason:
+        "unprivileged user namespaces are disabled (user.max_user_namespaces=0) and no SUID sandbox helper is present",
+    };
+  }
+
+  // Debian and pre-23.10 Ubuntu kernels carry a distro patch that gates
+  // unprivileged userns creation behind kernel.unprivileged_userns_clone —
+  // explicitly 0 disables it even while user.max_user_namespaces stays
+  // nonzero. The knob does not exist on unpatched kernels (Fedora etc.),
+  // where an absent read (null) means no such restriction.
+  const usernsClone = probe.readSysctlInt(
+    "/proc/sys/kernel/unprivileged_userns_clone",
+  );
+  if (usernsClone === 0) {
+    return {
+      capable: false,
+      reason:
+        "unprivileged user namespaces are disabled (kernel.unprivileged_userns_clone=0) and no SUID sandbox helper is present",
+    };
+  }
+
+  // Ubuntu 23.10+/24.04 gate unprivileged userns behind AppArmor. The knob is
+  // absent on non-AppArmor hosts (Fedora/SELinux), where userns is unrestricted.
+  const restrict = probe.readSysctlInt(
+    "/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+  );
+  if (restrict === 1) {
+    const prof = probe.appArmorUsernsProfile(binaryPath);
+    if (prof) {
+      return {
+        capable: true,
+        reason: `AppArmor restricts unprivileged userns, but profile '${prof}' grants userns to ${binaryPath}`,
+      };
+    }
+    return {
+      capable: false,
+      reason: `AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no AppArmor profile was found that grants 'userns' to ${binaryPath}`,
+    };
+  }
+
+  const detail =
+    restrict === 0
+      ? "kernel.apparmor_restrict_unprivileged_userns=0"
+      : "no AppArmor unprivileged-userns restriction present";
+  return {
+    capable: true,
+    reason: `unprivileged user namespaces are available (${detail})`,
+  };
+}
+
+const defaultSandboxProbe: SandboxProbe = {
+  platform,
+  readSysctlInt(path) {
+    try {
+      const s = readFileSync(path, "utf8").trim();
+      if (!s) return null;
+      const n = Number.parseInt(s.split(/\s+/)[0]!, 10);
+      return Number.isNaN(n) ? null : n;
+    } catch {
+      return null;
+    }
+  },
+  suidSandboxHelper(binaryPath) {
+    const dir = dirname(binaryPath);
+    const candidates = [
+      process.env.CHROME_DEVEL_SANDBOX,
+      join(dir, "chrome_sandbox"),
+      join(dir, "chrome-sandbox"),
+    ].filter((c): c is string => Boolean(c));
+    for (const c of candidates) {
+      try {
+        const st = statSync(c);
+        let execAllowed = true;
+        try {
+          accessSync(c, fsConstants.X_OK);
+        } catch {
+          execAllowed = false;
+        }
+        if (
+          isUsableSuidHelper({
+            isFile: st.isFile(),
+            uid: st.uid,
+            mode: st.mode,
+            execAllowed,
+          })
+        ) {
+          return c;
+        }
+      } catch {
+        /* missing/unreadable candidate — skip */
+      }
+    }
+    return null;
+  },
+  appArmorUsernsProfile(binaryPath) {
+    // Parse /etc/apparmor.d/ (world-readable) rather than
+    // /sys/kernel/security/apparmor/profiles (root-only, and carries no
+    // attachment path anyway). Profiles there auto-load at boot, so presence
+    // ≈ loaded in practice (docs/chromium-sandboxing.md).
+    const dir = "/etc/apparmor.d";
+    let files: string[];
+    try {
+      files = readdirSync(dir);
+    } catch {
+      return null;
+    }
+    for (const f of files) {
+      const full = join(dir, f);
+      try {
+        if (!statSync(full).isFile()) continue;
+      } catch {
+        continue;
+      }
+      let text: string;
+      try {
+        text = readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      for (const p of parseAppArmorProfiles(text)) {
+        if (profileGrantsUserns(p.body) && matchAppArmorPath(p.attach, binaryPath)) {
+          return p.name;
+        }
+      }
+    }
+    return null;
+  },
+};
+
+/** Parse AppArmor profile declarations that attach to a filesystem path.
+ *  Returns `{ name, attach, body }` per profile — `attach` is the raw
+ *  attachment glob, `body` is the text between the header `{` and the next
+ *  line-leading `}`. Exported for unit testing. */
+export function parseAppArmorProfiles(
+  text: string,
+): { name: string; attach: string; body: string }[] {
+  const out: { name: string; attach: string; body: string }[] = [];
+  const lines = text.split(/\r?\n/);
+  // Header forms:
+  //   profile <name> <path> [flags=(...)] {
+  //   <path> [flags=(...)] {          (unnamed — name defaults to the path)
+  // The path glob may end in `}` (e.g. `.../{chrome,headless_shell}`), so the
+  // middle is `[^{\n]*` up to the opening brace — do NOT anchor a `\b` right
+  // after the path token (a `}`→space transition is not a word boundary and
+  // would drop the profile).
+  const headerRe = /^\s*(?:profile\s+(\S+)\s+)?("[^"]+"|\/\S+)\s*[^{\n]*\{\s*$/;
+  for (let i = 0; i < lines.length; i++) {
+    const m = headerRe.exec(lines[i]!);
+    if (!m) continue;
+    let attach = m[2]!;
+    if (attach.startsWith('"')) attach = attach.slice(1, -1);
+    if (!attach.startsWith("/")) continue; // only filesystem-attached profiles
+    const bodyLines: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^\s*\}/.test(lines[j]!)) break;
+      bodyLines.push(lines[j]!);
+    }
+    out.push({ name: m[1] ?? attach, attach, body: bodyLines.join("\n") });
+  }
+  return out;
+}
+
+/** True when a stat result describes a *usable* SUID-root sandbox helper: a
+ *  regular file owned by root (uid 0) with the setuid bit, at least one execute
+ *  bit, AND executable by the *current process* (`execAllowed`, access(2) X_OK).
+ *  The last requirement rejects modes like `04700`/`04750` where an execute bit
+ *  exists but this (non-root) process still can't execve the helper — a false
+ *  positive that would report capable and then FATAL at sandbox-on launch.
+ *  Playwright ships a `chrome_sandbox` next to the binary but does not set it
+ *  setuid, so that copy is correctly excluded too. Exported for unit testing. */
+export function isUsableSuidHelper(st: {
+  isFile: boolean;
+  uid: number;
+  mode: number;
+  /** Whether the current process may execute the file — access(2) X_OK.
+   *  access() checks the real uid/gid while execve() checks the effective
+   *  ones; they are the same for the eval harness, and a mismatch only
+   *  produces a false negative (conservative). */
+  execAllowed: boolean;
+}): boolean {
+  return (
+    st.isFile &&
+    st.uid === 0 &&
+    (st.mode & 0o4000) !== 0 && // setuid bit
+    (st.mode & 0o111) !== 0 && // at least one execute bit (owner/group/other)
+    st.execAllowed // ...and one this process can actually use
+  );
+}
+
+/** True when an AppArmor profile body contains an ALLOW rule that grants the
+ *  `userns` permission. Conservative: comments are stripped first, and any
+ *  `deny`-qualified line is excluded — so `# userns` or `deny userns,` do NOT
+ *  count as granting it (a false positive there would report a host capable and
+ *  then FATAL at sandbox-on launch). Exported for unit testing. */
+export function profileGrantsUserns(body: string): boolean {
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim(); // strip trailing comment
+    if (!line || /\bdeny\b/.test(line)) continue;
+    // A userns access rule, optionally prefixed with audit/allow and optionally
+    // carrying an access spec (e.g. `userns create,`), terminated by a comma.
+    if (/^(?:audit\s+)?(?:allow\s+)?userns\b[^,]*,$/.test(line)) return true;
+  }
+  return false;
+}
+
+/** Match an AppArmor path glob against a concrete path. Supports `*`
+ *  (any run of non-`/`), `**` (any run including `/`), `?` (one non-`/`),
+ *  `{a,b}` alternation, and `[...]` char classes. Exported for unit testing. */
+export function matchAppArmorPath(glob: string, target: string): boolean {
+  const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i++;
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if (c === "{") {
+      const end = glob.indexOf("}", i);
+      if (end === -1) {
+        re += "\\{";
+      } else {
+        const alts = glob
+          .slice(i + 1, end)
+          .split(",")
+          .map(escapeRe)
+          .join("|");
+        re += `(?:${alts})`;
+        i = end;
+      }
+    } else if (c === "[") {
+      const end = glob.indexOf("]", i);
+      if (end === -1) {
+        re += "\\[";
+      } else {
+        re += glob.slice(i, end + 1); // pass the char class through verbatim
+        i = end;
+      }
+    } else {
+      re += escapeRe(c);
+    }
+  }
+  re += "$";
+  return new RegExp(re).test(target);
 }
 
 /** Determine the user-data-dir for snap-confined Chromium. Snap confinement

@@ -38,6 +38,60 @@ Use `sandbox: true` only when the host has a working Chromium sandbox path:
   unprivileged user namespace it needs.
 - Or a working SUID `chrome_sandbox` helper installed alongside that binary.
 
+## L4 eval harness: auto-detect and `EVAL_SANDBOX`
+
+The `launch_chrome` **server default** stays `sandbox: false` (above). The **L4
+eval harness** does not blindly inherit that: it auto-detects whether the
+resolved Chromium binary has a usable sandbox path on the host and, by default,
+runs the model-driven Chromium **sandbox-on when the host supports it** — so a
+normal `npm run eval` on a capable host exercises the representative sandboxed
+launch path instead of silently going `--no-sandbox`.
+
+Detection (`detectSandboxCapability` in `src/util/browser-resolve.ts`) is static
+— it reads sysctls and AppArmor profiles, it does not launch Chromium — and is
+deliberately conservative (a false negative degrades to the working
+`--no-sandbox` default rather than a hard launch failure). A host is reported
+**capable** when, for the *resolved* binary:
+
+- non-Linux (macOS/Windows) — the sandbox works natively; or
+- a SUID-root `chrome_sandbox`/`chrome-sandbox` helper sits next to the binary
+  (works even when unprivileged userns is locked down); or
+- unprivileged user namespaces are usable: `user.max_user_namespaces` is a
+  readable nonzero value, `kernel.unprivileged_userns_clone` is not explicitly
+  `0` (the Debian/pre-23.10-Ubuntu patch knob — absent on other distros, which
+  is fine), **and** either `kernel.apparmor_restrict_unprivileged_userns`
+  is `0`/absent, or it is `1` but an AppArmor profile under `/etc/apparmor.d`
+  (profiles there auto-load at boot; the static probe does not verify the
+  kernel's loaded-profile state, which is root-only) both **attaches to the
+  resolved binary path** (glob-matched — the profile's path glob must cover the
+  *actual* path, the failure mode that bit the multi-account eval hosts) **and**
+  grants `userns` via an allow rule.
+
+Anything the detector cannot positively verify stays **incapable** (→
+`--no-sandbox`, or a fail-fast under `EVAL_SANDBOX=on`): an unreadable
+`max_user_namespaces`, an unrecognized platform, or `CDP_TEST_BROWSER=chrome`
+(chrome-launcher resolves the binary itself, so there is no path to probe — set
+`CDP_TEST_BROWSER_PATH` if you want the sandbox on for a Chrome-stable run).
+
+`EVAL_SANDBOX` is a tri-state intent control (browser scenarios only):
+
+| `EVAL_SANDBOX` | Behavior |
+|---|---|
+| unset / `auto` | auto-detect: sandbox **on** if capable, else **off** with a logged reason |
+| `true` / `1` / `on` | force **on** — fails fast (aborts the run) if the host is incapable, never silently downgrades. Back-compat alias for the pre-existing opt-in |
+| `false` / `0` / `off` | force **off** (`--no-sandbox`) |
+
+The decision is resolved once per run and its posture + source is printed in the
+run header unconditionally, e.g.:
+
+```text
+[eval] sandbox: on (source=auto-capable; AppArmor restricts unprivileged userns, but profile 'cdp-mcp-chromium' grants userns to /home/.../chrome-linux/chrome)
+[eval] sandbox: off (source=auto-fallback; AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no AppArmor profile was found that grants 'userns' to /home/.../chrome)
+```
+
+Under the hood the harness plumbs the decision to the spawned server via
+`CDP_SANDBOX` (`true`/`false`), which `launch_chrome` uses as its launch default.
+
 ## Why the Chromium sandbox still matters
 
 The MCP caller is already highly privileged relative to the page. It can ask

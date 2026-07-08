@@ -143,18 +143,21 @@ npm run eval                                 # all scenarios × 3 trials (~$4 fu
 npm run eval -- --scenarios=compute-step --trials=1
 npm run eval -- --scenarios=node-compute-step,node-stdio-bug,node-conditional-bp,node-uncaught-throw --trials=1   # Node scenarios
 
-# Opt the run into Chromium's sandbox. Default OFF — the model launches
-# Chromium via launch_chrome, whose `sandbox` arg defaults to false
-# (--no-sandbox automation default; see docs/chromium-sandboxing.md). The
-# model normally omits the arg, so to run a whole suite sandbox-on the runner
-# plumbs CDP_SANDBOX=true to the server (which uses it as the launch default).
-# Use ONLY on a host with a working sandbox path (AppArmor userns allowance or
-# SUID chrome_sandbox helper) that covers the binary you'll actually launch —
-# recent Playwright runs headless via `headless_shell` (in a
+# Chromium sandbox posture (browser scenarios). Default is AUTO: the runner
+# probes the resolved binary and launches sandbox-ON when the host supports it
+# (unprivileged userns / a covering AppArmor profile / a SUID helper), else OFF
+# (--no-sandbox) with a logged reason. The chosen posture + its source prints in
+# the run header. Override with the tri-state EVAL_SANDBOX (see
+# docs/chromium-sandboxing.md):
+#   EVAL_SANDBOX=on    force sandbox on — fails fast if the host is incapable
+#   EVAL_SANDBOX=off   force --no-sandbox
+#   EVAL_SANDBOX=auto  (default) auto-detect
+# A forced/auto sandbox-on needs a working path that covers the binary you'll
+# actually launch — recent Playwright runs headless via `headless_shell` (in a
 # chromium_headless_shell-<rev>/ dir), a different binary from `chrome`, so the
 # host's AppArmor profile glob must match BOTH or a headless sandbox launch
 # still FATALs with "No usable sandbox!".
-EVAL_SANDBOX=true npm run eval
+EVAL_SANDBOX=on npm run eval
 
 # Swap to the cheaper Sonnet 4.6 baseline (no thinking by default on
 # budget-style models). Per-(vendor, model) pricing via `pricingFor` on
