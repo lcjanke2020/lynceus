@@ -70,7 +70,7 @@ export function registerSourceTools(server: McpServer) {
       if (!res.ok) {
         const hint =
           res.reason === "no_content"
-            ? `A source-mapped script references '${input.file}', but its original source is neither embedded in the map (no sourcesContent) nor readable from disk (non-loopback session, or the file moved). Use get_script_source for the compiled JS, or resolve_source_position to map a TS coordinate to JS.`
+            ? `A source-mapped script references '${input.file}', but its original source isn't available: the map has no embedded sourcesContent, and reading the .ts from disk is Node-only (browser source maps must embed sourcesContent). Use get_script_source for the compiled JS, or resolve_source_position to map a TS coordinate to JS.`
             : `No source-mapped script references '${input.file}'. Try list_scripts to see what's loaded (see each entry's original_sources).`;
         throw new ToolError("no_source", hint);
       }

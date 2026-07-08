@@ -45,20 +45,23 @@ export async function readOriginalSource(
   file: string,
   sessionId?: string | null,
 ): Promise<OriginalSourceResult> {
-  // A map matching `file` may still be in flight right after the Node entry
-  // pause (loadSourceMap is fire-and-forget) — poll briefly, giving up early
-  // if nothing's pending. Mirrors mapOriginalToGenerated's slow path.
-  await waitForConsumer(
-    s.scripts,
-    () => s.scripts.findByOriginalSource(file).length > 0,
-    Date.now() + MAP_LOAD_WAIT_MS,
-  );
   // Omitting session_id — like an explicit null — means the ROOT target,
   // matching the repo-wide session_id convention and get_script_source. NOT
   // "search every session": that let a worker/iframe copy of the same TS path
   // shadow the root (codex review — omitted returned the worker source while an
   // explicit null returned root). Pass a session_id to read a child's copy.
   const want = sessionId ?? undefined;
+  // A map matching `file` in the TARGET session may still be in flight right
+  // after the Node entry pause (loadSourceMap is fire-and-forget) — poll
+  // briefly, giving up early if nothing's pending. The predicate MUST apply the
+  // same session filter as the match below: otherwise another session's
+  // already-loaded copy of `file` satisfies the wait and we return no_match
+  // before the target session's map attaches (codex round-2 review).
+  await waitForConsumer(
+    s.scripts,
+    () => s.scripts.findByOriginalSource(file).some((sc) => sc.sessionId === want),
+    Date.now() + MAP_LOAD_WAIT_MS,
+  );
   const matches = s.scripts.findByOriginalSource(file).filter((sc) => sc.sessionId === want);
   if (matches.length === 0) return { ok: false, reason: "no_match" };
 

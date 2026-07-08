@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
+import { SourceMapGenerator } from "@jridgewell/source-map";
 import { sessionState } from "../session/state.js";
 import { seedMappedScript } from "../../test/helpers/source-maps.js";
 import { readOriginalSource } from "./original-source.js";
@@ -97,6 +98,38 @@ describe("readOriginalSource", () => {
     sessionState.chromeHost = "127.0.0.1"; // loopback — the disk read would otherwise fire
     const r = await readOriginalSource(sessionState, "conditional-bp.ts");
     expect(r).toEqual({ ok: false, reason: "no_content" });
+  });
+
+  it("waits for the TARGET session's map even when another session already has the file loaded (codex round-2)", async () => {
+    // A worker copy of src/main.ts is ALREADY loaded...
+    seedMappedScript({
+      scriptId: "s_w",
+      url: "http://x/worker.js",
+      source: "src/main.ts",
+      sessionId: "SW1",
+      sourceContent: "WORKER",
+    });
+    // ...while the ROOT copy's map is still in flight (sourceMapURL set, no
+    // consumer yet → hasPendingMaps() is true, so waitForConsumer polls).
+    sessionState.scripts.upsert({
+      scriptId: "s_root",
+      url: "http://x/main.js",
+      sourceMapURL: "http://x/main.js.map",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-root",
+    });
+    // Root map attaches partway through the bounded wait.
+    setTimeout(() => {
+      const gen = new SourceMapGenerator({ file: "http://x/main.js" });
+      gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 1, column: 0 }, source: "src/main.ts" });
+      gen.setSourceContent("src/main.ts", "ROOT");
+      sessionState.scripts.attachMap("s_root", undefined, gen.toString());
+    }, 50);
+    // Pre-fix: the unfiltered wait predicate saw the worker map and returned
+    // immediately, so the root filter found nothing → no_match. Post-fix the
+    // wait is root-scoped, so it waits for the root map and returns ROOT.
+    const r = await readOriginalSource(sessionState, "src/main.ts", null);
+    expect(r.ok && r.value.content).toBe("ROOT");
   });
 
   it("session_id disambiguates a worker copy from the root", async () => {
