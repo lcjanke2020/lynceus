@@ -44,13 +44,15 @@ export function registerInspectTools(server: McpServer) {
   registerJsonTool(
     server,
     "get_scope",
-    "Return variables visible at a paused frame. Valid only while paused. Each item includes the session_id of the originating Runtime agent — required for follow-on get_object_properties calls when paused in a worker/iframe.",
+    "Return variables visible at a paused frame. Valid only while paused. With no scope_type, returns the merged lexical view — the innermost block/catch/with scopes plus the function's local scope, innermost binding winning on name shadowing — so block-scoped let/loop variables (e.g. a `for (let i…)` counter) are included; this mirrors the DevTools 'Local' pane. Pass a specific scope_type to read exactly one scope. To read a single value no matter which scope holds it, `evaluate` resolves against the whole frame scope chain. Each item includes the session_id of the originating Runtime agent — required for follow-on get_object_properties calls when paused in a worker/iframe.",
     {
       frame_index: z.number().int().nonnegative().optional().describe("Default 0 (topmost frame)"),
       scope_type: z
         .enum(["local", "closure", "global", "block", "catch", "with", "script", "eval", "module"])
         .optional()
-        .describe("Default: local"),
+        .describe(
+          "Omit for the merged lexical view (inner block/catch/with + function local, innermost wins); set one type to read exactly that scope.",
+        ),
       max_props: z.number().int().positive().optional(),
     },
     async (input: { frame_index?: number; scope_type?: string; max_props?: number }) => {
@@ -60,41 +62,91 @@ export function registerInspectTools(server: McpServer) {
       const idx = input.frame_index ?? 0;
       const frame = state.callFrames[idx];
       if (!frame) throw new ToolError("bad_frame", `Frame ${idx} out of range (${state.callFrames.length} frames)`);
-      const targetType = input.scope_type ?? "local";
-      const scope = frame.scopeChain.find((sc) => sc.type === targetType);
-      if (!scope?.object?.objectId) {
+      const max = input.max_props ?? 50;
+
+      // Fetch a scope object's properties (raw CDP descriptors, symbols
+      // included so `truncated` counts the way it always has).
+      const fetchRaw = async (objectId: string): Promise<Protocol.Runtime.PropertyDescriptor[]> => {
+        const result = await s.client!.send(
+          "Runtime.getProperties",
+          {
+            objectId,
+            ownProperties: false,
+            accessorPropertiesOnly: false,
+            generatePreview: true,
+          },
+          sid,
+        );
+        return result.result ?? [];
+      };
+      const toItem = (p: Protocol.Runtime.PropertyDescriptor) => ({
+        name: p.name,
+        ...(p.value ? describeRemote(p.value) : { type: "missing", preview: "(no value)" }),
+        session_id: sid ?? null,
+        writable: p.writable,
+        enumerable: p.enumerable,
+      });
+
+      // Explicit scope_type: read exactly that one scope (behavior unchanged).
+      if (input.scope_type) {
+        const scope = frame.scopeChain.find((sc) => sc.type === input.scope_type);
+        if (!scope?.object?.objectId) {
+          throw new ToolError(
+            "no_scope",
+            `Frame ${idx} has no '${input.scope_type}' scope. Available: ${frame.scopeChain
+              .map((sc) => sc.type)
+              .join(", ")}`,
+          );
+        }
+        const raw = await fetchRaw(scope.object.objectId);
+        return {
+          frame_index: idx,
+          scope_type: input.scope_type,
+          session_id: sid ?? null,
+          items: raw.filter((p) => !p.symbol).slice(0, max).map(toItem),
+          truncated: raw.length > max,
+        };
+      }
+
+      // Default: merge the innermost contiguous lexical scopes (block/catch/
+      // with) plus the function local scope, innermost binding winning on
+      // shadowing — mirrors the DevTools "Local" pane. A single-scope read
+      // silently misses `for (let i…)` loop variables: they live in a block
+      // scope, not `local`, and with nested blocks not even the innermost
+      // block. Stop at the first non-lexical scope (closure/global/script/…),
+      // which is where enclosing (not currently-visible-as-local) bindings
+      // begin.
+      const LEXICAL_SCOPES: ReadonlySet<string> = new Set(["block", "catch", "with", "local"]);
+      const lexicalScopes: typeof frame.scopeChain = [];
+      for (const sc of frame.scopeChain) {
+        if (!LEXICAL_SCOPES.has(sc.type)) break;
+        lexicalScopes.push(sc);
+      }
+      if (lexicalScopes.length === 0) {
         throw new ToolError(
           "no_scope",
-          `Frame ${idx} has no '${targetType}' scope. Available: ${frame.scopeChain.map((sc) => sc.type).join(", ")}`,
+          `Frame ${idx} has no local/block scope. Available: ${frame.scopeChain
+            .map((sc) => sc.type)
+            .join(", ")}`,
         );
       }
-      const max = input.max_props ?? 50;
-      const result = await s.client!.send(
-        "Runtime.getProperties",
-        {
-          objectId: scope.object.objectId,
-          ownProperties: false,
-          accessorPropertiesOnly: false,
-          generatePreview: true,
-        },
-        sid,
-      );
-      const items = (result.result ?? [])
-        .filter((p) => !p.symbol)
-        .slice(0, max)
-        .map((p) => ({
-          name: p.name,
-          ...(p.value ? describeRemote(p.value) : { type: "missing", preview: "(no value)" }),
-          session_id: sid ?? null,
-          writable: p.writable,
-          enumerable: p.enumerable,
-        }));
+      const seen = new Set<string>();
+      const merged: Protocol.Runtime.PropertyDescriptor[] = [];
+      for (const sc of lexicalScopes) {
+        if (!sc.object?.objectId) continue;
+        for (const p of await fetchRaw(sc.object.objectId)) {
+          if (p.symbol || seen.has(p.name)) continue; // innermost binding wins
+          seen.add(p.name);
+          merged.push(p);
+        }
+      }
       return {
         frame_index: idx,
-        scope_type: targetType,
+        scope_type: "local",
+        merged_scope_types: lexicalScopes.map((sc) => sc.type),
         session_id: sid ?? null,
-        items,
-        truncated: (result.result?.length ?? 0) > max,
+        items: merged.slice(0, max).map(toItem),
+        truncated: merged.length > max,
       };
     },
   );
@@ -102,7 +154,7 @@ export function registerInspectTools(server: McpServer) {
   registerJsonTool(
     server,
     "evaluate",
-    "Evaluate a JS expression. When the debugger is paused, the expression runs in the paused frame's context via Debugger.evaluateOnCallFrame (top frame by default; override with frame_index). When not paused, runs in the page's Runtime context via Runtime.evaluate. frame_index given while not paused is a not_paused error. Note: while paused the event loop is frozen, so async expressions return the unresolved Promise object rather than awaiting it.",
+    "Evaluate a JS expression. When the debugger is paused, the expression runs in the paused frame's context via Debugger.evaluateOnCallFrame (top frame by default; override with frame_index) — resolving against the frame's entire scope chain, including block-scoped/let variables, so it reads values a single get_scope may not surface. When not paused, runs in the page's Runtime context via Runtime.evaluate. frame_index given while not paused is a not_paused error. Note: while paused the event loop is frozen, so async expressions return the unresolved Promise object rather than awaiting it.",
     {
       expression: z.string(),
       frame_index: z.number().int().nonnegative().optional(),

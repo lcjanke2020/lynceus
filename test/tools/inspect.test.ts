@@ -105,6 +105,86 @@ describe("get_scope", () => {
     expect(r.items).toHaveLength(5);
     expect(r.truncated).toBe(true);
   });
+
+  // Regression cover for LEO-399 / GH #42: a `for (let i…)` loop variable is
+  // block-scoped, so a single-scope read of `local` never surfaces it. The
+  // default (no scope_type) call must merge the innermost lexical scopes.
+  const blockLocalFrame = () =>
+    [
+      {
+        callFrameId: "frame-blk-0",
+        functionName: "main",
+        functionLocation: { scriptId: "s1", lineNumber: 0, columnNumber: 0 },
+        location: { scriptId: "s1", lineNumber: 15, columnNumber: 8 },
+        url: "http://localhost/conditional-bp.js",
+        scopeChain: [
+          { type: "block", object: { type: "object", className: "Object", description: "Object", objectId: "scope-block" } },
+          { type: "local", object: { type: "object", className: "Object", description: "Object", objectId: "scope-local" } },
+          { type: "global", object: { type: "object", className: "Window", description: "Window", objectId: "scope-global" } },
+        ],
+        this: { type: "object", className: "global", description: "global", objectId: "this-0" },
+      },
+    ] as any;
+
+  it("default (no scope_type) merges block + local so block-scoped vars surface; innermost wins", async () => {
+    const { fake } = setupSession();
+    sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
+    fake.respond("Runtime.getProperties", (params: any) => {
+      if (params.objectId === "scope-block")
+        return {
+          result: [
+            { name: "i", value: { type: "number", value: 3 }, writable: true, enumerable: true },
+            { name: "shadow", value: { type: "number", value: 1 }, writable: true, enumerable: true },
+          ],
+        };
+      if (params.objectId === "scope-local")
+        return {
+          result: [
+            { name: "v", value: { type: "number", value: 30 }, writable: true, enumerable: true },
+            { name: "shadow", value: { type: "number", value: 99 }, writable: true, enumerable: true },
+          ],
+        };
+      return { result: [] };
+    });
+    fake.clearSentCalls();
+    const r = parseOkEnvelope<{
+      scope_type: string;
+      merged_scope_types: string[];
+      items: Array<{ name: string; preview: string }>;
+    }>(await scope.handler({}));
+
+    expect(r.scope_type).toBe("local");
+    expect(r.merged_scope_types).toEqual(["block", "local"]);
+    // Both the block-scoped `i` and the function-local `v` are present.
+    expect(r.items.find((i) => i.name === "i")?.preview).toBe("3");
+    expect(r.items.find((i) => i.name === "v")?.preview).toBe("30");
+    // Shadowing: the inner (block) binding wins → one `shadow`, value 1.
+    const shadows = r.items.filter((i) => i.name === "shadow");
+    expect(shadows).toHaveLength(1);
+    expect(shadows[0]!.preview).toBe("1");
+    // The default merge stops at the first non-lexical scope: global is NOT read.
+    expect(
+      fake.sentCalls.filter((c) => c.method === "Runtime.getProperties").map((c) => c.params.objectId),
+    ).toEqual(["scope-block", "scope-local"]);
+  });
+
+  it("explicit scope_type reads exactly one scope (single-scope path unchanged)", async () => {
+    const { fake } = setupSession();
+    sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
+    fake.respond("Runtime.getProperties", (params: any) => {
+      if (params.objectId === "scope-block")
+        return { result: [{ name: "i", value: { type: "number", value: 3 } }] };
+      if (params.objectId === "scope-local")
+        return { result: [{ name: "v", value: { type: "number", value: 30 } }] };
+      return { result: [] };
+    });
+    const r = parseOkEnvelope<{ scope_type: string; merged_scope_types?: string[]; items: Array<{ name: string }> }>(
+      await scope.handler({ scope_type: "block" }),
+    );
+    expect(r.scope_type).toBe("block");
+    expect(r.merged_scope_types).toBeUndefined();
+    expect(r.items.map((i) => i.name)).toEqual(["i"]);
+  });
 });
 
 describe("evaluate", () => {

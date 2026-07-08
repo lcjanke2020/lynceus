@@ -72,6 +72,27 @@ describe("node conditional breakpoint (e2e)", () => {
     }>(tools, "evaluate", { expression: "i", return_by_value: true });
     expect(eval_i.value).toBe(3);
 
+    // Honest default: get_scope() with NO scope_type must surface the
+    // block-scoped loop variable `i` via the merged lexical view. Before this
+    // fix the default read only the `local` scope, which omits `i` — the exact
+    // gate the failing node-conditional-bp eval trials could not clear
+    // (LEO-399 / GH #42). The evaluate("i") assertion above independently
+    // covers the full-chain path.
+    const scopeDefault = await call<{
+      scope_type: string;
+      merged_scope_types?: string[];
+      items: Array<{ name: string; preview?: string; value?: unknown }>;
+    }>(tools, "get_scope", {});
+    const iEntry = scopeDefault.items.find((it) => it.name === "i");
+    expect(
+      iEntry,
+      `default get_scope must surface block-scoped 'i'; got [${scopeDefault.items
+        .map((it) => it.name)
+        .join(", ")}]`,
+    ).toBeTruthy();
+    expect(iEntry!.preview === "3" || iEntry!.value === 3).toBe(true);
+    expect(scopeDefault.merged_scope_types).toContain("block");
+
     await call(tools, "resume");
 
     // Prove the bp fired ONLY ONCE: after the final resume the loop must
