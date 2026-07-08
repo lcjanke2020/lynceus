@@ -22,20 +22,22 @@ describe("parseSandboxIntent", () => {
     expect(parseSandboxIntent("  AUTO ")).toBe("auto");
   });
 
-  it("truthy aliases → on (back-compat: true/1)", () => {
-    for (const v of ["true", "1", "on", "YES"]) {
+  it("truthy aliases → on (back-compat: true/1), case-insensitive", () => {
+    for (const v of ["true", "1", "on", "ON"]) {
       expect(parseSandboxIntent(v)).toBe("on");
     }
   });
 
   it("falsy aliases → off", () => {
-    for (const v of ["false", "0", "off", "no"]) {
+    for (const v of ["false", "0", "off", "OFF"]) {
       expect(parseSandboxIntent(v)).toBe("off");
     }
   });
 
-  it("an unrecognized value throws (no silent default)", () => {
-    expect(() => parseSandboxIntent("maybe")).toThrow(/EVAL_SANDBOX must be/);
+  it("unrecognized values throw — no silent default (incl. yes/no, which are not aliases)", () => {
+    for (const v of ["maybe", "yes", "no", "enabled"]) {
+      expect(() => parseSandboxIntent(v)).toThrow(/EVAL_SANDBOX must be/);
+    }
   });
 });
 

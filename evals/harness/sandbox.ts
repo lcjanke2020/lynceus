@@ -34,10 +34,10 @@ export type SandboxIntent = "on" | "off" | "auto";
 export function parseSandboxIntent(raw: string | undefined): SandboxIntent {
   const v = (raw ?? "").trim().toLowerCase();
   if (v === "" || v === "auto") return "auto";
-  if (v === "true" || v === "1" || v === "on" || v === "yes") return "on";
-  if (v === "false" || v === "0" || v === "off" || v === "no") return "off";
+  if (v === "true" || v === "1" || v === "on") return "on";
+  if (v === "false" || v === "0" || v === "off") return "off";
   throw new Error(
-    `EVAL_SANDBOX must be one of on/true/1/yes, off/false/0/no, or auto (got '${raw}').`,
+    `EVAL_SANDBOX must be one of on/true/1, off/false/0, or auto (got '${raw}').`,
   );
 }
 

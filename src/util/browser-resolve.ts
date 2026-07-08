@@ -360,7 +360,7 @@ export function detectSandboxCapability(
     return {
       capable: false,
       reason:
-        "browser path is chrome-launcher's own detection marker (CDP_TEST_BROWSER=chrome); the actual binary is unknown until launch — set CDP_TEST_BROWSER_PATH to probe or force the sandbox",
+        "browser path is chrome-launcher's own detection marker (CDP_TEST_BROWSER=chrome); the actual binary is unknown until launch. Set CDP_TEST_BROWSER_PATH to a concrete binary so it can be probed; request sandbox-on separately via EVAL_SANDBOX=on",
     };
   }
 

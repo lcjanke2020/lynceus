@@ -127,10 +127,13 @@ here so future contributors don't waste a debug cycle.
   debug port — chrome-launcher's port-poll loop then times out with
   ECONNREFUSED, looking exactly like the WSL2/snap gap above but with a
   different root cause. **Mitigation:** `launchChrome` defaults
-  `sandbox: false` so `--no-sandbox` is added automatically; eval
-  pipelines on this host work out-of-the-box. For the full security model,
-  including `sandbox: true`, AppArmor, snap confinement, and Bubblewrap, see
-  [docs/chromium-sandboxing.md](./chromium-sandboxing.md).
+  `sandbox: false` so `--no-sandbox` is added automatically; direct callers
+  and CI work out-of-the-box. The L4 eval harness auto-detects per host
+  (sandbox-on only when a covering sandbox path exists — see
+  [EVAL_SANDBOX](./chromium-sandboxing.md)), so an incapable Ubuntu host like
+  this one still runs `--no-sandbox` out-of-the-box. For the full security
+  model, including `sandbox: true`, AppArmor, snap confinement, and Bubblewrap,
+  see [docs/chromium-sandboxing.md](./chromium-sandboxing.md).
 
   *First observed on an Ubuntu 24.04 arm64 host (Parallels VM) while
   validating the L4 eval suite. Quick eval went from FAIL/$0.34/445s
