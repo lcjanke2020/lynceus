@@ -24,7 +24,15 @@
 //   5. Fail with an actionable install hint.
 
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -478,7 +486,20 @@ const defaultSandboxProbe: SandboxProbe = {
     for (const c of candidates) {
       try {
         const st = statSync(c);
-        if (isUsableSuidHelper({ isFile: st.isFile(), uid: st.uid, mode: st.mode })) {
+        let execAllowed = true;
+        try {
+          accessSync(c, fsConstants.X_OK);
+        } catch {
+          execAllowed = false;
+        }
+        if (
+          isUsableSuidHelper({
+            isFile: st.isFile(),
+            uid: st.uid,
+            mode: st.mode,
+            execAllowed,
+          })
+        ) {
           return c;
         }
       } catch {
@@ -556,21 +577,29 @@ export function parseAppArmorProfiles(
 }
 
 /** True when a stat result describes a *usable* SUID-root sandbox helper: a
- *  regular file owned by root (uid 0) with BOTH the setuid bit AND at least one
- *  execute bit. The execute-bit requirement rejects a setuid-but-non-executable
- *  file, which could not actually run as the sandbox helper. Playwright ships a
- *  `chrome_sandbox` next to the binary but does not set it setuid, so that copy
- *  is correctly excluded too. Exported for unit testing. */
+ *  regular file owned by root (uid 0) with the setuid bit, at least one execute
+ *  bit, AND executable by the *current process* (`execAllowed`, access(2) X_OK).
+ *  The last requirement rejects modes like `04700`/`04750` where an execute bit
+ *  exists but this (non-root) process still can't execve the helper — a false
+ *  positive that would report capable and then FATAL at sandbox-on launch.
+ *  Playwright ships a `chrome_sandbox` next to the binary but does not set it
+ *  setuid, so that copy is correctly excluded too. Exported for unit testing. */
 export function isUsableSuidHelper(st: {
   isFile: boolean;
   uid: number;
   mode: number;
+  /** Whether the current process may execute the file — access(2) X_OK.
+   *  access() checks the real uid/gid while execve() checks the effective
+   *  ones; they are the same for the eval harness, and a mismatch only
+   *  produces a false negative (conservative). */
+  execAllowed: boolean;
 }): boolean {
   return (
     st.isFile &&
     st.uid === 0 &&
     (st.mode & 0o4000) !== 0 && // setuid bit
-    (st.mode & 0o111) !== 0 // at least one execute bit (owner/group/other)
+    (st.mode & 0o111) !== 0 && // at least one execute bit (owner/group/other)
+    st.execAllowed // ...and one this process can actually use
   );
 }
 

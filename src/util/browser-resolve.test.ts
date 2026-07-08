@@ -187,18 +187,34 @@ describe("detectSandboxCapability", () => {
 });
 
 describe("isUsableSuidHelper", () => {
+  const ok = { isFile: true, uid: 0, mode: 0o4755, execAllowed: true };
+
   it("true only for a root-owned regular file with setuid AND an execute bit", () => {
-    expect(isUsableSuidHelper({ isFile: true, uid: 0, mode: 0o4755 })).toBe(true);
+    expect(isUsableSuidHelper(ok)).toBe(true);
   });
 
   it("false for setuid but non-executable (the flagged false positive)", () => {
-    expect(isUsableSuidHelper({ isFile: true, uid: 0, mode: 0o4644 })).toBe(false);
+    expect(
+      isUsableSuidHelper({ ...ok, mode: 0o4644, execAllowed: false }),
+    ).toBe(false);
+  });
+
+  it("false when this process can't execute it despite an execute bit (04700/04750)", () => {
+    // Root-owned setuid helper with owner-only (or owner+group) exec bits: an
+    // execute bit exists, but a non-root eval user fails access(2) X_OK — and
+    // would fail execve — so treating it as usable was a false positive.
+    expect(
+      isUsableSuidHelper({ ...ok, mode: 0o4700, execAllowed: false }),
+    ).toBe(false);
+    expect(
+      isUsableSuidHelper({ ...ok, mode: 0o4750, execAllowed: false }),
+    ).toBe(false);
   });
 
   it("false for executable but no setuid bit, non-root owner, or non-file", () => {
-    expect(isUsableSuidHelper({ isFile: true, uid: 0, mode: 0o0755 })).toBe(false); // no setuid
-    expect(isUsableSuidHelper({ isFile: true, uid: 1000, mode: 0o4755 })).toBe(false); // not root
-    expect(isUsableSuidHelper({ isFile: false, uid: 0, mode: 0o4755 })).toBe(false); // not a file
+    expect(isUsableSuidHelper({ ...ok, mode: 0o0755 })).toBe(false); // no setuid
+    expect(isUsableSuidHelper({ ...ok, uid: 1000 })).toBe(false); // not root
+    expect(isUsableSuidHelper({ ...ok, isFile: false })).toBe(false); // not a file
   });
 });
 
