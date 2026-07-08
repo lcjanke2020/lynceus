@@ -355,8 +355,12 @@ export interface SandboxProbe {
    *  null. A functional setuid helper makes the sandbox work independently of
    *  unprivileged user namespaces. */
   suidSandboxHelper: (binaryPath: string) => string | null;
-  /** Name of a loaded AppArmor profile that attaches to `binaryPath` AND
-   *  grants the `userns` permission, or null. Relevant only when the kernel
+  /** Name of an AppArmor profile that attaches to `binaryPath` AND grants
+   *  the `userns` permission, or null. NOTE: the default probe infers this
+   *  from /etc/apparmor.d — where profiles auto-load at boot — and does NOT
+   *  verify the kernel's loaded-profile state (that list is root-only). A
+   *  profile dropped in since boot and never `apparmor_parser`-loaded can
+   *  therefore still be reported here. Relevant only when the kernel
    *  restricts unprivileged user namespaces (Ubuntu 23.10+/24.04). */
   appArmorUsernsProfile: (binaryPath: string) => string | null;
 }
@@ -454,7 +458,7 @@ export function detectSandboxCapability(
     }
     return {
       capable: false,
-      reason: `AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no loaded profile grants 'userns' to ${binaryPath}`,
+      reason: `AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no AppArmor profile was found that grants 'userns' to ${binaryPath}`,
     };
   }
 

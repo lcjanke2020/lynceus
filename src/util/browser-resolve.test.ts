@@ -157,7 +157,7 @@ describe("detectSandboxCapability", () => {
       }),
     );
     expect(cap.capable).toBe(false);
-    expect(cap.reason).toContain("no loaded profile grants 'userns'");
+    expect(cap.reason).toContain("no AppArmor profile was found that grants 'userns'");
   });
 
   it("AppArmor restriction ON but a profile grants userns is capable", () => {

@@ -60,7 +60,9 @@ deliberately conservative (a false negative degrades to the working
   readable nonzero value, `kernel.unprivileged_userns_clone` is not explicitly
   `0` (the Debian/pre-23.10-Ubuntu patch knob — absent on other distros, which
   is fine), **and** either `kernel.apparmor_restrict_unprivileged_userns`
-  is `0`/absent, or it is `1` but a loaded AppArmor profile both **attaches to the
+  is `0`/absent, or it is `1` but an AppArmor profile under `/etc/apparmor.d`
+  (profiles there auto-load at boot; the static probe does not verify the
+  kernel's loaded-profile state, which is root-only) both **attaches to the
   resolved binary path** (glob-matched — the profile's path glob must cover the
   *actual* path, the failure mode that bit the multi-account eval hosts) **and**
   grants `userns` via an allow rule.
@@ -84,7 +86,7 @@ run header unconditionally, e.g.:
 
 ```text
 [eval] sandbox: on (source=auto-capable; AppArmor restricts unprivileged userns, but profile 'cdp-mcp-chromium' grants userns to /home/.../chrome-linux/chrome)
-[eval] sandbox: off (source=auto-fallback; AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no loaded profile grants 'userns' to /home/.../chrome)
+[eval] sandbox: off (source=auto-fallback; AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no AppArmor profile was found that grants 'userns' to /home/.../chrome)
 ```
 
 Under the hood the harness plumbs the decision to the spawned server via
