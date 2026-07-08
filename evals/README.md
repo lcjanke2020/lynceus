@@ -22,7 +22,7 @@ L4 of the test pyramid — runs an LLM agent (Claude, GPT-5.5, Gemini, …) thro
 | `harness/grader.ts` | Per-scenario oracle — emits `correctness ∈ {0,1}`, `mechanic ∈ {0,1}`, efficiency ratio, recovery count. No LLM judge. |
 | `harness/trace.ts` | Trace serialization (NDJSON under `evals/runs/<run-id>/`). `readTraceFile` folds pre-#49 legacy shapes forward via `normalizeLegacyEntry`. |
 | `harness/static-server.ts` | Tiny static server for the scenario's sample-app variant. |
-| `harness/types.ts` | Shared types: `Scenario` (`name`, `prompt`, `oracle`, `oracleMinimumToolCalls`, optional `systemPromptOverride`, optional `xfailCorrectness`, plus *either* `variantDir` for browser scenarios *or* an explicit `target: ScenarioTarget`), `ScenarioTarget` (discriminated union `{ kind: "browser", variantDistDir }` \| `{ kind: "node", script, nodeFlags? }`), `TraceEntry` (NDJSON shape — `ScenarioStartEntry.provider` + `target`, `UsageEntry.cacheTokens` post-#49), `OracleResult`, `ReasoningConfig`, `TrialOutcome`. |
+| `harness/types.ts` | Shared types: `Scenario` (`name`, `prompt`, `oracle`, `oracleMinimumToolCalls`, optional `systemPromptOverride`, optional `xfailCorrectness`, optional `xfailMechanic`, plus *either* `variantDir` for browser scenarios *or* an explicit `target: ScenarioTarget`), `ScenarioTarget` (discriminated union `{ kind: "browser", variantDistDir }` \| `{ kind: "node", script, nodeFlags? }`), `TraceEntry` (NDJSON shape — `ScenarioStartEntry.provider` + `target`, `UsageEntry.cacheTokens` post-#49), `OracleResult`, `ReasoningConfig`, `TrialOutcome`. |
 | `scenarios/index.ts` | Scenario registry — what `npm run eval` picks up. |
 | `scenarios/<name>.ts` | One file per scenario: prompt, target (browser variant or Node entry script), oracle. |
 | `scenarios/<name>.test.ts` | L1 unit tests for the scenario's oracle (no LLM, no browser, no Node child). |
@@ -233,22 +233,24 @@ The harness frames each scenario as **manual exploratory testing by an SDET**, n
 
 Both bits are returned from every oracle as `OracleResult.{correctness, mechanic}`. `renderScoreboard` shows them as two columns. Per-PR `eval:quick` still gates CI exit on correctness only; nightly rotation analytics consume both for finer-grained per-(model, scenario) signal.
 
-### Expected-failure scenarios (`xfailCorrectness`)
+### Expected-failure scenarios (`xfailCorrectness` / `xfailMechanic`)
 
-A scenario can set `xfailCorrectness: true` on its `Scenario` export to mark the correctness axis as **expected to fail** (the harness equivalent of pytest's `@xfail`). The scoreboard then reports four states in the CORRECT column rather than two:
+A scenario can mark an axis as **expected to fail** (the harness equivalent of pytest's `@xfail`): `xfailCorrectness: true` tags the correctness axis, `xfailMechanic: true` tags the mechanic axis. The corresponding scoreboard column (CORRECT for correctness, MECHANIC for mechanic) then reports four states rather than two — the same mapping applies to whichever axis is tagged:
 
-| Status   | Means                                                    | Fails the run? |
-|----------|----------------------------------------------------------|----------------|
-| `PASS`   | not xfail-tagged; median correctness=1                   | no             |
-| `FAIL`   | not xfail-tagged; median correctness=0                   | **yes**        |
-| `XFAIL`  | xfail-tagged; median correctness=0 (the expected outcome) | no            |
-| `XPASS!` | xfail-tagged; median correctness=1 (unexpected pass)     | no             |
+| Status   | Means (for the tagged axis)                                | Fails the run? |
+|----------|------------------------------------------------------------|----------------|
+| `PASS`   | not xfail-tagged; median=1                                 | corr: **yes** · mech: no |
+| `FAIL`   | not xfail-tagged; median=0                                 | corr: **yes** · mech: no |
+| `XFAIL`  | xfail-tagged; median=0 (the expected outcome)              | no             |
+| `XPASS!` | xfail-tagged; median=1 (passed the tagged axis)            | no             |
 
-Only `FAIL` flips the CLI exit code. The `XPASS!` marker is a prompt to the operator — the model unexpectedly identified the bug under the conditions the scenario was designed to be hard, so consider dropping the tag. Mechanic, efficiency, and recovery axes still score normally regardless of the xfail tag.
+Only a correctness `FAIL` flips the CLI exit code — **the MECHANIC column never gates**, it is diagnostic-only, so a bare mechanic `FAIL`/`XFAIL` never fails the run. The `XPASS!` marker means the tagged axis passed: for a `xfailCorrectness` tag that is an operator nudge to consider dropping it (the model unexpectedly solved a scenario designed to be hard); for a **defensive** `xfailMechanic` tag (see the 2026-07-08 note below) a steady `XPASS!` on the strong models is the *intended bonus* signal, not a drop-the-tag nudge. Efficiency and recovery axes always score normally.
 
-The current xfail scenario is `adversarial-out-of-order` — its deliberately-degraded system prompt makes the correctness=0 outcome design intent (the 2026-05 macOS baseline run had all other seven scenarios pass and this one fail).
+The current xfail scenario is `adversarial-out-of-order`, tagged on **both** axes: its deliberately-degraded system prompt makes the correctness=0 outcome design intent (the 2026-05 macOS baseline run had all other seven scenarios pass and this one fail), and — after the 2026-07-08 change below — its mechanic axis is defensively tagged because the bug is statically readable and so the breakpoint→pause flow can't be forced by construction.
 
 **Per-model expectations (2026-05-17, first arm64-linux full run on Opus-4.7-medium).** The `adversarial-out-of-order` xfail tag was set expecting the correctness axis to fail under the degraded system prompt. In practice Opus-4.7-medium identifies the bug (correctness=1) but bypasses the debugger workflow (mechanic=0) — the "lazy solver" pattern from PR #28 — so the scenario surfaces as `XPASS!` per-run rather than `XFAIL`. We're keeping the `xfailCorrectness` tag in place because (a) the `XPASS!` marker is exactly the operator nudge we wanted, and (b) Opus's inclination to bypass the debugger is hard to suppress with prompt engineering alone — fighting the xfail axis on this one scenario isn't the right lever. The long-term answer is a different scenario class (e.g. Station BP + LLM-judged) where the agent isn't asked "find the bug" at all, so there's no shortcut to take.
+
+**Update (2026-07-08, PR #48).** Two changes revisit the paragraph above. (1) The scenario prompt was tightened to demand a *runtime* confirmation ("pause execution where the increment is computed…"), without prescribing tool ordering (that stays stripped in `MINIMAL_SYSTEM`, so the out-of-order-recovery premise survives — a 3-trial opus-4-8 run showed `recoveries=3`, confirming it didn't collapse into `compute-step`). On that run the tightened prompt moved the mechanic from 0/3 to **3/3** — so prompt engineering *did* move the axis on the current strong model, updating the 2026-05-17 "not the right lever" read for this scenario. (2) A first-class `xfailMechanic` tag was added and applied here. We keep it as a **defensive** tag rather than dropping it: the bug is a literal `return 2` readable straight from source, so no prompt can *force* the breakpoint→pause flow by construction — a sufficiently capable model may still legitimately static-shortcut. On the strong models that now drive the debugger, the steady `XPASS!` is the intended bonus signal; on the nightly rotation's weaker models (Sonnet/Haiku/GPT-5.5/older Opus) that may still shortcut, `XFAIL` reads cleaner than a bare `FAIL` in the non-gating MECHANIC column. If a future rotation shows every model reliably driving the debugger, revisit dropping the mechanic tag then.
 
 This split was added after the 2026-05-16 Opus 4.7 measurement (PR #28) surfaced a "lazy solver" pattern: the model identified the bug correctly via `get_script_source` in every failed trial but bypassed the debugger workflow the oracles previously conflated into one PASS/FAIL bit. See PR #12 comment of 2026-05-16 for the data + framing.
 

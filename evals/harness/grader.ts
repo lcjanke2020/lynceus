@@ -239,6 +239,12 @@ export function renderScoreboard(rollups: ScenarioRollup[]): string {
     else if (r.status === "XFAIL") xfailCount += 1;
     else if (r.status === "XPASS") xpassCount += 1;
     else if (r.status === "FAIL") failCount += 1;
+    // Deliberately asymmetric with `passedScenarios`: this counts every
+    // scenario that drove the debugger (`medianMechanic === 1`), so a
+    // MECHANIC-column `XPASS!` (xfailMechanic-tagged but the flow ran) counts
+    // here, whereas a correctness `XPASS!` is excluded from `passedScenarios`.
+    // The mechanic axis is diagnostic-only, so "did it drive the debugger" is
+    // the useful tally regardless of the xfail tag.
     if (r.medianMechanic === 1) mechanicPassed += 1;
     const correctDisplay = r.status === "XPASS" ? "XPASS!" : r.status;
     const mechanicDisplay = r.mechanicStatus === "XPASS" ? "XPASS!" : r.mechanicStatus;
