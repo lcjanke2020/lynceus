@@ -166,6 +166,11 @@ EVAL_SANDBOX=on npm run eval
 EVAL_MODEL_OVERRIDE=claude-sonnet-4-6 npm run eval                              # ~$5–10
 EVAL_MODEL_OVERRIDE=claude-sonnet-4-6 EVAL_REASONING_LEVEL=high npm run eval    # with explicit thinking budget
 
+# Sonnet 5 (Claude 5 gen — adaptive `medium` thinking by default, sampling
+# params dropped, same request surface as Opus 4.7/4.8). ~40–55% cheaper than
+# the Opus-4.8 default; see "Sonnet-5 characterization (LEO-402)" below.
+EVAL_MODEL_OVERRIDE=claude-sonnet-5 npm run eval                                # ~$6–9
+
 # Cross-vendor: OpenAI / GPT-5.5 (#50/#58 — reasoning-off → Chat
 # Completions, reasoning-on → Responses, auto-routed).
 EVAL_PROVIDER=openai OPENAI_API_KEY=… EVAL_OPENAI_MODEL=gpt-5.5 EVAL_REASONING_LEVEL=medium npm run eval:quick
@@ -253,6 +258,39 @@ The current xfail scenario is `adversarial-out-of-order`, tagged on **both** axe
 **Update (2026-07-08, PR #48).** Two changes revisit the paragraph above. (1) The scenario prompt was tightened to demand a *runtime* confirmation ("pause execution where the increment is computed…"), without prescribing tool ordering (that stays stripped in `MINIMAL_SYSTEM`, so the out-of-order-recovery premise survives — a 3-trial opus-4-8 run showed `recoveries=3`, confirming it didn't collapse into `compute-step`). On that run the tightened prompt moved the mechanic from 0/3 to **3/3** — so prompt engineering *did* move the axis on the current strong model, updating the 2026-05-17 "not the right lever" read for this scenario. (2) A first-class `xfailMechanic` tag was added and applied here. We keep it as a **defensive** tag rather than dropping it: the bug is a literal `return 2` readable straight from source, so no prompt can *force* the breakpoint→pause flow by construction — a sufficiently capable model may still legitimately static-shortcut. On the strong models that now drive the debugger, the steady `XPASS!` is the intended bonus signal; on the nightly rotation's weaker models (Sonnet/Haiku/GPT-5.5/older Opus) that may still shortcut, `XFAIL` reads cleaner than a bare `FAIL` in the non-gating MECHANIC column. If a future rotation shows every model reliably driving the debugger, revisit dropping the mechanic tag then.
 
 This split was added after the 2026-05-16 Opus 4.7 measurement (PR #28) surfaced a "lazy solver" pattern: the model identified the bug correctly via `get_script_source` in every failed trial but bypassed the debugger workflow the oracles previously conflated into one PASS/FAIL bit. See PR #12 comment of 2026-05-16 for the data + framing.
+
+## Sonnet-5 characterization (LEO-402, 2026-07-08)
+
+First full-suite run under `claude-sonnet-5` (adaptive `medium`, sandbox on, all 18 × 3 trials) to
+gauge whether the cheaper Claude 5 Sonnet is a viable eval model vs the Opus-4.8 default.
+
+**Result.** 15/18 clean PASS, 17/18 mechanic, one gating FAIL (`form-drive`). Total **$8.61** at the
+encoded standard $3/$15 rate card (~$5.7 actual under the $2/$10 intro promo active through
+2026-08-31). On the 14 browser scenarios that overlap the Opus-4.8 reference, Sonnet-5 ran **~$5.5 vs
+~$11.9 — roughly half the cost**. It *beat* the Opus reference on both conditional-breakpoint
+scenarios (`conditional-bp`, `node-conditional-bp`, which Opus missed) and matched it on the other 12.
+The lone regression, `form-drive`, was a median-fail of shape (0,0,1) — one trial solved cleanly and
+**mechanic passed all three** (the form was driven correctly; the `get_form_state` read-back just
+didn't match target on 2/3) — the same borderline shape Opus 4.8 itself showed on `conditional-bp`
+here, i.e. temp-1 variance territory, not a capability gap. `session-resume` (xfail, non-gating) was
+also weaker: raw `evaluate` instead of `set_cookies`/`load_storage_state` on 2/3.
+
+**Verdict: viable as a documented `EVAL_MODEL_OVERRIDE=claude-sonnet-5` opt-in (now wired), not yet
+the pinned default.** The `form-drive` regression from a clean Opus PASS blocks a strictly-better
+drop-in claim; re-running `form-drive`/`session-resume` at higher trial counts to separate variance
+from a real oracle-specific weakness is the gate for any default swap.
+
+**Limitations (this was deliberately informal).** The Opus-4.8 comparison is *not* a clean same-commit
+diff: the 14-browser baseline is a ×3 run at an older commit (pre-LEO-400 xfail changes), and the 4
+node scenarios were only ×1; archived baselines were not re-graded against the current oracle set.
+Treat this as a **major-break screen, not a rigorous head-to-head** — a proper characterization would
+run both models ×3 on the same build/grader. Full raw traces archived off-repo (LEO-402).
+
+**Rotation idea (feeds the proposal below).** Since Sonnet-5 catches the major breaks at ~half the
+cost, a lightweight rotation — **run Sonnet-5 by default, run the Opus-4.8 baseline every ~3rd night**
+— would capture most of the savings while keeping a periodic strong-model reference for anything
+Sonnet-5's `form-drive`-class soft spots would miss. Cheaper and simpler than the full day-of-week
+matrix below; the two could merge.
 
 ## Active proposal — model rotation
 
