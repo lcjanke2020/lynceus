@@ -21,7 +21,7 @@ import type { Vendor } from "./vendor.js";
  *  to PRICING_CATALOG below + this union. Forces "we have pricing for
  *  this" at the type level — prevents "ran Opus, got Sonnet-priced cost
  *  numbers" silent failures. */
-export const SUPPORTED_MODELS = ["claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8"] as const;
+export const SUPPORTED_MODELS = ["claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5"] as const;
 export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
 
 const DEFAULT_MODEL_ID: SupportedModel = "claude-opus-4-8";
@@ -52,9 +52,11 @@ export const MODEL_ID: SupportedModel = readModelId();
  *  Empirically observed on Opus 4.7 — sending `temperature: 0` (the
  *  harness's pre-PR-#27 default) fails immediately. The pricing page's
  *  Opus 4.7 tokenizer note hints at API-surface changes for the new
- *  generation; treat this set as "newer Anthropic models we've actually
- *  seen reject the field," not as a forward-looking guess. Update when
- *  bumping models. */
+ *  generation; treat this set as "newer Anthropic models we've
+ *  empirically seen reject the field, or whose model card documents the
+ *  sampling params as removed," not as a forward-looking guess. (Opus 4.8
+ *  and Sonnet 5 were added on the documented surface; Opus 4.7 was the
+ *  empirical observation.) Update when bumping models. */
 const MODELS_WITHOUT_TEMPERATURE: ReadonlySet<SupportedModel> = new Set<SupportedModel>([
   "claude-opus-4-7",
   // Opus 4.8 keeps Opus 4.7's request surface: `temperature`/`top_p`/`top_k`
@@ -62,10 +64,17 @@ const MODELS_WITHOUT_TEMPERATURE: ReadonlySet<SupportedModel> = new Set<Supporte
   // thinking only, sampling params gone). Same rationale as 4.7; added on the
   // documented surface, not from an empirical 400 in this harness.
   "claude-opus-4-8",
+  // Sonnet 5 is the Claude 5 generation — same request surface as Opus 4.7/4.8:
+  // `temperature`/`top_p`/`top_k` are removed and 400 on any value (adaptive
+  // thinking only). Per the Sonnet 5 model card; not a `ReadonlySet` the
+  // compiler enforces, so it must be listed explicitly or the harness would
+  // send `temperature` and 400.
+  "claude-sonnet-5",
 ]);
 
 /** Whether the active model accepts the `temperature` parameter. Used
- *  by `buildMessageRequest` to omit it for models that 400 on it. */
+ *  by `buildAnthropicRequest` (evals/harness/anthropic.ts) to omit it for
+ *  models that 400 on it. */
 export const SUPPORTS_TEMPERATURE: boolean = !MODELS_WITHOUT_TEMPERATURE.has(MODEL_ID);
 
 /** Extended-thinking API shape. Anthropic's API split as of Opus 4.7:
@@ -92,9 +101,32 @@ const MODEL_THINKING_STYLE: Record<SupportedModel, ThinkingStyle> = {
   // Opus 4.8 inherits 4.7's adaptive-only thinking (manual `enabled` +
   // budget_tokens 400s; effort low|medium|high|xhigh|max all valid).
   "claude-opus-4-8": "adaptive",
+  // Sonnet 5 (Claude 5 gen) is adaptive-only like Opus 4.7/4.8 — manual
+  // `enabled` + budget_tokens 400; effort low|medium|high|xhigh|max all valid.
+  "claude-sonnet-5": "adaptive",
 };
 
 export const THINKING_STYLE: ThinkingStyle = MODEL_THINKING_STYLE[MODEL_ID];
+
+/** Models where OMITTING the `thinking` field still runs *adaptive thinking*
+ *  by default (the Claude 5 generation). On these, a "thinking off" request
+ *  must send an explicit `thinking: { type: "disabled" }` — omission is NOT
+ *  off. This differs from Opus 4.7/4.8 and Sonnet 4.6, where omitting
+ *  `thinking` already means thinking is off, so the harness historically
+ *  just dropped the field. Per the Sonnet 5 model card + adaptive-thinking
+ *  docs. `{ type: "disabled" }` is accepted on every model in this set (and
+ *  on Opus 4.7/4.8 / Sonnet 4.6); only Fable 5 — not in SUPPORTED_MODELS —
+ *  400s on an explicit disable, so it must never be added here. Not
+ *  compiler-enforced (a `ReadonlySet`); add each Claude-5-gen model
+ *  explicitly. */
+const MODELS_THINKING_ON_WHEN_OMITTED: ReadonlySet<SupportedModel> = new Set<SupportedModel>([
+  "claude-sonnet-5",
+]);
+
+/** Whether omitting `thinking` leaves thinking ON for the active model — so a
+ *  "reasoning off" run (`EVAL_REASONING_LEVEL=none`) must emit an explicit
+ *  `thinking: { type: "disabled" }` rather than dropping the field. */
+export const THINKING_ON_WHEN_OMITTED: boolean = MODELS_THINKING_ON_WHEN_OMITTED.has(MODEL_ID);
 
 /** Map the harness's tier vocabulary to Anthropic's adaptive `effort`
  *  values. `low` | `medium` | `high` | `xhigh` | `max` pass through —
@@ -330,6 +362,18 @@ export const PRICING_CATALOG: PricingCatalog = {
       inputCacheWrite: 6.25,
       inputCacheRead: 0.5,
       output: 25.0,
+    },
+    // Sonnet 5 standard rate card — input $3 / output $15 per MTok, same as
+    // Sonnet 4.6; 5-min ephemeral cache write = 1.25× input ($3.75), cache
+    // read = 0.1× ($0.30). An intro promo of $2/$10 runs through 2026-08-31 —
+    // deliberately NOT encoded here; standard is the durable value (the intro
+    // discount is noted in the run writeup instead).
+    // Source: Anthropic Sonnet 5 model card / pricing (verified 2026-07-08).
+    "claude-sonnet-5": {
+      input: 3.0,
+      inputCacheWrite: 3.75,
+      inputCacheRead: 0.3,
+      output: 15.0,
     },
   },
   openai: {

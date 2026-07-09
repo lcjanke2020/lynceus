@@ -589,6 +589,15 @@ describe("PRICING_CATALOG", () => {
     );
   });
 
+  it("Sonnet 5 ships on the same standard rate card as Sonnet 4.6", () => {
+    // Sonnet 5 standard pricing (input $3 / output $15, cache 1.25×/0.1×)
+    // matches Sonnet 4.6. Pin equality so a typo in either row is caught.
+    // (The $2/$10 intro promo through 2026-08-31 is deliberately not encoded.)
+    expect(PRICING_CATALOG.anthropic["claude-sonnet-5"]).toEqual(
+      PRICING_CATALOG.anthropic["claude-sonnet-4-6"],
+    );
+  });
+
   it("cache-write is 1.25× input and cache-read is 0.1× input per Anthropic's documented multipliers", () => {
     for (const model of SUPPORTED_MODELS) {
       const p = PRICING_CATALOG.anthropic[model]!;
@@ -631,6 +640,16 @@ describe("SUPPORTS_TEMPERATURE", () => {
   it("is false for Opus 4.8 (same surface as 4.7 — sampling params removed)", async () => {
     vi.resetModules();
     process.env.EVAL_MODEL_OVERRIDE = "claude-opus-4-8";
+    const mod = await import("./model.js");
+    expect(mod.SUPPORTS_TEMPERATURE).toBe(false);
+    expect(mod.THINKING_STYLE).toBe("adaptive");
+  });
+
+  it("is false for Sonnet 5 (Claude 5 gen — sampling params removed, adaptive-only)", async () => {
+    // Sonnet 5 shares the Opus 4.7/4.8 request surface: `temperature`/`top_p`/
+    // `top_k` 400, adaptive thinking only (manual `enabled` + budget_tokens 400).
+    vi.resetModules();
+    process.env.EVAL_MODEL_OVERRIDE = "claude-sonnet-5";
     const mod = await import("./model.js");
     expect(mod.SUPPORTS_TEMPERATURE).toBe(false);
     expect(mod.THINKING_STYLE).toBe("adaptive");

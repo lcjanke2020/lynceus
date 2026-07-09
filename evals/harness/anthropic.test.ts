@@ -248,6 +248,51 @@ describe("buildAnthropicRequest — adaptive-style (Opus 4.7)", () => {
   });
 });
 
+describe("buildAnthropicRequest — adaptive-style Claude-5-gen (Sonnet 5)", () => {
+  const originalOverride = process.env.EVAL_MODEL_OVERRIDE;
+
+  beforeEach(() => {
+    process.env.EVAL_MODEL_OVERRIDE = "claude-sonnet-5";
+    vi.resetModules();
+  });
+  afterEach(() => {
+    if (originalOverride === undefined) delete process.env.EVAL_MODEL_OVERRIDE;
+    else process.env.EVAL_MODEL_OVERRIDE = originalOverride;
+  });
+
+  // Sonnet 5 runs adaptive thinking by DEFAULT when `thinking` is omitted, so
+  // "reasoning off" must send an explicit { type: "disabled" } — dropping the
+  // field (correct for Opus 4.7/4.8) would silently run adaptive at default
+  // effort here, skewing a reasoning-off run. Regression guard for the LEO-402
+  // wiring (Codex review, PR #49).
+  it("thinking off: emits explicit thinking:{type:'disabled'} (NOT omitted), no temperature/effort", async () => {
+    const { buildAnthropicRequest, RESPONSE_HEADROOM_TOKENS } = await import("./anthropic.js");
+    const req = buildAnthropicRequest({
+      system: SYSTEM,
+      messages: MESSAGES,
+      tools: TOOLS,
+    });
+    expect(req.model).toBe("claude-sonnet-5");
+    expect(req.temperature).toBeUndefined(); // sampling params dropped on Claude 5
+    expect(req.thinking).toEqual({ type: "disabled" });
+    expect(req.outputConfig).toBeUndefined();
+    expect(req.maxTokens).toBe(RESPONSE_HEADROOM_TOKENS);
+  });
+
+  it("thinking on: adaptive payload with display:summarized + effort tier, no temperature", async () => {
+    const { buildAnthropicRequest } = await import("./anthropic.js");
+    const req = buildAnthropicRequest({
+      system: SYSTEM,
+      messages: MESSAGES,
+      tools: TOOLS,
+      thinking: { tier: "medium", budgetTokensOverride: 8192 },
+    });
+    expect(req.temperature).toBeUndefined();
+    expect(req.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(req.outputConfig).toEqual({ effort: "medium" });
+  });
+});
+
 describe("effectiveTokenCap", () => {
   it("returns baseline when thinking is off", async () => {
     const { effectiveTokenCap } = await import("./anthropic.js");

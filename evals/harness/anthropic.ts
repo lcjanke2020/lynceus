@@ -49,6 +49,7 @@ import {
   MODEL_ID,
   SUPPORTS_TEMPERATURE,
   THINKING_STYLE,
+  THINKING_ON_WHEN_OMITTED,
   TIER_BUDGET_TOKENS,
   MAX_ITERATIONS_PER_TRIAL,
   MAX_OUTPUT_TOKENS_PER_TRIAL,
@@ -120,7 +121,8 @@ export interface MessageRequest {
   timeoutMs?: number;
   thinking?:
     | { type: "enabled"; budget_tokens: number }
-    | { type: "adaptive"; display?: "summarized" | "omitted" };
+    | { type: "adaptive"; display?: "summarized" | "omitted" }
+    | { type: "disabled" };
   outputConfig?: { effort: "low" | "medium" | "high" | "xhigh" | "max" };
 }
 
@@ -197,7 +199,14 @@ export function buildAnthropicRequest(req: VendorMessageRequest): MessageRequest
               budget_tokens: budgetTokens!,
             },
           }
-      : {}),
+      : // Thinking off. On most models dropping the field is enough, but
+        // Claude-5-gen models (Sonnet 5) run adaptive thinking by default
+        // when `thinking` is omitted — there, "off" must be explicit or the
+        // model silently thinks at default effort, skewing a reasoning-off
+        // run's cost/comparability. See THINKING_ON_WHEN_OMITTED in model.ts.
+        THINKING_ON_WHEN_OMITTED
+        ? { thinking: { type: "disabled" as const } }
+        : {}),
   };
 }
 
