@@ -102,8 +102,8 @@ sequenceDiagram
     participant Or as grader (oracle)
 
     CLI->>R: run(scenario, trials, adapter?)
-    Note over CLI,R: scenario.target.kind branches:<br/>browser → static-server; node → node --inspect child
-    R->>T: start (browser: bind random port;<br/>node: spawn child, parse inspector port)
+    Note over CLI,R: scenario.target.kind branches:<br/>browser → static-server<br/>node → node --inspect child
+    R->>T: start (browser: bind random port<br/>node: spawn child, parse inspector port)
     R->>MCP: spawn (stdio)
     loop each trial
         R->>A: messages(req) → NormalizedMessage
