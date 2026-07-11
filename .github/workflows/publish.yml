@@ -29,8 +29,9 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
           cache: npm
-      # Trusted publishing needs a recent npm (>= 11.5.1).
-      - run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1. Pin to the 11.x line because
+      # npm@latest (now 12.x) dropped support for Node 20, which this job runs on.
+      - run: npm install -g npm@^11.5.1
       - run: npm ci
       - run: npm run build
       - run: npm test
