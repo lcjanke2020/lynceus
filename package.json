@@ -1,6 +1,6 @@
 {
   "name": "lynceus",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Chrome DevTools Protocol + Node.js Inspector MCP server — a TypeScript-aware runtime debugger for AI agents (formerly cdp-mcp).",
   "license": "MIT",
   "author": "Leonard Janke",
