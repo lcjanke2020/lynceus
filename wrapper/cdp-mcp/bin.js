@@ -9,6 +9,15 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// engines only warns at install time; fail loud on Node 20.0–20.5, where
+// sync import.meta.resolve doesn't exist and the audience is stale installs.
+if (typeof import.meta.resolve !== "function") {
+  process.stderr.write(
+    "cdp-mcp (now lynceus) requires Node >= 20.6 — upgrade Node, or install the successor directly: npm install -g lynceus\n",
+  );
+  process.exit(1);
+}
+
 const entry = realpathSync(fileURLToPath(import.meta.resolve("lynceus")));
 process.argv[1] = entry;
 await import(pathToFileURL(entry).href);

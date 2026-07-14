@@ -12,6 +12,6 @@ describe("package shape — cdp-mcp wrapper contract", () => {
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     ) as { bin: Record<string, string>; exports: Record<string, { import: string }> };
     expect(pkg.bin.lynceus).toBe("dist/index.js");
-    expect(pkg.exports["."].import).toBe("./dist/index.js");
+    expect(pkg.exports["."].import).toBe(`./${pkg.bin.lynceus}`);
   });
 });
