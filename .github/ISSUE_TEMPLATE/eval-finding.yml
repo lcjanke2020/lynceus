@@ -1,0 +1,46 @@
+name: Eval finding
+description: An L4 agent-eval observation — a scenario that fails oddly, an oracle misjudgment, a tool-ergonomics gap the traces expose.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The L4 harness ([evals/README.md](https://github.com/lcjanke2020/lynceus/blob/master/evals/README.md)) grades each trial on two axes — **mechanic** (did the agent exercise the debugger workflow under test) and **correctness** (did the final answer name the bug) — with deterministic oracles over NDJSON traces. Findings from those runs are welcome: they have driven real product fixes before (e.g. the `get_scope` lexical-scope merge).
+  - type: input
+    id: scenario
+    attributes:
+      label: Scenario
+      description: The registered scenario name (see the table in evals/README.md).
+      placeholder: "node-conditional-bp"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model / vendor
+      description: EVAL_PROVIDER + model, including any EVAL_MODEL_OVERRIDE / reasoning env in effect.
+      placeholder: "anthropic, claude-opus-4-8, effort=medium"
+    validations:
+      required: true
+  - type: input
+    id: verdict
+    attributes:
+      label: Observed verdict(s)
+      description: Mechanic / correctness results across trials, and whether the scenario is xfail-tagged.
+      placeholder: "mechanic PASS 3/3, correctness FAIL 2/3; not xfail"
+    validations:
+      required: true
+  - type: textarea
+    id: trace
+    attributes:
+      label: Trace excerpt
+      description: The relevant NDJSON trace lines (from `evals/runs/<run-id>/`) — the tool-call sequence around the failure, not the whole file.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reading
+    attributes:
+      label: Your reading
+      description: "What you think it means: scenario-design gap (bug statically readable without the debugger), oracle misjudgment, tool-ergonomics problem, or model limitation."
+    validations:
+      required: true

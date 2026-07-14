@@ -1,6 +1,6 @@
 # INDEX.md
 
-**Last updated: 2026-07-13**
+**Last updated: 2026-07-14**
 
 Where to find everything in this repo.
 
@@ -19,8 +19,10 @@ Where to find everything in this repo.
 | File | What it covers |
 |---|---|
 | [AGENTS.md](./AGENTS.md) | Agent on-ramp: mission, current events, conventions, where-to-look. |
+| [CHANGELOG.md](./CHANGELOG.md) | Per-release notable changes, 0.1.0 → current (0.2.2 and earlier shipped as `cdp-mcp`). |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev loop (test/typecheck/smoke), PR conventions, new-tool checklist pointer. |
 | [INDEX.md](./INDEX.md) | This file. |
-| [README.md](./README.md) | Install, build, wire into Claude Code, smoke test, tool conventions. |
+| [README.md](./README.md) | Install, wire into Claude Code, 60-second demo, troubleshooting, tool conventions, SSE/service mode. |
 | [SECURITY.md](./SECURITY.md) | Security model + vulnerability reporting: transport/network exposure, the agent-operator (prompt-injection → action) threat, and deployment hardening. |
 
 ### docs/
