@@ -134,7 +134,7 @@ Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true }
 - **Ubuntu 23.10+ / AppArmor sandbox errors** — Ubuntu's user-namespace restrictions can break Chromium's sandbox. `launch_chrome` defaults to `--no-sandbox` for exactly this reason; if you want the sandbox **on**, see [`docs/chromium-sandboxing.md`](docs/chromium-sandboxing.md) for the AppArmor profile setup.
 - **Windows** — the unit and contract test layers work natively, but `chrome-launcher` 1.2.1 fails to bind its own port on Windows 11 (ECONNREFUSED in its startup poll), which affects local browser e2e runs and can affect `launch_chrome`. Run under WSL2 (Ubuntu) for browser work, or `attach_chrome` to a manually-started Chrome. Note Chrome 136+ ignores `--remote-debugging-port` on the default profile — pair it with a throwaway `--user-data-dir`:
   ```bat
-  start chrome --remote-debugging-port=9222 --user-data-dir=%TEMP%\lynceus-debug-profile
+  start chrome --remote-debugging-port=9222 --user-data-dir="%TEMP%\lynceus-debug-profile"
   ```
   (a separate profile, so your usual logins/extensions won't be present).
 
