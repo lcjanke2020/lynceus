@@ -1,0 +1,81 @@
+name: Bug report
+description: Something in lynceus misbehaves — a tool errors, a breakpoint won't bind, a session won't attach.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two notes before you file:
+        - **Security issues:** please do NOT open a public issue — see [SECURITY.md](https://github.com/lcjanke2020/lynceus/blob/master/SECURITY.md) for the private channel.
+        - Tool errors come back as a structured `{ "error": "...", "message": "..." }` payload — pasting that verbatim is usually the single most useful field.
+  - type: input
+    id: version
+    attributes:
+      label: lynceus version
+      description: "`npm ls -g lynceus` (global install), your lockfile entry, or the commit hash for a source checkout."
+      placeholder: "0.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - npm global (npm install -g lynceus)
+        - npx
+        - source checkout (node dist/index.js)
+        - cdp-mcp compatibility wrapper
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: MCP transport
+      options:
+        - stdio (default)
+        - SSE (--port)
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Debug target
+      options:
+        - Browser (launch_chrome / attach_chrome)
+        - Node (launch_node / attach_node)
+        - Neither / not applicable
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS + version, Node.js version, MCP client (Claude Code, Copilot CLI, …), and browser/Chromium version if a browser target.
+      placeholder: "Ubuntu 24.04, Node 22.x, Claude Code, Playwright Chromium 1223"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The tool calls (or the agent prompt) that trigger it. Smallest sequence that still fails wins.
+      placeholder: |
+        1. launch_chrome url=http://localhost:5173
+        2. set_breakpoint file=src/handlers.ts line=7
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs actual
+      description: 'What should have happened, and what happened instead. Paste the structured error payload (`{ "error": ..., "message": ... }`) verbatim if there was one.'
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Console/stderr output (lynceus logs to stderr only), source-map setup, sandbox/AppArmor context, …
+    validations:
+      required: false

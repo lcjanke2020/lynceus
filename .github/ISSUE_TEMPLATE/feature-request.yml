@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new tool, capability, or behavior change.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [Out of scope for v1](https://github.com/lcjanke2020/lynceus/blob/master/README.md#out-of-scope-for-v1) first — Firefox/Safari, tracing/heap domains, concurrent multi-page debugging, and multi-process Node are known deferrals with design notes behind them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't an agent (or you) do today? Concrete debugging situations beat abstract capabilities.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should exist — a new tool, a new parameter, a changed default? Sketch the tool call and its return shape if you can.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Tool-surface impact
+      description: lynceus pins its tool surface with a set-equality contract test, so surface changes are deliberate.
+      options:
+        - New tool(s)
+        - Change to an existing tool's parameters/return
+        - Behavior change only (no schema change)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or prior art in other debuggers/MCP servers.
+    validations:
+      required: false

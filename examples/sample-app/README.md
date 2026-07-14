@@ -25,7 +25,7 @@ The shared web-app fixture used by L3 e2e tests and L4 evals. A small Vite + Typ
 4. `wait_for_pause` → `get_scope` / `evaluate` / `get_call_stack` at the paused frame.
 5. Conclude that `computeStep()` at `handlers.ts:12` returns `2` and that's why the displayed counter increments wrong.
 
-The same flow is documented end-to-end in [README §End-to-end smoke (with a browser)](../../README.md).
+The same flow is documented end-to-end in [README §Demo walkthrough](../../README.md).
 
 ## Other bugs (scenario variants)
 

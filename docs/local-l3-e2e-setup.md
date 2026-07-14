@@ -195,5 +195,5 @@ AppArmor userns restriction to work around).
   Bubblewrap mechanism map, and the validated-hosts table.
 - [`docs/known-chromium-gaps.md`](./known-chromium-gaps.md) — per-spec
   Chromium-vs-Chrome gaps and host-OS workarounds.
-- [README §L3](../README.md) — browser selection, `CDP_TEST_BROWSER_PATH`, and
-  the per-platform support matrix.
+- [docs/test-eval-plan.md §Layer 3](./test-eval-plan.md) — browser selection,
+  `CDP_TEST_BROWSER_PATH`, and the per-platform support matrix.
