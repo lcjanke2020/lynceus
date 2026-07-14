@@ -23,7 +23,7 @@ interface SseMode {
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
-function isLoopbackHost(host: string): boolean {
+export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host);
 }
 
@@ -34,7 +34,7 @@ export interface SseClient {
   transport: SSEServerTransport;
 }
 
-function parseArgs(args: string[]): ServerMode {
+export function parseArgs(args: string[]): ServerMode {
   let port: number | undefined;
   let host = "127.0.0.1";
   let allowRemote = envWithFallback("LYNCEUS_ALLOW_REMOTE", "CDP_MCP_ALLOW_REMOTE") === "1";
@@ -140,9 +140,12 @@ const DEFAULT_SSE_KEEPALIVE_MS = 25_000;
 // down after ~12 min with "Body Timeout Error"). A periodic SSE comment frame
 // (`: ...\n\n`) is a no-op per the spec but resets that idle timer. Tunable via
 // LYNCEUS_SSE_KEEPALIVE_MS (non-negative integer ms; 0 disables). See issue #1.
-function getKeepaliveMs(): number {
-  const raw = envWithFallback("LYNCEUS_SSE_KEEPALIVE_MS", "CDP_MCP_SSE_KEEPALIVE_MS");
-  if (raw === undefined || raw === "") return DEFAULT_SSE_KEEPALIVE_MS;
+export function getKeepaliveMs(): number {
+  // Trim so a whitespace-only value falls back to the default like other
+  // unset/empty input — untrimmed, Number(" ") === 0 would silently hit the
+  // "disable keepalive" sentinel (issue #3). Only an explicit 0 disables.
+  const raw = envWithFallback("LYNCEUS_SSE_KEEPALIVE_MS", "CDP_MCP_SSE_KEEPALIVE_MS")?.trim();
+  if (!raw) return DEFAULT_SSE_KEEPALIVE_MS;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 0) {
     log.warn("invalid SSE keepalive interval; using default", { value: raw, default: DEFAULT_SSE_KEEPALIVE_MS });
@@ -189,18 +192,31 @@ async function runStdioServer(): Promise<void> {
   installProcessErrorHandlers();
 }
 
+export interface SseGateConfig {
+  validateHostOrigin: boolean;
+  allowedHosts: Set<string>;
+  allowedOrigins: Set<string>;
+}
+
+// Host/Origin validation is a DNS-rebinding defense — it bites only
+// on loopback binds, where an attacker page can be tricked into
+// reaching 127.0.0.1 via a rebound DNS name. On non-loopback binds
+// the operator has explicitly accepted exposure via --allow-remote,
+// and we cannot statically enumerate every hostname/IP the host
+// might be reached by (LAN IP, hostname, mDNS, VPN, …) — so we skip
+// both checks and treat --allow-remote as the gate.
+export function buildSseGateConfig(host: string, port: number): SseGateConfig {
+  const validateHostOrigin = isLoopbackHost(host);
+  return {
+    validateHostOrigin,
+    allowedHosts: validateHostOrigin ? buildAllowedHosts(host, port) : new Set<string>(),
+    allowedOrigins: validateHostOrigin ? buildAllowedOrigins(host, port) : new Set<string>(),
+  };
+}
+
 async function runSseServer(mode: SseMode): Promise<void> {
   const clients = new Map<string, SseClient>();
-  // Host/Origin validation is a DNS-rebinding defense — it bites only
-  // on loopback binds, where an attacker page can be tricked into
-  // reaching 127.0.0.1 via a rebound DNS name. On non-loopback binds
-  // the operator has explicitly accepted exposure via --allow-remote,
-  // and we cannot statically enumerate every hostname/IP the host
-  // might be reached by (LAN IP, hostname, mDNS, VPN, …) — so we skip
-  // both checks and treat --allow-remote as the gate.
-  const validateHostOrigin = isLoopbackHost(mode.host);
-  const allowedHosts = validateHostOrigin ? buildAllowedHosts(mode.host, mode.port) : new Set<string>();
-  const allowedOrigins = validateHostOrigin ? buildAllowedOrigins(mode.host, mode.port) : new Set<string>();
+  const { validateHostOrigin, allowedHosts, allowedOrigins } = buildSseGateConfig(mode.host, mode.port);
   const httpServer = createServer((req, res) => {
     void handleSseRequest({
       req,
@@ -360,10 +376,16 @@ async function startSseConnection({
   const server = buildServer();
 
   // Assigned after connect() (below) so the keepalive never writes before the
-  // SDK has sent the SSE response headers; cleared here on disconnect.
+  // SDK has sent the SSE response headers; cleared here on disconnect. The
+  // `closed` flag makes a post-close arm a no-op: unreachable with the current
+  // SDK (connect() resolves without yielding to IO after registering the close
+  // listener), but an upstream change there would otherwise leak the timer
+  // (issue #3).
   let keepalive: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
 
   transport.onclose = () => {
+    closed = true;
     if (keepalive) clearInterval(keepalive);
     const client = clients.get(transport.sessionId);
     clients.delete(transport.sessionId);
@@ -381,7 +403,7 @@ async function startSseConnection({
   // connect() has now written the SSE headers + endpoint event, so it's safe
   // to interleave keepalive comment frames on the stream.
   const keepaliveMs = getKeepaliveMs();
-  if (keepaliveMs > 0) {
+  if (keepaliveMs > 0 && !closed) {
     keepalive = setInterval(() => {
       if (res.writableEnded) return;
       try {
