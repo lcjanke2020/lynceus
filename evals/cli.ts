@@ -34,8 +34,6 @@ import {
 } from "./harness/model.js";
 import type { TrialOutcome } from "./harness/types.js";
 import type { VendorAdapter } from "./harness/vendor.js";
-// INVESTIGATION ARTIFACT (issue #45) — not for merge to master. See
-// header of evals/harness/lm-studio-adapter.ts for full context.
 import { makeLmStudioAdapter } from "./harness/lm-studio-adapter.js";
 import { makeOpenaiAdapter } from "./harness/openai-adapter.js";
 import { makeOpenaiResponsesAdapter } from "./harness/openai-responses-adapter.js";
@@ -321,17 +319,15 @@ async function main(): Promise<void> {
       `[eval] EVAL_PROVIDER=${process.env.EVAL_PROVIDER} — using non-default backend. scenario_start.model = ${provider.model}.`,
     );
     if (provider.vendor === "lm-studio") {
+      console.error(`[eval]   Caveat on this OpenAI-compat path (GH #7):`);
       console.error(
-        `[eval]   Caveat on this throwaway path (investigation artifact, issue #45):`,
-      );
-      console.error(
-        `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the LM Studio adapter discards thinking/output_config, so these fields are NOT a faithful record of what the backend did.`,
+        `[eval]   - scenario_start.reasoning + effort are Anthropic-shaped from the harness defaults; the LM Studio adapter discards thinking/output_config (request effort via EVAL_LM_STUDIO_REASONING_EFFORT instead), so these fields are NOT a faithful record of what the backend did.`,
       );
     }
     if (provider.vendor === "deepseek") {
       console.error(`[eval]   Caveat on this OpenAI-compat path (GH #8):`);
       console.error(
-        `[eval]   - DeepSeek V4 runs WITH reasoning on (the adapter sends thinking:{type:"enabled"} + reasoning_effort:"high"); reasoning_content is captured to the .thinking sidecar AND re-fed on tool-call turns (V4 requires it echoed back — same as Kimi). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to DeepSeek's effort — it's always 'high', so treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
+        `[eval]   - DeepSeek V4 runs WITH reasoning on (the adapter sends thinking:{type:"enabled"} + reasoning_effort:"high"); reasoning_content is captured to the .thinking sidecar AND re-fed on tool-call turns (V4 requires it echoed back — same as Kimi). But the harness tier (scenario_start.reasoning/effort, e.g. medium/8192) is NOT mapped to DeepSeek's effort — it's always the construction-time effort ('high' unless EVAL_DEEPSEEK_REASONING_EFFORT overrides it, GH #7), so treat those depth fields as Anthropic-shaped defaults, not a faithful record.`,
       );
     }
     if (provider.vendor === "moonshot") {

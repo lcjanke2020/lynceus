@@ -32,7 +32,7 @@ describe("makeLmStudioAdapter — OpenAI-compat via mocked fetch", () => {
   };
 
   beforeEach(() => {
-    process.env.EVAL_LM_STUDIO_BASE_URL = "http://mac-studio.tail:1234/v1";
+    process.env.EVAL_LM_STUDIO_BASE_URL = "http://example.invalid:1234/v1";
     process.env.EVAL_LM_STUDIO_MODEL = "openai/gpt-oss-120b";
     process.env.EVAL_LM_STUDIO_API_KEY = "test-key";
     delete process.env.EVAL_LM_STUDIO_MAX_TOKENS;
@@ -76,7 +76,7 @@ describe("makeLmStudioAdapter — OpenAI-compat via mocked fetch", () => {
     const fetchMock = stubFetchOk(OK_BODY);
     await makeLmStudioAdapter().messages({ system: SYSTEM, messages: MESSAGES });
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("http://mac-studio.tail:1234/v1/chat/completions");
+    expect(url).toBe("http://example.invalid:1234/v1/chat/completions");
     const headers = (init as RequestInit).headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer test-key");
     const body = JSON.parse((init as RequestInit).body as string);
@@ -129,6 +129,16 @@ describe("makeLmStudioAdapter — OpenAI-compat via mocked fetch", () => {
       (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
     );
     expect(body.max_tokens).toBe(8192);
+  });
+
+  it("throws at construction (no fetch) on a malformed EVAL_LM_STUDIO_MAX_TOKENS", () => {
+    process.env.EVAL_LM_STUDIO_MAX_TOKENS = "8k";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(() => makeLmStudioAdapter()).toThrow(
+      /EVAL_LM_STUDIO_MAX_TOKENS='8k' is not a positive integer/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("explicit req.maxTokens beats EVAL_LM_STUDIO_MAX_TOKENS", async () => {

@@ -2,7 +2,8 @@
 //
 // This file introduces the vendor-agnostic seam. The eval runner used
 // to consume Anthropic's `Message` shape directly — any non-Anthropic
-// backend (e.g. the LM Studio investigation artifact, the upcoming
+// backend (e.g. the LM Studio adapter — an investigation artifact at the
+// time — or the then-upcoming
 // Vertex/Gemini adapter for #51) had to either lie about
 // Anthropic-wire-format fields (`cache_creation_input_tokens` etc.) or
 // supply parallel "real" values elsewhere. `NormalizedMessage` makes the

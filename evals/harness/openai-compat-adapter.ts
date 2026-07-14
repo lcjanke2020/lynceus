@@ -175,15 +175,20 @@ function readReasoningEffortEnv(
 }
 
 export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter {
+  // The base URL is optional only for vendors that configure a default —
+  // keep the missing-env hints honest about that (claude-reviewer, PR #55).
+  const baseUrlHint = cfg.defaultBaseUrl
+    ? `${cfg.baseUrlEnv} optional`
+    : `${cfg.baseUrlEnv} (base URL) also required`;
   const apiKey = requireEnv(
     cfg.apiKeyEnv,
     cfg.label,
-    `requires ${cfg.apiKeyEnv} (API key) and ${cfg.modelEnv} (model id); ${cfg.baseUrlEnv} optional.`,
+    `requires ${cfg.apiKeyEnv} (API key) and ${cfg.modelEnv} (model id); ${baseUrlHint}.`,
   );
   const model = requireEnv(
     cfg.modelEnv,
     cfg.label,
-    `requires ${cfg.modelEnv} (model id); ${cfg.apiKeyEnv} (API key) also required.`,
+    `requires ${cfg.modelEnv} (model id); ${cfg.apiKeyEnv} (API key) also required; ${baseUrlHint}.`,
   );
   // Treat empty string as unset (mirrors the OpenAI adapter's base-URL
   // handling). Vendors without a `defaultBaseUrl` (LM Studio) REQUIRE the env.

@@ -2,9 +2,9 @@
 //
 // Lives between the cross-vendor `VendorAdapter` seam (`vendor.ts`) and
 // the per-backend adapter modules that speak the OpenAI wire format —
-// today: `openai-adapter.ts` (OpenAI proper, issue #50) and
-// `lm-studio-adapter.ts` (LM Studio, which exposes an
-// OpenAI-compatible `/v1/chat/completions` endpoint). The two share
+// today: `openai-adapter.ts` (OpenAI proper, issue #50) and the
+// `makeOpenAICompatAdapter` factory (`openai-compat-adapter.ts`, GH #8)
+// behind the DeepSeek, Moonshot, and LM Studio adapters. They share
 // nearly identical request-building + response-parsing logic. Pulling
 // them into one module:
 //   - consolidates the OpenAI-compatible translation into one place;
@@ -14,8 +14,9 @@
 //     without re-implementing tool_calls round-tripping.
 //
 // What lives here:
-//   - `OpenAIChatRequest` / `OpenAIChatResponse` types — the shape both
-//     adapters POST/parse.
+//   - `OpenAIChatRequest` / `OpenAIChatResponse` types — the shape every
+//     consumer POSTs/parses — plus the `REASONING_EFFORTS` vocabulary the
+//     request type and the factory's env-knob validator share (GH #7).
 //   - `translateMessages()` — Anthropic-shape `MessageParam[]` → OpenAI
 //     `OpenAIChatMessage[]`, including `tool_use` → `tool_calls` and
 //     `tool_result` → `{ role: "tool", tool_call_id, content }` fan-out.
@@ -34,9 +35,11 @@
 // What does NOT live here:
 //   - HTTP transport (each adapter handles its own `fetch` + auth headers).
 //   - Vendor-specific env-var resolution.
-//   - Reasoning-effort knobs — only OpenAI exposes them; the OpenAI
-//     adapter constructs the request, then calls into here only for the
-//     shared shape pieces.
+//   - Reasoning-effort POLICY — the vocabulary and wire field live here,
+//     but who sends what is per-adapter: the OpenAI adapter tier-maps
+//     `req.thinking` (`tierToOpenaiEffort`), the compat factory forwards
+//     its per-vendor env knob (GH #7: DeepSeek, LM Studio), Moonshot
+//     sends nothing (no request-side param).
 //
 // Field naming note: OpenAI's `usage.prompt_tokens` is documented as
 // *including* cached tokens (cf. `prompt_tokens_details.cached_tokens`).
@@ -83,10 +86,12 @@ export interface OpenAIChatMessage {
 export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
-/** The (subset of) Chat Completions request body both OpenAI and
- *  LM Studio accept. OpenAI-specific additions like `reasoning_effort`
- *  and `max_completion_tokens` are bolted on by the OpenAI adapter
- *  after this base is built; LM Studio uses `max_tokens` directly. */
+/** The (subset of) Chat Completions request body every OpenAI-compat
+ *  backend accepts. `max_completion_tokens` is bolted on only by the
+ *  OpenAI adapter after this base is built; the compat-factory vendors
+ *  (DeepSeek/Moonshot/LM Studio) send `max_tokens` directly.
+ *  `reasoning_effort` comes from the OpenAI adapter (tier-mapped) or the
+ *  factory's env knob (GH #7) where the vendor's wire supports it. */
 export interface OpenAIChatRequest {
   model: string;
   messages: OpenAIChatMessage[];
