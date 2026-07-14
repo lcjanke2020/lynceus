@@ -7,7 +7,8 @@
 // pattern reproduce on a non-Anthropic model?
 //
 // Design: direct `fetch` against `/v1/chat/completions` rather than the
-// `openai` npm SDK. LM Studio's investigation artifact already proved the wire shape
+// `openai` npm SDK. The early LM Studio adapter (then an investigation
+// artifact) already proved the wire shape
 // works; adding the SDK would buy nothing the runner uses today
 // (streaming, Files API, retries) at the cost of an extra dependency
 // and version-drift risk.

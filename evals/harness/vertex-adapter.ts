@@ -3,7 +3,8 @@
 // Production adapter for Vertex AI's Gemini family via the
 // `@google/genai` Node SDK (`vertexai: true`). Lands the fourth backend
 // alongside Anthropic (#47), OpenAI Chat Completions (#50) +
-// OpenAI Responses (#58), and the LM Studio investigation artifact.
+// OpenAI Responses (#58), and the LM Studio adapter (an investigation
+// artifact at the time; on the shared openai-compat factory since GH #7).
 // This closes the issue-#45 multi-backend burst — three production
 // vendors (Anthropic + OpenAI + Vertex) with full reasoning coverage,
 // plus the LM Studio reference adapter on master.
