@@ -38,3 +38,9 @@ evals/sample-app-variants/*/node_modules/
 # output — environment-specific; must never be committed (it would be a broken
 # symlink in any other clone). Eval-run archives live outside the repo.
 /SyncAcrossNetwork
+
+# Per-ticket working files (agentic-cost-reduction flow) — session-local,
+# never committed.
+/TICKET.md
+/PLAN.md
+/FINDINGS.md
