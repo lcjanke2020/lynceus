@@ -143,20 +143,19 @@ jobs:
             examples/sample-app/dist/
 
   eval-quick:
-    name: eval-quick (compute-step × 1 trial, opus 4.7 medium)
+    name: eval-quick (compute-step × 1 trial, opus 4.8 medium)
     # No `needs:` — eval-quick spawns its own MCP subprocess + browser and
     # doesn't reuse e2e artifacts. Running serially after e2e-linux-arm64
     # added ~15min latency to every PR for no signal (PR #15 review).
     runs-on: ubuntu-24.04-arm
     # Skip on forks (no access to secret) and on pushes when the secret
     # isn't configured. Per-PR cost is bounded by the ~$0.50–2/trial cost
-    # of a single Opus-4.7-medium-thinking run + the harness's $100 budget
-    # cap. (The gate inherits the harness default model, which moved from
-    # Sonnet 4.6 to Opus-4.7-medium in the 2026-05 default-swap PR — see
-    # evals/README.md "Cost & caching" and the rotation-proposal note for
-    # the determinism trade-off.) Optional: PRs with `[full-eval]` in the
-    # title trigger the full suite via a separate workflow step; not
-    # wired yet.
+    # of a single Opus-4.8-medium-thinking run + the harness's $100 budget
+    # cap. (The gate inherits the harness default model — currently
+    # claude-opus-4-8 per DEFAULT_MODEL_ID in evals/harness/model.ts; see
+    # evals/README.md "Cost & caching" for the determinism trade-off.)
+    # Optional: PRs with `[full-eval]` in the title trigger the full
+    # suite via a separate workflow step; not wired yet.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 15
     steps:

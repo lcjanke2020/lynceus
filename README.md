@@ -8,7 +8,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE).
 
-**Last updated: 2026-07-06**
+**Last updated: 2026-07-13**
 
 ## What it gives an agent
 
@@ -210,8 +210,7 @@ Thinking-on runs are non-deterministic (Anthropic requires
 `temperature=1` with `thinking`), so use `--trials >= 3` to characterize
 variance. Cost-cap: `$100` per `npm run eval` invocation (override via
 `EVAL_BUDGET_USD` env). Rotation across the Anthropic family + GPT-5.5
-is a follow-up — see the proposal at
-[`docs/eval-model-rotation-proposal.md`](docs/eval-model-rotation-proposal.md).
+is a follow-up; its design proposal is tracked off-repo (LEO-396).
 
 Caching: the system prompt + tool list are tagged `cache_control:
 ephemeral`. The system block (~280 tokens) is below Anthropic's
@@ -250,6 +249,17 @@ stock `examples/sample-app/`, others against per-scenario forks under
 
 ## Wire into Claude Code
 
+If you installed globally from npm (`npm install -g lynceus`), no repo
+checkout is needed:
+
+```sh
+claude mcp add lynceus lynceus
+```
+
+(`lynceus --help` is a quick smoke test that the bin is on your PATH.)
+
+From a source checkout:
+
 ```sh
 claude mcp add lynceus node /absolute/path/to/dist/index.js
 ```
@@ -274,7 +284,7 @@ Or via `~/.claude.json`:
    ```
 2. In a Claude Code session with `lynceus` enabled, ask:
    > Open localhost:5173 in a non-headless browser. Set a breakpoint at src/handlers.ts:7. Click #go. When it pauses, tell me what `step` is — and why the counter increments wrong.
-3. The agent should chain: `launch_chrome` → `set_breakpoint` → `click` → `wait_for_pause` → `get_scope`/`evaluate` → `resume`, and conclude that `computeStep()` returns `2` instead of `1`.
+3. The agent should chain: `launch_chrome` → `set_breakpoint` → `click` → `wait_for_pause` → `get_scope`/`evaluate` → `resume`, and conclude that `computeStep()` (the bug lives at `src/handlers.ts:12`) returns `2` instead of `1` — the line-7 breakpoint pauses in the caller right after that value lands in `step`.
 
 ## End-to-end smoke (Node Inspector)
 
