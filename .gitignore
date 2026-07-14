@@ -30,6 +30,10 @@ evals/sample-app-variants/*/node_modules/
 /review_feedback/*
 !/review_feedback/.gitkeep
 
+# The cdp-mcp compat wrapper is installed/packed standalone against the
+# *published* lynceus; its lockfile is a local artifact of that step.
+/wrapper/cdp-mcp/package-lock.json
+
 # Local convenience symlink to an out-of-repo location for archiving eval-run
 # output — environment-specific; must never be committed (it would be a broken
 # symlink in any other clone). Eval-run archives live outside the repo.
