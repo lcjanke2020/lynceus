@@ -109,7 +109,7 @@ function resolveProviderClient(): VendorAdapter | undefined {
     return makeMoonshotAdapter();
   }
   throw new Error(
-    `Unknown EVAL_PROVIDER: '${provider}'. Supported: 'anthropic' (default), 'openai' (#50/#58), 'vertex' (#51), 'deepseek' (GH #8), 'moonshot' (GH #8), 'lm-studio' (investigation artifact, issue #45).`,
+    `Unknown EVAL_PROVIDER: '${provider}'. Supported: 'anthropic' (default), 'openai' (#50/#58), 'vertex' (#51), 'deepseek' (GH #8), 'moonshot' (GH #8), 'lm-studio' (local OpenAI-compat, shared factory).`,
   );
 }
 

@@ -27,12 +27,16 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     key: process.env.EVAL_DEEPSEEK_API_KEY,
     model: process.env.EVAL_DEEPSEEK_MODEL,
     base: process.env.EVAL_DEEPSEEK_BASE_URL,
+    maxTok: process.env.EVAL_DEEPSEEK_MAX_TOKENS,
+    effort: process.env.EVAL_DEEPSEEK_REASONING_EFFORT,
   };
 
   beforeEach(() => {
     process.env.EVAL_DEEPSEEK_API_KEY = "test-key";
     process.env.EVAL_DEEPSEEK_MODEL = "deepseek-v4-pro";
     delete process.env.EVAL_DEEPSEEK_BASE_URL;
+    delete process.env.EVAL_DEEPSEEK_MAX_TOKENS;
+    delete process.env.EVAL_DEEPSEEK_REASONING_EFFORT;
     vi.unstubAllGlobals();
   });
   afterEach(() => {
@@ -40,6 +44,8 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
       ["EVAL_DEEPSEEK_API_KEY", saved.key],
       ["EVAL_DEEPSEEK_MODEL", saved.model],
       ["EVAL_DEEPSEEK_BASE_URL", saved.base],
+      ["EVAL_DEEPSEEK_MAX_TOKENS", saved.maxTok],
+      ["EVAL_DEEPSEEK_REASONING_EFFORT", saved.effort],
     ] as const) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -353,4 +359,89 @@ describe("makeDeepseekAdapter — OpenAI-compat via mocked fetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
   }, 10_000);
+
+  // GH #7 env knobs (extracted from draft PR #28), factory-thorough side:
+  // output-cap precedence chain + reasoning-effort override + construction-time
+  // validation (fail BEFORE any billable request, like the pricing preflight).
+
+  it("EVAL_DEEPSEEK_MAX_TOKENS overrides the 32K default (GH #7)", async () => {
+    process.env.EVAL_DEEPSEEK_MAX_TOKENS = "8192";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeDeepseekAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.max_tokens).toBe(8192);
+  });
+
+  it("explicit req.maxTokens beats EVAL_DEEPSEEK_MAX_TOKENS", async () => {
+    process.env.EVAL_DEEPSEEK_MAX_TOKENS = "8192";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeDeepseekAdapter().messages({
+      system: SYSTEM,
+      messages: MESSAGES,
+      maxTokens: 1234,
+    });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.max_tokens).toBe(1234);
+  });
+
+  it("treats EVAL_DEEPSEEK_MAX_TOKENS='' as unset (32K default stands)", async () => {
+    process.env.EVAL_DEEPSEEK_MAX_TOKENS = "";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeDeepseekAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.max_tokens).toBe(32_768);
+  });
+
+  it("throws at construction (no fetch) on a non-integer EVAL_DEEPSEEK_MAX_TOKENS", () => {
+    process.env.EVAL_DEEPSEEK_MAX_TOKENS = "16k";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(() => makeDeepseekAdapter()).toThrow(
+      /EVAL_DEEPSEEK_MAX_TOKENS='16k' is not a positive integer/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("throws at construction on a non-positive EVAL_DEEPSEEK_MAX_TOKENS", () => {
+    process.env.EVAL_DEEPSEEK_MAX_TOKENS = "0";
+    expect(() => makeDeepseekAdapter()).toThrow(/not a positive integer/);
+  });
+
+  it("EVAL_DEEPSEEK_REASONING_EFFORT beats the hardcoded 'high' (merged after extraBody, GH #7)", async () => {
+    process.env.EVAL_DEEPSEEK_REASONING_EFFORT = "medium";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeDeepseekAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.reasoning_effort).toBe("medium");
+    // The env knob only swaps the effort tier — the thinking toggle stands.
+    expect(body.thinking).toEqual({ type: "enabled" });
+  });
+
+  it("treats EVAL_DEEPSEEK_REASONING_EFFORT='' as unset (extraBody 'high' stands)", async () => {
+    process.env.EVAL_DEEPSEEK_REASONING_EFFORT = "";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeDeepseekAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.reasoning_effort).toBe("high");
+  });
+
+  it("throws at construction (no fetch) on an invalid EVAL_DEEPSEEK_REASONING_EFFORT, listing allowed tiers", () => {
+    process.env.EVAL_DEEPSEEK_REASONING_EFFORT = "extreme";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(() => makeDeepseekAdapter()).toThrow(
+      /low \| medium \| high \| xhigh \| max/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

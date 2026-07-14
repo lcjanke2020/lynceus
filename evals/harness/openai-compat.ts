@@ -75,6 +75,14 @@ export interface OpenAIChatMessage {
   tool_call_id?: string;
 }
 
+/** The `reasoning_effort` vocabulary of the Chat Completions wire format —
+ *  the single source of truth for both the request TYPE below and the
+ *  openai-compat factory's env-knob validator (GH #7). Whether a given
+ *  vendor's server accepts every tier is a request-time concern; this list
+ *  pins what the wire format can express. */
+export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
 /** The (subset of) Chat Completions request body both OpenAI and
  *  LM Studio accept. OpenAI-specific additions like `reasoning_effort`
  *  and `max_completion_tokens` are bolted on by the OpenAI adapter
@@ -94,7 +102,7 @@ export interface OpenAIChatRequest {
   temperature?: number;
   max_tokens?: number;
   max_completion_tokens?: number;
-  reasoning_effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  reasoning_effort?: ReasoningEffort;
   /** DeepSeek V4 reasoning toggle (GH #8). DeepSeek enables/disables thinking
    *  via this object; the EFFORT is the top-level `reasoning_effort` field above
    *  (`high`/`max` for DeepSeek; `high` is the default). v4-pro reasons by

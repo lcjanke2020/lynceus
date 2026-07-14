@@ -24,9 +24,11 @@ import type { VendorAdapter } from "./vendor.js";
 
 /** Reads `EVAL_DEEPSEEK_API_KEY` + `EVAL_DEEPSEEK_MODEL`
  *  (`EVAL_DEEPSEEK_BASE_URL` optional; defaults to DeepSeek's
- *  OpenAI-compatible endpoint). Use the v4 model ids
- *  (`deepseek-v4-flash` / `deepseek-v4-pro`) — the `deepseek-chat` /
- *  `deepseek-reasoner` aliases deprecate 2026-07-24. */
+ *  OpenAI-compatible endpoint). Per-run knobs (GH #7):
+ *  `EVAL_DEEPSEEK_MAX_TOKENS` (output cap) +
+ *  `EVAL_DEEPSEEK_REASONING_EFFORT` (beats the hardcoded `high`).
+ *  Use the v4 model ids (`deepseek-v4-flash` / `deepseek-v4-pro`) — the
+ *  `deepseek-chat` / `deepseek-reasoner` aliases deprecate 2026-07-24. */
 export function makeDeepseekAdapter(): VendorAdapter {
   return makeOpenAICompatAdapter({
     vendor: "deepseek",
@@ -40,6 +42,10 @@ export function makeDeepseekAdapter(): VendorAdapter {
     // (and v4-pro reasons by default), so this is explicit-intent + future
     // disable/tier control rather than strictly required.
     extraBody: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+    // Per-run env knobs (GH #7): output-cap override + effort override — the
+    // effort env beats the hardcoded "high" above (merged after extraBody).
+    maxTokensEnv: "EVAL_DEEPSEEK_MAX_TOKENS",
+    reasoningEffortEnv: "EVAL_DEEPSEEK_REASONING_EFFORT",
     // DeepSeek reports cache hits via the top-level `prompt_cache_hit_tokens`.
     cacheTokensFrom: (usage) => {
       const hit = usage?.prompt_cache_hit_tokens ?? 0;

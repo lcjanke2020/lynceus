@@ -226,8 +226,9 @@ Non-Anthropic backends ship behind the same seam, each selected via
 `/v1/chat/completions` (#50), reasoning-on trials to `/v1/responses` (#58),
 the only OpenAI surface that supports tools × reasoning_effort on GPT-5.5;
 Vertex / Gemini (#51); and DeepSeek + Moonshot/Kimi (GH #8), remote
-OpenAI-compatible `/v1` vendors. An LM Studio investigation artifact is
-wired behind the seam for local models (issue #45). See
+OpenAI-compatible `/v1` vendors. LM Studio (local models) rides the same
+shared OpenAI-compat factory (GH #7; grown from the issue #45
+investigation artifact). See
 [evals/README.md](evals/README.md) for full `EVAL_PROVIDER` / `EVAL_OPENAI_*`
 / `EVAL_VERTEX_*` / `EVAL_DEEPSEEK_*` / `EVAL_MOONSHOT_*` / `EVAL_LM_STUDIO_*`
 details.

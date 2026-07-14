@@ -25,12 +25,16 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
     key: process.env.EVAL_MOONSHOT_API_KEY,
     model: process.env.EVAL_MOONSHOT_MODEL,
     base: process.env.EVAL_MOONSHOT_BASE_URL,
+    maxTok: process.env.EVAL_MOONSHOT_MAX_TOKENS,
+    effort: process.env.EVAL_MOONSHOT_REASONING_EFFORT,
   };
 
   beforeEach(() => {
     process.env.EVAL_MOONSHOT_API_KEY = "test-key";
     process.env.EVAL_MOONSHOT_MODEL = "kimi-k2.6";
     delete process.env.EVAL_MOONSHOT_BASE_URL;
+    delete process.env.EVAL_MOONSHOT_MAX_TOKENS;
+    delete process.env.EVAL_MOONSHOT_REASONING_EFFORT;
     vi.unstubAllGlobals();
   });
   afterEach(() => {
@@ -38,6 +42,8 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
       ["EVAL_MOONSHOT_API_KEY", saved.key],
       ["EVAL_MOONSHOT_MODEL", saved.model],
       ["EVAL_MOONSHOT_BASE_URL", saved.base],
+      ["EVAL_MOONSHOT_MAX_TOKENS", saved.maxTok],
+      ["EVAL_MOONSHOT_REASONING_EFFORT", saved.effort],
     ] as const) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -193,4 +199,27 @@ describe("makeMoonshotAdapter — OpenAI-compat via mocked fetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
   }, 10_000);
+
+  // GH #7 knobs, Moonshot side: the output-cap env is wired; a reasoning-effort
+  // env is deliberately NOT (Kimi has no request-side effort param).
+
+  it("EVAL_MOONSHOT_MAX_TOKENS overrides the 32K default (GH #7)", async () => {
+    process.env.EVAL_MOONSHOT_MAX_TOKENS = "65536";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeMoonshotAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.max_tokens).toBe(65_536);
+  });
+
+  it("ignores EVAL_MOONSHOT_REASONING_EFFORT — no request-side effort param on Kimi", async () => {
+    process.env.EVAL_MOONSHOT_REASONING_EFFORT = "high";
+    const fetchMock = stubFetchOk(OK_BODY);
+    await makeMoonshotAdapter().messages({ system: SYSTEM, messages: MESSAGES });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.reasoning_effort).toBeUndefined();
+  });
 });
