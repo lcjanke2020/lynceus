@@ -4,7 +4,7 @@
 [![CI](https://github.com/lcjanke2020/lynceus/actions/workflows/ci.yml/badge.svg)](https://github.com/lcjanke2020/lynceus/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/lcjanke2020/lynceus)](./LICENSE)
 [![node](https://img.shields.io/node/v/lynceus)](https://www.npmjs.com/package/lynceus)
-[![npm provenance](https://img.shields.io/badge/npm-provenance-brightgreen)](https://www.npmjs.com/package/lynceus#provenance)
+[![npm provenance](https://img.shields.io/badge/npm-provenance-brightgreen)](https://www.npmjs.com/package/lynceus)
 
 A Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) and the Node.js Inspector to AI agents as a **TypeScript-aware runtime debugger**.
 
@@ -59,17 +59,19 @@ Or via `~/.claude.json`:
 }
 ```
 
-## 60-second demo
+## Demo walkthrough
 
-<!-- LEO-453: demo gif/asciinema of the breakpoint → pause → inspect flow embeds here. -->
+<!-- LEO-453: demo gif/asciinema of the breakpoint → pause → inspect flow embeds here,
+     restoring this section's 60-second-demo framing. -->
 
-The walkthroughs below use the repo's intentionally-buggy sample apps (clone the repo to get them) — but any localhost app of your own works the same way.
+The walkthroughs below use the repo's intentionally-buggy sample apps — but any localhost app of your own works the same way.
 
 ### Browser: breakpoint → pause → inspect
 
-1. Install the sample app's deps and start it:
+1. Get the sample app, install its deps, and start it:
    ```sh
-   cd examples/sample-app
+   git clone https://github.com/lcjanke2020/lynceus.git
+   cd lynceus/examples/sample-app
    npm install
    npm run dev          # listens on :5173
    ```
@@ -130,7 +132,11 @@ Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true }
 - **How do I know it's working?** — `lynceus --help` proves the bin resolves; `claude mcp list` shows whether Claude Code connected to it. From a source checkout, `npm run smoke` verifies the protocol surface end-to-end with no browser.
 - **SSE port already in use** — SSE mode binds the port you pass (`--port 9719` in the examples); pick another if it's taken. Note `9229` is the Node Inspector's default port, not lynceus's — don't hand `--port 9229` to the SSE transport while also debugging Node.
 - **Ubuntu 23.10+ / AppArmor sandbox errors** — Ubuntu's user-namespace restrictions can break Chromium's sandbox. `launch_chrome` defaults to `--no-sandbox` for exactly this reason; if you want the sandbox **on**, see [`docs/chromium-sandboxing.md`](docs/chromium-sandboxing.md) for the AppArmor profile setup.
-- **Windows** — the unit and contract test layers work natively, but `chrome-launcher` 1.2.1 fails to bind its own port on Windows 11 (ECONNREFUSED in its startup poll), which affects local browser e2e runs and can affect `launch_chrome`. Run under WSL2 (Ubuntu) for browser work; `attach_chrome` to a manually-started Chrome (`--remote-debugging-port`) is an alternative.
+- **Windows** — the unit and contract test layers work natively, but `chrome-launcher` 1.2.1 fails to bind its own port on Windows 11 (ECONNREFUSED in its startup poll), which affects local browser e2e runs and can affect `launch_chrome`. Run under WSL2 (Ubuntu) for browser work, or `attach_chrome` to a manually-started Chrome. Note Chrome 136+ ignores `--remote-debugging-port` on the default profile — pair it with a throwaway `--user-data-dir`:
+  ```bat
+  start chrome --remote-debugging-port=9222 --user-data-dir=%TEMP%\lynceus-debug-profile
+  ```
+  (a separate profile, so your usual logins/extensions won't be present).
 
 ## Tool conventions for agents
 

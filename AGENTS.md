@@ -11,7 +11,7 @@ Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropp
 ## Read first
 
 - **[INDEX.md](./INDEX.md)** — full doc map + code map. One stop for "where do I find X."
-- **[README.md](./README.md)** — install, wire into Claude Code, 60-second demo (compute-step end-to-end), troubleshooting, tool conventions.
+- **[README.md](./README.md)** — install, wire into Claude Code, demo walkthrough (compute-step end-to-end), troubleshooting, tool conventions.
 - **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — component diagram, sequence diagrams, session state machine. Read before changing anything load-bearing.
 
 ## Project status

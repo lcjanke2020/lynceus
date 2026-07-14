@@ -10,7 +10,7 @@ PRs are welcome.
 ```sh
 npm install
 npm run build
-npm test          # L1 unit + L2 contract tests (fast, no browser)
+npm test          # L1 unit + L2 tool-contract + L4 harness-unit tests (fast, no browser, no LLM)
 npm run typecheck # both tsconfigs — CI gates on this
 npm run smoke     # stdio protocol smoke, no browser — CI gates on this
 ```

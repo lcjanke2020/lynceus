@@ -8,7 +8,7 @@
 
 <!-- Keep the lines that apply; say briefly how you verified. -->
 
-- [ ] `npm test` (L1 unit + L2 contract) passes
+- [ ] `npm test` (L1 unit + L2 contract + L4 harness units) passes
 - [ ] `npm run typecheck` passes
 - [ ] `npm run smoke` passes
 - [ ] `npm run test:e2e` run locally (required if browser-facing paths changed; needs local Chromium/Chrome)

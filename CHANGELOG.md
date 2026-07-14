@@ -7,9 +7,11 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
-- **`cdp-mcp` compatibility wrapper** (#53) — `npm install cdp-mcp` now installs a thin
-  shim that boots lynceus in-process and re-exports the `contract` subpath; published as
-  `cdp-mcp@0.4.0` (2026-07-14), with all older `cdp-mcp` versions deprecated on npm.
+- **`cdp-mcp` compatibility wrapper** added to the repo (#53) — `npm install cdp-mcp`
+  now installs a thin shim that boots lynceus in-process and re-exports the `contract`
+  subpath. Shipped separately to npm as the `cdp-mcp@0.4.0` **wrapper package**
+  (2026-07-14, not part of any `lynceus` release), with all older `cdp-mcp` versions
+  deprecated.
 - Docs quick-fix pass (#54) — broken eval-doc link removed, npm-global wire-in
   (`claude mcp add lynceus lynceus` / npx form), stale CI job text, last rename residue.
 - Per-run env knobs for the OpenAI-compatible eval adapters (#55) — output-cap override

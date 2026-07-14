@@ -22,7 +22,7 @@ Where to find everything in this repo.
 | [CHANGELOG.md](./CHANGELOG.md) | Per-release notable changes, 0.1.0 → current (0.2.2 and earlier shipped as `cdp-mcp`). |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev loop (test/typecheck/smoke), PR conventions, new-tool checklist pointer. |
 | [INDEX.md](./INDEX.md) | This file. |
-| [README.md](./README.md) | Install, wire into Claude Code, 60-second demo, troubleshooting, tool conventions, SSE/service mode. |
+| [README.md](./README.md) | Install, wire into Claude Code, demo walkthrough, troubleshooting, tool conventions, SSE/service mode. |
 | [SECURITY.md](./SECURITY.md) | Security model + vulnerability reporting: transport/network exposure, the agent-operator (prompt-injection → action) threat, and deployment hardening. |
 
 ### docs/
