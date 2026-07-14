@@ -480,6 +480,8 @@ function respondText(res: ServerResponse, statusCode: number, body: string): voi
 // Only run the server when executed as the CLI entry point — not when this
 // module is imported (e.g. by the SSE transport tests). `realpathSync`
 // resolves the npm bin symlink so the comparison holds for global installs.
+// The cdp-mcp compat shim (wrapper/cdp-mcp/bin.js) boots the server by
+// pointing argv[1] at this module before importing it — keep in sync.
 function isRunAsMain(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;

@@ -1,0 +1,48 @@
+{
+  "name": "cdp-mcp",
+  "version": "0.3.0",
+  "description": "Renamed: cdp-mcp is now lynceus. Compatibility wrapper that launches the lynceus MCP debugging server.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "cdp-mcp": "bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./contract": {
+      "types": "./contract.d.ts",
+      "import": "./contract.js"
+    }
+  },
+  "files": [
+    "bin.js",
+    "index.js",
+    "index.d.ts",
+    "contract.js",
+    "contract.d.ts"
+  ],
+  "dependencies": {
+    "lynceus": "^0.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lcjanke2020/lynceus.git",
+    "directory": "wrapper/cdp-mcp"
+  },
+  "homepage": "https://github.com/lcjanke2020/lynceus#readme",
+  "bugs": {
+    "url": "https://github.com/lcjanke2020/lynceus/issues"
+  },
+  "keywords": [
+    "mcp",
+    "debugger",
+    "chrome-devtools-protocol",
+    "lynceus"
+  ]
+}
