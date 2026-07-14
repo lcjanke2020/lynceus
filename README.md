@@ -258,6 +258,13 @@ claude mcp add lynceus lynceus
 
 (`lynceus --help` is a quick smoke test that the bin is on your PATH.)
 
+Prefer no global install? Use npx (the `--` keeps `-y` for npx rather than
+the `claude` CLI):
+
+```sh
+claude mcp add lynceus -- npx -y lynceus
+```
+
 From a source checkout:
 
 ```sh
