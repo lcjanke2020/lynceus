@@ -4,7 +4,8 @@
 // process.argv[1] (its run-as-main guard, src/index.ts isRunAsMain), so point
 // argv[1] at the realpath-resolved entry and import it via the same URL form
 // the guard reconstructs. require()-based resolution can't be used here:
-// lynceus's exports map is ESM-only (no "require" condition).
+// lynceus's exports map is ESM-only (no "require" condition). Sync
+// import.meta.resolve needs Node >= 20.6 — engines pins that floor.
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 

@@ -7,10 +7,13 @@
 // lynceus package, not the local build, so it needs its own install step.
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 
 // 1. The bin shim reaches the lynceus CLI: --help prints usage and exits 0.
+// (URL form rather than import.meta.dirname: that needs Node >= 20.11,
+// above the wrapper's 20.6 floor.)
 const help = spawnSync(process.execPath, ["bin.js", "--help"], {
-  cwd: import.meta.dirname,
+  cwd: fileURLToPath(new URL(".", import.meta.url)),
   encoding: "utf8",
 });
 assert.equal(help.status, 0, `--help exited ${help.status}: ${help.stderr}`);

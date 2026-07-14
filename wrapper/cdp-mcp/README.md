@@ -5,7 +5,9 @@
 This package is a thin compatibility wrapper: it depends on lynceus and boots the
 lynceus MCP server, so existing `npx cdp-mcp` / `cdp-mcp` setups keep working
 unchanged. It receives no independent fixes — new features and bug fixes land in
-lynceus only.
+lynceus only, and the wrapper pins the lynceus 0.4.x line: when a newer lynceus
+line ships, the wrapper may lag until republished. Install lynceus directly to
+always get the latest.
 
 ## Migration (nothing changes except the name)
 

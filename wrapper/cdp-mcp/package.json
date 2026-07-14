@@ -28,7 +28,7 @@
     "lynceus": "^0.4.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.6"
   },
   "repository": {
     "type": "git",

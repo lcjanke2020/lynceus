@@ -1,6 +1,6 @@
 # INDEX.md
 
-**Last updated: 2026-07-06**
+**Last updated: 2026-07-13**
 
 Where to find everything in this repo.
 
@@ -48,6 +48,7 @@ Where to find everything in this repo.
 | [evals/README.md](./evals/README.md) | L4 LLM-agent eval harness, multi-vendor `VendorAdapter` seam, scenario shape (browser + Node via `Scenario.target`), oracle/grader, cost + caching. |
 | [examples/sample-app/README.md](./examples/sample-app/README.md) | Shared browser test fixture (Vite + TS), intentional bugs, how to run standalone. |
 | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) | Shared Node Inspector test fixture (multi-entry tsc-compiled ESM): six source files — five runnable entries (`index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp`) plus the shared helper `handlers.ts` — driving the L3 Node e2e specs + 4 L4 Node scenarios. |
+| [wrapper/cdp-mcp/README.md](./wrapper/cdp-mcp/README.md) | Tombstone README for the published `cdp-mcp` npm compatibility wrapper: rename notice + migration paragraph. |
 
 ## Code map
 
@@ -72,3 +73,4 @@ Source tree:
 | `examples/sample-app/` | Vite + TS web app — the browser-side breakpoint-debug fixture. | [README](./examples/sample-app/README.md) |
 | `examples/sample-node-app/` | tsc-compiled ESM Node fixture — six source files sharing one `dist/`: five runnable entries (`index.ts`, `compute-step.ts`, `throw.ts`, `stdio-bug.ts`, `conditional-bp.ts`) plus the shared helper `handlers.ts` (imported by `index.ts`). Backs L3 Node e2e + L4 Node scenarios. | [README](./examples/sample-node-app/README.md) |
 | `scripts/` | `smoke.mjs`, `check-chromium-skips.mjs`, `build-variants.mjs`. | — |
+| `wrapper/cdp-mcp/` | The published `cdp-mcp` compat wrapper (npm shim over lynceus): `bin.js` boots the lynceus entry in-process, `index.js`/`contract.js` re-export the lynceus subpaths, `smoke-test.mjs` verifies against the *published* lynceus (standalone `npm install`, not part of the vitest suite). | [README](./wrapper/cdp-mcp/README.md) |
