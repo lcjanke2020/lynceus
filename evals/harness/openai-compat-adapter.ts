@@ -203,6 +203,18 @@ export function makeOpenAICompatAdapter(cfg: OpenAICompatConfig): VendorAdapter 
   }
   const baseUrl = baseUrlResolved.replace(/\/+$/, "");
 
+  // A misconfigured vendor wrapper (0/negative/fractional defaultMaxTokens)
+  // must fail at construction exactly like a malformed env knob would —
+  // not silently send an invalid max_tokens upstream (Copilot, PR #55).
+  if (
+    cfg.defaultMaxTokens !== undefined &&
+    (!Number.isInteger(cfg.defaultMaxTokens) || cfg.defaultMaxTokens <= 0)
+  ) {
+    throw new Error(
+      `${cfg.label} adapter config error: defaultMaxTokens=${cfg.defaultMaxTokens} is not a positive integer.`,
+    );
+  }
+
   // Env knobs (GH #7, extracted from draft PR #28) — read + validated once at
   // construction so a malformed value fails before the first billable request.
   const envMaxTokens = readMaxTokensEnv(cfg.maxTokensEnv, cfg.label);

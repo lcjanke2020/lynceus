@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VendorMessageRequest } from "./vendor.js";
 import { makeLmStudioAdapter } from "./lm-studio-adapter.js";
+import { makeOpenAICompatAdapter } from "./openai-compat-adapter.js";
 
 // The shared openai-compat factory is exercised in depth by
 // deepseek-adapter.test.ts; here we pin LM Studio's per-vendor identity AND
@@ -172,6 +173,26 @@ describe("makeLmStudioAdapter — OpenAI-compat via mocked fetch", () => {
     expect(() => makeLmStudioAdapter()).toThrow(
       /low \| medium \| high \| xhigh \| max/,
     );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Config-bug guard (Copilot, PR #55): a hardcoded defaultMaxTokens typo in a
+  // vendor wrapper must fail at construction like the env knobs do — exercised
+  // via the factory directly since the real wrapper pins a valid 4096. Uses the
+  // EVAL_LM_STUDIO_* envs this suite already sets.
+  it("throws at construction on a non-positive defaultMaxTokens config value", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(() =>
+      makeOpenAICompatAdapter({
+        vendor: "lm-studio",
+        label: "LM Studio",
+        apiKeyEnv: "EVAL_LM_STUDIO_API_KEY",
+        modelEnv: "EVAL_LM_STUDIO_MODEL",
+        baseUrlEnv: "EVAL_LM_STUDIO_BASE_URL",
+        defaultMaxTokens: 0,
+      }),
+    ).toThrow(/defaultMaxTokens=0 is not a positive integer/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
