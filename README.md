@@ -10,9 +10,9 @@ A Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol 
 
 Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have local source + source-map access. Coordinates flow in TS terms; the server translates to JS for CDP under the hood.
 
-> **Formerly `cdp-mcp`** — renamed in 0.3.0: the server debugs both the browser **and** Node.js, so "CDP" undersold it (Lynceus was the Argonauts' sharp-eyed lookout who could see beneath the earth). Old `github.com/lcjanke2020/cdp-mcp` links redirect here, the deprecated `CDP_MCP_*` environment variables still work, and `npm install cdp-mcp` now installs a thin compatibility wrapper that boots lynceus. History: [CHANGELOG.md](./CHANGELOG.md).
+> **Formerly `cdp-mcp`** — renamed in 0.3.0: the server debugs both the browser **and** Node.js, so "CDP" undersold it (the name is the Argonauts' sharp-eyed lookout). Old repo links redirect, deprecated `CDP_MCP_*` env vars still work, and `npm install cdp-mcp` installs a compatibility wrapper that boots lynceus — history in [CHANGELOG.md](./CHANGELOG.md).
 
-**Status:** alpha. **License:** [MIT](./LICENSE). Releases are published to npm by CI via [OIDC trusted publishing](https://docs.npmjs.com/generating-provenance-statements) — no long-lived npm token exists — with a provenance attestation linking every tarball to the exact commit and workflow run that built it.
+**Status:** alpha. **License:** [MIT](./LICENSE). Releases are published to npm by CI via [OIDC trusted publishing](https://docs.npmjs.com/generating-provenance-statements) — no long-lived npm token exists — with a provenance attestation linking the published tarball to the exact commit and workflow run that built it.
 
 **Last updated: 2026-07-14**
 
@@ -126,7 +126,7 @@ Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true }
 
 ## Troubleshooting
 
-- **`launch_chrome` can't find a browser** — set `CHROME_PATH` to your Chrome/Chromium binary (`src/session/browser.ts` passes it through to chrome-launcher). On Linux, a Playwright-bundled Chromium works: `npx playwright install chromium`, then point `CHROME_PATH` at the installed binary.
+- **`launch_chrome` can't find a browser** — set `CHROME_PATH` to your Chrome/Chromium binary (chrome-launcher reads it natively). On Linux, a Playwright-bundled Chromium works: `npx playwright install chromium`, then point `CHROME_PATH` at the installed binary.
 - **How do I know it's working?** — `lynceus --help` proves the bin resolves; `claude mcp list` shows whether Claude Code connected to it. From a source checkout, `npm run smoke` verifies the protocol surface end-to-end with no browser.
 - **SSE port already in use** — SSE mode binds the port you pass (`--port 9719` in the examples); pick another if it's taken. Note `9229` is the Node Inspector's default port, not lynceus's — don't hand `--port 9229` to the SSE transport while also debugging Node.
 - **Ubuntu 23.10+ / AppArmor sandbox errors** — Ubuntu's user-namespace restrictions can break Chromium's sandbox. `launch_chrome` defaults to `--no-sandbox` for exactly this reason; if you want the sandbox **on**, see [`docs/chromium-sandboxing.md`](docs/chromium-sandboxing.md) for the AppArmor profile setup.
@@ -183,12 +183,12 @@ node dist/index.js                    # run the built server on stdio
 The test pyramid has four layers (see [docs/test-eval-plan.md](docs/test-eval-plan.md) for the full design):
 
 ```sh
-npm test              # L1 unit + L2 per-tool contract tests against a fake CDP (~640ms, no browser, no LLM)
+npm test              # L1 unit + L2 tool-contract (fake CDP) + L4 harness-unit tests — seconds, no browser, no LLM
 npm run typecheck     # both tsconfigs — CI gates on this
 npm run smoke         # stdio protocol smoke, no browser — CI gates on this
 npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 19 specs
 npm run eval:quick    # L4: 1 LLM-agent scenario × 1 trial (needs ANTHROPIC_API_KEY; ~$0.50–2 at the default Opus-4.8-medium)
-npm run eval          # L4: all 18 scenarios × 3 trials (~$4 full pass)
+npm run eval          # L4: all 18 scenarios × 3 trials (cost data in evals/README.md; EVAL_BUDGET_USD caps a run, default $100)
 ```
 
 - **L3 e2e** drives the browser-facing tools against a real Chromium attached to a built `examples/sample-app/`, plus Node Inspector attach/launch flows against `examples/sample-node-app/`. Browser selection (`CDP_TEST_BROWSER`, default `chromium`) and the per-OS resolver matrix are documented in [docs/test-eval-plan.md §Layer 3](docs/test-eval-plan.md); the step-by-step local setup (Playwright Chromium + AppArmor profile for sandbox-**on** runs) is [docs/local-l3-e2e-setup.md](docs/local-l3-e2e-setup.md). Chromium-only failures land with a `// @chromium-skip — <gap-id>` comment plus a row in [docs/known-chromium-gaps.md](docs/known-chromium-gaps.md) — `npm run lint:chromium-skips` enforces this. `launch_chrome` defaults to `--no-sandbox`; see [docs/chromium-sandboxing.md](docs/chromium-sandboxing.md) before changing that.

@@ -22,8 +22,8 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 - **New tool: `get_source`** — fetch original TypeScript by file (the coordinates
   `set_breakpoint` uses), plus JS-vs-TS breakpoint mis-index diagnostics (#47).
 - **Fix: `get_scope` merges lexical scopes by default** so block-scoped `let`/`const`
-  variables surface (#45) — together with `get_source`, this moved the Node
-  conditional-breakpoint eval scenario from 1/3 to 2/3 passing trials.
+  variables surface (#45) — this alone moved the Node conditional-breakpoint eval
+  scenario from 1/3 to 2/3 passing trials.
 - Eval-harness Chromium sandbox auto-detection: tri-state `EVAL_SANDBOX=on|off|auto`
   probes the host (userns / AppArmor / SUID helper) and picks a posture (#44).
 - `adversarial-out-of-order` eval scenario now exercises the pause mechanic;

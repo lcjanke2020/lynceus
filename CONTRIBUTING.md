@@ -24,7 +24,7 @@ browser e2e → L4 LLM agent evals).
 ## Pull requests
 
 - **Conventional Commits** for the title: `<type>: <subject>` (`feat`, `fix`,
-  `docs`, `test`, `chore`).
+  `docs`, `test`, `test+eval`, `chore`).
 - **`npm test`, `npm run typecheck`, and `npm run smoke` must pass** for any code
   change (CI gates on all three). If you touch the browser-facing paths, run
   `npm run test:e2e` locally (needs a local Chromium/Chrome).

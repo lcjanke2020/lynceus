@@ -1,4 +1,4 @@
-<!-- Title: Conventional Commits — <type>: <subject>  (feat, fix, docs, test, chore) -->
+<!-- Title: Conventional Commits — <type>: <subject>  (feat, fix, docs, test, test+eval, chore) -->
 
 ## What & why
 
