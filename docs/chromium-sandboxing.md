@@ -1,6 +1,6 @@
 # Chromium sandboxing
 
-**Last updated: 2026-07-07**
+**Last updated: 2026-07-13**
 
 This project launches Chromium in two different contexts:
 
@@ -88,6 +88,13 @@ run header unconditionally, e.g.:
 [eval] sandbox: on (source=auto-capable; AppArmor restricts unprivileged userns, but profile 'cdp-mcp-chromium' grants userns to /home/.../chrome-linux/chrome)
 [eval] sandbox: off (source=auto-fallback; AppArmor restricts unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and no AppArmor profile was found that grants 'userns' to /home/.../chrome)
 ```
+
+> The `cdp-mcp-chromium` profile name in the first sample line is the
+> project's pre-rename name: already-provisioned eval hosts deliberately keep
+> the historical profile name (renaming forces re-provisioning for zero
+> security value). New hosts typically name the profile `lynceus-chromium` —
+> the detector greps profile *contents* for the `userns` grant, so either
+> name works.
 
 Under the hood the harness plumbs the decision to the spawned server via
 `CDP_SANDBOX` (`true`/`false`), which `launch_chrome` uses as its launch default.

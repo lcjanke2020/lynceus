@@ -1,10 +1,11 @@
 # sample-node-app
 
+**Last updated: 2026-07-13**
+
 Multi-entry tsc-compiled Node.js fixture for the Node-Inspector debugging work.
 It is the shared fixture for the Node-Inspector e2e specs
 (`test/e2e/node-*.e2e.test.ts`) and the Node eval scenarios
-(`evals/scenarios/node-*.ts`) — **both land in later changes**; this change
-ships only the fixture and its build so those consumers can wire onto it.
+(`evals/scenarios/node-*.ts`).
 
 Six source files under `src/` share one `dist/` build — **five runnable
 entries** (one per scenario, plus the original `index.ts`) plus the shared
@@ -14,9 +15,8 @@ No per-scenario variants tree: the browser side uses
 served to the browser; Node scenarios drive their own entry script
 directly, so an entry-per-scenario in one shared package is sufficient.
 
-The **Drives** column names the eval scenarios and e2e specs each entry is
-designed for; those consumers land in later changes (this change ships the
-fixture only).
+The **Drives** column names the eval scenarios and e2e specs each entry
+drives.
 
 | File | Kind | Bug shape | Drives |
 |---|---|---|---|
@@ -45,10 +45,8 @@ parent repo's `typescript` devDep — there is no nested `node_modules`.
 Output lands in `examples/sample-node-app/dist/*.{js,js.map}` (gitignored
 by the root `.gitignore`'s `dist/` rule).
 
-`npm run pretest:e2e` runs this build automatically before the e2e suite. A
-Node quick-eval script will run it before the Node eval smoke as well; that
-script (`preeval:quick:node` / `eval:quick:node`) lands with the eval
-scenarios in a later change.
+`npm run pretest:e2e` runs this build automatically before the e2e suite, and
+`preeval:quick:node` runs it before the `npm run eval:quick:node` smoke.
 
 ## Smoke
 
@@ -58,6 +56,5 @@ node --enable-source-maps examples/sample-node-app/dist/index.js
 
 Prints `hello, world`. The other four entries (`compute-step`, `throw`,
 `stdio-bug`, `conditional-bp`) intentionally misbehave — invoke them
-through lynceus directly, or via the matching eval scenarios / e2e specs
-once those land. `handlers.ts` is a helper imported by `index.ts`, not a
-runnable entry.
+through lynceus directly, or via the matching eval scenarios / e2e specs.
+`handlers.ts` is a helper imported by `index.ts`, not a runnable entry.
