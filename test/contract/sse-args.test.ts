@@ -91,16 +91,20 @@ describe("parseArgs", () => {
 
   it("allows a non-loopback bind via LYNCEUS_ALLOW_REMOTE=1", () => {
     process.env.LYNCEUS_ALLOW_REMOTE = "1";
-    expect(parseArgs(["--host", "0.0.0.0", "--port", "9719"])).toMatchObject({
+    expect(parseArgs(["--host", "0.0.0.0", "--port", "9719"])).toEqual({
       transport: "sse",
+      host: "0.0.0.0",
+      port: 9719,
       allowRemote: true,
     });
   });
 
   it("allows a non-loopback bind via the deprecated CDP_MCP_ALLOW_REMOTE=1", () => {
     process.env.CDP_MCP_ALLOW_REMOTE = "1";
-    expect(parseArgs(["--host", "0.0.0.0", "--port", "9719"])).toMatchObject({
+    expect(parseArgs(["--host", "0.0.0.0", "--port", "9719"])).toEqual({
       transport: "sse",
+      host: "0.0.0.0",
+      port: 9719,
       allowRemote: true,
     });
   });
@@ -160,8 +164,12 @@ describe("getKeepaliveMs (issue #3: whitespace must not disable keepalive)", () 
     expect(getKeepaliveMs()).toBe(DEFAULT);
   });
 
-  it("disables only on an explicit 0", () => {
+  it("disables only on an explicit 0 — including a whitespace-padded one", () => {
     process.env.LYNCEUS_SSE_KEEPALIVE_MS = "0";
+    expect(getKeepaliveMs()).toBe(0);
+    // " 0 " trims to an explicit 0: padding doesn't turn a deliberate
+    // disable back into the default.
+    process.env.LYNCEUS_SSE_KEEPALIVE_MS = " 0 ";
     expect(getKeepaliveMs()).toBe(0);
   });
 

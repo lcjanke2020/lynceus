@@ -44,6 +44,10 @@ afterEach(async () => {
 // bind host the gate decision is derived from — the socket itself always
 // binds 127.0.0.1 so the suite never opens a non-loopback listener.
 async function startGatedServer(gateHost: string): Promise<{ port: number; gate: SseGateConfig }> {
+  // `gate!` below is safe: the handler can only run once a request arrives,
+  // and no request is issued until this function has resolved — by which
+  // point listen has completed, `port` holds the real port, and `gate` is
+  // assigned from it.
   let gate: SseGateConfig | undefined;
   let port = 0;
   httpServer = createServer((req, res) => {

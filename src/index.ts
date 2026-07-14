@@ -23,17 +23,20 @@ interface SseMode {
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
+/** @internal exported for unit tests; not part of the MCP tool surface. */
 export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host);
 }
 
 type ServerMode = StdioMode | SseMode;
 
+/** @internal exported for the SSE contract tests; not part of the MCP tool surface. */
 export interface SseClient {
   server: McpServer;
   transport: SSEServerTransport;
 }
 
+/** @internal exported for unit tests; not part of the MCP tool surface. */
 export function parseArgs(args: string[]): ServerMode {
   let port: number | undefined;
   let host = "127.0.0.1";
@@ -140,10 +143,12 @@ const DEFAULT_SSE_KEEPALIVE_MS = 25_000;
 // down after ~12 min with "Body Timeout Error"). A periodic SSE comment frame
 // (`: ...\n\n`) is a no-op per the spec but resets that idle timer. Tunable via
 // LYNCEUS_SSE_KEEPALIVE_MS (non-negative integer ms; 0 disables). See issue #1.
+/** @internal exported for unit tests; not part of the MCP tool surface. */
 export function getKeepaliveMs(): number {
   // Trim so a whitespace-only value falls back to the default like other
   // unset/empty input — untrimmed, Number(" ") === 0 would silently hit the
-  // "disable keepalive" sentinel (issue #3). Only an explicit 0 disables.
+  // "disable keepalive" sentinel (issue #3). Only an explicit 0 disables
+  // (whitespace-padded "0" trims to an explicit 0 and still disables).
   const raw = envWithFallback("LYNCEUS_SSE_KEEPALIVE_MS", "CDP_MCP_SSE_KEEPALIVE_MS")?.trim();
   if (!raw) return DEFAULT_SSE_KEEPALIVE_MS;
   const value = Number(raw);
@@ -192,6 +197,7 @@ async function runStdioServer(): Promise<void> {
   installProcessErrorHandlers();
 }
 
+/** @internal exported for the SSE contract tests; not part of the MCP tool surface. */
 export interface SseGateConfig {
   validateHostOrigin: boolean;
   allowedHosts: Set<string>;
@@ -205,6 +211,7 @@ export interface SseGateConfig {
 // and we cannot statically enumerate every hostname/IP the host
 // might be reached by (LAN IP, hostname, mDNS, VPN, …) — so we skip
 // both checks and treat --allow-remote as the gate.
+/** @internal exported for unit tests; not part of the MCP tool surface. */
 export function buildSseGateConfig(host: string, port: number): SseGateConfig {
   const validateHostOrigin = isLoopbackHost(host);
   return {
@@ -274,6 +281,7 @@ function installProcessErrorHandlers(): void {
   });
 }
 
+/** @internal exported for the SSE contract tests; not part of the MCP tool surface. */
 export async function handleSseRequest({
   req,
   res,
@@ -297,7 +305,7 @@ export async function handleSseRequest({
     // DNS-rebinding defense for loopback binds: validate Host (and
     // Origin if present) before the SDK touches the request. The MCP
     // SDK's SSEServerTransport does not gate either header by default.
-    // Skipped on non-loopback binds — see runSseServer for rationale.
+    // Skipped on non-loopback binds — see buildSseGateConfig for rationale.
     if (validateHostOrigin) {
       const headerHost = req.headers.host;
       if (!headerHost || !allowedHosts.has(headerHost)) {
