@@ -111,10 +111,6 @@ These are deployment-side controls; the server does not apply them for you.
 
 These are exploratory, not commitments or current features:
 
-- A **containerized outer-sandbox run mode** (prototype name *ironclaw*) so that
-  contained execution — scoped FS, no ambient credentials, egress allowlist —
-  becomes the default for the agent / cloud tier rather than something each
-  operator wires up by hand.
 - An **agent-supervisor / policy-enforcement gate** that sits between "the agent
   proposes a tool call" and "the tool call executes," able to block an action
   independently of the agent's own self-report — turning the injection→action
