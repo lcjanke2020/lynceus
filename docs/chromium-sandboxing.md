@@ -1,6 +1,6 @@
 # Chromium sandboxing
 
-**Last updated: 2026-07-13**
+**Last updated: 2026-07-15**
 
 This project launches Chromium in two different contexts:
 
@@ -171,8 +171,7 @@ Untrusted browsing:
 This outer containment also pairs with the agent-operator threat (prompt-injected
 page content steering the agent into actions or unscoped filesystem writes); see
 the agent-operator threat model and deployment hardening in
-[SECURITY.md](../SECURITY.md). A containerized outer-sandbox run mode that would
-make this contained posture the default is a direction under consideration.
+[SECURITY.md](../SECURITY.md).
 
 ## Validated hosts
 
