@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { sessionState, ROOT_SESSION_KEY } from "../../src/session/state.js";
-import { registerBreakpointTools } from "../../src/tools/breakpoints.js";
+import { noMappingError, registerBreakpointTools } from "../../src/tools/breakpoints.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 import { seedMappedScript } from "../helpers/source-maps.js";
@@ -28,6 +28,116 @@ describe("set_breakpoint", () => {
     expect(err?.error).toBe("no_mapping");
     expect(err?.message).toContain("src/never-loaded.ts");
     expect(err?.message).toContain("list_scripts");
+  });
+
+  it("no_mapping echoes the mapped source paths, same-basename matches first (GH #37)", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/handlers.ts" });
+    seedMappedScript({ scriptId: "s2", url: "http://x/lib.js", source: "src/lib/utils/math.ts" });
+    // Same basename, wrong directory — the realistic agent miss: suffix
+    // matching already absorbs prefix junk, so what's left is this shape.
+    const err = parseErrorEnvelope(await setBp.handler({ file: "app/handlers.ts", line: 2 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("app/handlers.ts:2");
+    expect(err?.message).toContain("Did you mean: src/handlers.ts?");
+    expect(err?.message).toContain("src/lib/utils/math.ts");
+    expect(err?.message).toContain("list_scripts");
+  });
+
+  it("no_mapping caps the echoed path list and reports the overflow (GH #37)", async () => {
+    setupSession();
+    for (let i = 1; i <= 25; i++) {
+      seedMappedScript({ scriptId: `s${i}`, url: `http://x/chunk${i}.js`, source: `src/mod${i}.ts` });
+    }
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/nope.ts", line: 1 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("Mapped sources (25):");
+    expect(err?.message).toContain("(+5 more)");
+    expect(err?.message).not.toContain("Did you mean"); // no basename match
+    // Capped at 20: the 21st path in insertion order must not be listed.
+    expect(err?.message).not.toContain("src/mod21.ts");
+  });
+
+  it("no_mapping on a MAPPED file with an unmapped line suggests the nearest mapped lines, not paths (GH #37)", async () => {
+    setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1", url: "http://x/app.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-s1",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 5, column: 0 }, original: { line: 14, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 6, column: 0 }, original: { line: 16, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 15 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("line 15 has no executable code");
+    expect(err?.message).toContain("Nearest mapped line(s): 14, 16");
+    expect(err?.message).toContain("resolve_source_position");
+    // The file itself was right — echoing other paths would only mislead.
+    expect(err?.message).not.toContain("Mapped sources");
+  });
+
+  it("no_mapping on a mapped file with nothing nearby falls back to the generic line hint (GH #37)", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 90 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("line 90 has no executable code");
+    expect(err?.message).toContain("Try a nearby statement line");
+    expect(err?.message).not.toContain("Nearest mapped line(s)");
+  });
+
+  it("no_mapping on a MAPPED line with an unmappable explicit column blames the column, not the line (PR #59 round 1)", async () => {
+    setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1", url: "http://x/app.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-s1",
+    });
+    // PR #11 sample shape: line 12 maps at columns 2 and 9 — never at or
+    // after 20. Also map line 6 so a wrong nearest-line hint has something
+    // to (incorrectly) point at if the classifier regresses.
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 12, column: 2 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 1, column: 30 }, original: { line: 12, column: 9 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 2, column: 0 }, original: { line: 6, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 12, column: 20 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("nothing maps at or after column 20");
+    expect(err?.message).toContain("Retry without column");
+    expect(err?.message).not.toContain("has no executable code");
+    expect(err?.message).not.toContain("Nearest mapped line(s)");
+  });
+
+  it("no_mapping while other maps are still loading says the picture may be incomplete (PR #59 round 1)", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/loaded.ts" });
+    // A second script whose map never resolves: sourceMapURL set, no
+    // attachMap, no loadError → hasPendingMaps() stays true through the
+    // bounded wait, so the unknown-file verdict must be hedged.
+    sessionState.scripts.upsert({
+      scriptId: "s2", url: "http://x/pending.js", sourceMapURL: "pending.js.map",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-s2",
+    });
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/unknown.ts", line: 3 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("src/loaded.ts");
+    expect(err?.message).toContain("still loading");
+  });
+
+  it("noMappingError labels the attach-race arm: line mapped by classification time, column 0 (PR #59 round 1)", () => {
+    // Unreachable deterministically through the handler — it needs the map to
+    // attach between mapOriginalToGenerated giving up and the classifier
+    // running — so pin the exported classifier directly.
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
+    const err = noMappingError(sessionState.scripts, "src/foo.ts", 7, 0);
+    expect(err.code).toBe("no_mapping");
+    expect(err.message).toContain("finished loading mid-call");
+    expect(err.message).toContain("Retry set_breakpoint");
   });
 
   it("happy path: binds in the matching script and returns the resolved location", async () => {

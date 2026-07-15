@@ -87,6 +87,19 @@ export class ScriptStore {
     return matches;
   }
 
+  // Every original source path across scripts with a loaded map, deduped,
+  // insertion order. Same mapped-only projection as list_scripts — a script
+  // whose map failed to load (or never had one) contributes nothing. Paths
+  // are already normalized (attachMap runs them through normalizeSourcePath).
+  allOriginalSources(): string[] {
+    const out = new Set<string>();
+    for (const s of this.byKey.values()) {
+      if (!s.consumer || !s.sources) continue;
+      for (const src of s.sources) out.add(src);
+    }
+    return Array.from(out);
+  }
+
   attachMap(scriptId: string, sessionId: string | undefined, raw: string, mapUrl?: string): ScriptInfo | null {
     const script = this.byKey.get(keyFor(scriptId, sessionId));
     if (!script) return null;
@@ -284,6 +297,72 @@ export async function mapOriginalToGenerated(
     }
   }
   return out;
+}
+
+// How far nearestMappedLines scans from the requested line before giving up.
+export const NEAREST_LINE_RADIUS = 25;
+
+// pickSourceKey scans consumer.sources linearly, and its result is invariant
+// per (script, file) — so both line-probing helpers below resolve the keys
+// once up front instead of per probe (PR #59 round-1: Copilot/codex/kimi).
+function keyedScriptsFor(
+  store: ScriptStore,
+  file: string,
+): Array<{ script: ScriptInfo; sourceKey: string }> {
+  const out: Array<{ script: ScriptInfo; sourceKey: string }> = [];
+  for (const script of store.findByOriginalSource(file)) {
+    if (!script.consumer) continue;
+    const sourceKey = pickSourceKey(script, file);
+    if (sourceKey) out.push({ script, sourceKey });
+  }
+  return out;
+}
+
+function probeLine(entries: Array<{ script: ScriptInfo; sourceKey: string }>, line: number): boolean {
+  if (line < 1) return false;
+  for (const { script, sourceKey } of entries) {
+    const positions = script.consumer!.allGeneratedPositionsFor({
+      source: sourceKey,
+      line,
+      column: 0,
+    });
+    if (positions.some((p) => p.line != null)) return true;
+  }
+  return false;
+}
+
+// Does `line` of `file` carry any mapping at all (column-broad)? Used by
+// set_breakpoint's no_mapping classifier to tell a genuinely unmapped line
+// apart from (a) a mapped line queried with an unmappable explicit column and
+// (b) a map that finished attaching after mapOriginalToGenerated gave up —
+// both states where "line N has no executable code" would be false.
+export function isLineMapped(store: ScriptStore, file: string, line: number): boolean {
+  return probeLine(keyedScriptsFor(store, file), line);
+}
+
+// Which original lines of `file` DO carry a mapping, near a line that doesn't.
+// Feeds set_breakpoint's no_mapping hint when the file itself matched a loaded
+// map but the requested line has no generated position (blank line, comment,
+// type-only code). Scans outward one line at a time up to `radius` and returns
+// the first distance with hits — one or both of {below, above}, ascending — so
+// the result is the genuinely nearest mapped line(s), not everything in range.
+// Bounded at 2*radius indexed lookups per matching script: never a full
+// eachMapping walk, which on a minified vendor bundle is unboundedly large.
+export function nearestMappedLines(
+  store: ScriptStore,
+  file: string,
+  line: number, // 1-based
+  radius: number = NEAREST_LINE_RADIUS,
+): number[] {
+  const entries = keyedScriptsFor(store, file);
+  if (entries.length === 0) return [];
+  for (let d = 1; d <= radius; d++) {
+    const hits: number[] = [];
+    if (probeLine(entries, line - d)) hits.push(line - d);
+    if (probeLine(entries, line + d)) hits.push(line + d);
+    if (hits.length > 0) return hits;
+  }
+  return [];
 }
 
 // The raw source key the consumer indexes this file under — i.e. the entry

@@ -155,5 +155,9 @@ describe("node breakpoint flow (e2e)", () => {
       line: 999,
     });
     expect(err.error).toBe("no_mapping");
+    // The sentinel above proved the file matched, so the message must take
+    // the line-shaped branch (GH #37), not claim the whole file is unknown.
+    expect(err.message).toContain("has no executable code");
+    expect(err.message).not.toContain("No source-mapped script matches");
   });
 });
