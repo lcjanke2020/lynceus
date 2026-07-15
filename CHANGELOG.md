@@ -18,6 +18,12 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
   (`EVAL_{DEEPSEEK,MOONSHOT,LM_STUDIO}_MAX_TOKENS`) and reasoning-effort forwarding
   (`EVAL_{DEEPSEEK,LM_STUDIO}_REASONING_EFFORT`); LM Studio adapter migrated onto the
   shared factory.
+- **`set_breakpoint`'s `no_mapping` error now says how to recover** (GH #37): an
+  unknown file echoes the currently-mapped source paths (same-basename candidates
+  first, capped at 20); a mapped file with an unmapped line suggests the nearest
+  mapped line(s) (±25-line bounded probe); an empty script store says the maps may
+  still be loading. Previously all three cases got the same "try list_scripts" hint —
+  the dominant L4 eval failure mode was agents iterating wrong path prefixes.
 
 ## 0.4.0 — 2026-07-11
 

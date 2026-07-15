@@ -1,8 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { requireSession, ROOT_SESSION_KEY, type BreakpointRecord, type BreakpointBinding } from "../session/state.js";
-import { mapOriginalToGenerated, mapCdpToOriginal, type GeneratedLocation } from "../sourcemap/store.js";
-import { pathMatches } from "../sourcemap/normalize.js";
+import {
+  mapOriginalToGenerated,
+  mapCdpToOriginal,
+  nearestMappedLines,
+  type GeneratedLocation,
+  type ScriptStore,
+} from "../sourcemap/store.js";
+import { normalizeSourcePath, pathMatches } from "../sourcemap/normalize.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 
@@ -29,6 +35,54 @@ function findBreakpointAt(
 // the same CDP breakpoint. Mirrors the dedup key in mapOriginalToGenerated.
 function genKey(g: GeneratedLocation): string {
   return `${g.sessionId ?? ""}|${g.scriptUrl}|${g.lineNumber}:${g.columnNumber}`;
+}
+
+// Cap on how many mapped paths a no_mapping error echoes inline; the full
+// per-script view stays behind list_scripts (itself capped at 30 per script).
+const MAX_ECHOED_SOURCES = 20;
+const MAX_DID_YOU_MEAN = 5;
+
+const lastSegment = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
+
+// Build the no_mapping error (GH #37). mapOriginalToGenerated returning no
+// candidates conflates three situations an agent recovers from differently,
+// so say which one it is instead of always pointing at list_scripts:
+//   - `file` IS mapped, `line` just has no generated position (blank line,
+//     comment, type-only code) → suggest the nearest mapped line(s);
+//   - maps are loaded but none references `file` → echo the matchable paths,
+//     same-basename ones first, so one corrected call fixes it;
+//   - nothing is mapped at all → likely a load race or nothing parsed yet.
+function noMappingError(scripts: ScriptStore, file: string, line: number): ToolError {
+  if (scripts.findByOriginalSource(file).length > 0) {
+    const near = nearestMappedLines(scripts, file, line);
+    const hint =
+      near.length > 0
+        ? `Nearest mapped line(s): ${near.join(", ")}. Try one of those`
+        : "Try a nearby statement line";
+    return new ToolError(
+      "no_mapping",
+      `'${file}' is source-mapped, but line ${line} has no executable code in the compiled output. ${hint}, or resolve_source_position to probe coordinates.`,
+    );
+  }
+  const sources = scripts.allOriginalSources();
+  if (sources.length === 0) {
+    return new ToolError(
+      "no_mapping",
+      `No source-mapped script matches '${file}:${line}'. No scripts with source maps are loaded yet — if the target just started, maps may still be loading. Try list_scripts to confirm what's loaded.`,
+    );
+  }
+  const base = lastSegment(normalizeSourcePath(file));
+  const sameName = new Set(sources.filter((s) => lastSegment(s) === base));
+  const ordered = [...sameName, ...sources.filter((s) => !sameName.has(s))];
+  const shown = ordered.slice(0, MAX_ECHOED_SOURCES);
+  const overflow = ordered.length - shown.length;
+  const didYouMean =
+    sameName.size > 0 ? ` Did you mean: ${[...sameName].slice(0, MAX_DID_YOU_MEAN).join(", ")}?` : "";
+  return new ToolError(
+    "no_mapping",
+    `No source-mapped script matches '${file}:${line}'.${didYouMean} Mapped sources (${sources.length}): ` +
+      `${shown.join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}. list_scripts shows per-script detail.`,
+  );
 }
 
 // CDP slides a breakpoint to the next executable location when the requested
@@ -102,10 +156,7 @@ export function registerBreakpointTools(server: McpServer) {
       }
       const candidates = await mapOriginalToGenerated(s.scripts, file, line, column);
       if (candidates.length === 0) {
-        throw new ToolError(
-          "no_mapping",
-          `No source-mapped script matches '${file}:${line}'. Try list_scripts to confirm what's loaded.`,
-        );
+        throw noMappingError(s.scripts, file, line);
       }
       // Generated-layer idempotency. findBreakpointAt() above matches on the
       // *TS* coordinate, but two different TS lines can minify to the SAME

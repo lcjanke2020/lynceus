@@ -4,6 +4,7 @@ import {
   ScriptStore,
   mapCdpToOriginal,
   mapOriginalToGenerated,
+  nearestMappedLines,
   waitForConsumer,
   cdpToPublic,
   publicToCdp,
@@ -543,5 +544,101 @@ describe("waitForConsumer (source-map wait race 2 primitive)", () => {
     await wait;
     // Way under the 500 ms cap — proves the hasPendingMaps short-circuit fired.
     expect(Date.now() - t0).toBeLessThan(200);
+  });
+});
+
+describe("allOriginalSources (no_mapping path echo, GH #37)", () => {
+  const seed = (store: ScriptStore, scriptId: string, url: string) => {
+    store.upsert({
+      scriptId, url,
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: `h-${scriptId}`,
+    });
+  };
+
+  it("dedups across scripts, insertion order, normalized paths", () => {
+    const store = new ScriptStore();
+    seed(store, "s1", "http://x/a.js");
+    seed(store, "s2", "http://x/b.js");
+    // s1 and s2 both reference src/foo.ts; the webpack prefix must fold away.
+    store.attachMap("s1", undefined, buildMap("webpack:///./src/foo.ts"));
+    store.attachMap("s2", undefined, buildMap("src/foo.ts"));
+    const gen = new SourceMapGenerator({ file: "b.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 1, column: 0 }, source: "src/bar.ts" });
+    gen.addMapping({ generated: { line: 2, column: 0 }, original: { line: 1, column: 0 }, source: "src/foo.ts" });
+    seed(store, "s3", "http://x/c.js");
+    store.attachMap("s3", undefined, gen.toString());
+    expect(store.allOriginalSources()).toEqual(["src/foo.ts", "src/bar.ts"]);
+  });
+
+  it("skips scripts whose map never attached (mapped-only projection)", () => {
+    const store = new ScriptStore();
+    seed(store, "s1", "http://x/a.js");
+    seed(store, "s2", "http://x/b.js");
+    store.attachMap("s2", undefined, buildMap("src/real.ts"));
+    expect(store.allOriginalSources()).toEqual(["src/real.ts"]);
+  });
+
+  it("empty store -> []", () => {
+    expect(new ScriptStore().allOriginalSources()).toEqual([]);
+  });
+});
+
+describe("nearestMappedLines (no_mapping line hint, GH #37)", () => {
+  // Map with original lines 14 and 16 only — line 15 is the unmapped gap.
+  const gappedStore = () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1", url: "http://x/a.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h1",
+    });
+    const gen = new SourceMapGenerator({ file: "a.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 14, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 2, column: 0 }, original: { line: 16, column: 0 }, source: "src/foo.ts" });
+    store.attachMap("s1", undefined, gen.toString());
+    return store;
+  };
+
+  it("returns both neighbors, ascending, when below and above are equidistant", () => {
+    expect(nearestMappedLines(gappedStore(), "src/foo.ts", 15)).toEqual([14, 16]);
+  });
+
+  it("returns only the genuinely nearest line, not everything in range", () => {
+    // From 17: line 16 is at distance 1; 14 (distance 3) must NOT appear.
+    expect(nearestMappedLines(gappedStore(), "src/foo.ts", 17)).toEqual([16]);
+  });
+
+  it("suffix-matched file names work (same pathMatches fold as set_breakpoint)", () => {
+    expect(nearestMappedLines(gappedStore(), "foo.ts", 15)).toEqual([14, 16]);
+  });
+
+  it("never probes below line 1", () => {
+    // From line 1, the nearest hit requires d=13; the negative probes on the
+    // way must be skipped rather than passed to the consumer.
+    expect(nearestMappedLines(gappedStore(), "src/foo.ts", 1)).toEqual([14]);
+  });
+
+  it("[] when nothing maps within the radius", () => {
+    expect(nearestMappedLines(gappedStore(), "src/foo.ts", 90, 25)).toEqual([]);
+  });
+
+  it("[] for a file no loaded map references", () => {
+    expect(nearestMappedLines(gappedStore(), "src/other.ts", 15)).toEqual([]);
+  });
+
+  it("scans across every matching script, not just the first", () => {
+    const store = gappedStore();
+    // Second script maps the SAME file at line 18 — from line 17 the nearest
+    // hits are 16 (script 1) and 18 (script 2), both at distance 1.
+    store.upsert({
+      scriptId: "s2", url: "http://x/b.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h2",
+    });
+    const gen = new SourceMapGenerator({ file: "b.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 18, column: 0 }, source: "src/foo.ts" });
+    store.attachMap("s2", undefined, gen.toString());
+    expect(nearestMappedLines(store, "src/foo.ts", 17)).toEqual([16, 18]);
   });
 });

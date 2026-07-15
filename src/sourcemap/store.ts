@@ -87,6 +87,19 @@ export class ScriptStore {
     return matches;
   }
 
+  // Every original source path across scripts with a loaded map, deduped,
+  // insertion order. Same mapped-only projection as list_scripts — a script
+  // whose map failed to load (or never had one) contributes nothing. Paths
+  // are already normalized (attachMap runs them through normalizeSourcePath).
+  allOriginalSources(): string[] {
+    const out = new Set<string>();
+    for (const s of this.byKey.values()) {
+      if (!s.consumer || !s.sources) continue;
+      for (const src of s.sources) out.add(src);
+    }
+    return Array.from(out);
+  }
+
   attachMap(scriptId: string, sessionId: string | undefined, raw: string, mapUrl?: string): ScriptInfo | null {
     const script = this.byKey.get(keyFor(scriptId, sessionId));
     if (!script) return null;
@@ -284,6 +297,48 @@ export async function mapOriginalToGenerated(
     }
   }
   return out;
+}
+
+// How far nearestMappedLines scans from the requested line before giving up.
+export const NEAREST_LINE_RADIUS = 25;
+
+// Which original lines of `file` DO carry a mapping, near a line that doesn't.
+// Feeds set_breakpoint's no_mapping hint when the file itself matched a loaded
+// map but the requested line has no generated position (blank line, comment,
+// type-only code). Scans outward one line at a time up to `radius` and returns
+// the first distance with hits — one or both of {below, above}, ascending — so
+// the result is the genuinely nearest mapped line(s), not everything in range.
+// Bounded at 2*radius indexed lookups per matching script: never a full
+// eachMapping walk, which on a minified vendor bundle is unboundedly large.
+export function nearestMappedLines(
+  store: ScriptStore,
+  file: string,
+  line: number, // 1-based
+  radius: number = NEAREST_LINE_RADIUS,
+): number[] {
+  const scripts = store.findByOriginalSource(file).filter((s) => s.consumer);
+  if (scripts.length === 0) return [];
+  const isMapped = (probe: number): boolean => {
+    if (probe < 1) return false;
+    for (const script of scripts) {
+      const sourceKey = pickSourceKey(script, file);
+      if (!sourceKey) continue;
+      const positions = script.consumer!.allGeneratedPositionsFor({
+        source: sourceKey,
+        line: probe,
+        column: 0,
+      });
+      if (positions.some((p) => p.line != null)) return true;
+    }
+    return false;
+  };
+  for (let d = 1; d <= radius; d++) {
+    const hits: number[] = [];
+    if (isMapped(line - d)) hits.push(line - d);
+    if (isMapped(line + d)) hits.push(line + d);
+    if (hits.length > 0) return hits;
+  }
+  return [];
 }
 
 // The raw source key the consumer indexes this file under — i.e. the entry

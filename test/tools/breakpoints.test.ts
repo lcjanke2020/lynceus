@@ -30,6 +30,64 @@ describe("set_breakpoint", () => {
     expect(err?.message).toContain("list_scripts");
   });
 
+  it("no_mapping echoes the mapped source paths, same-basename matches first (GH #37)", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/handlers.ts" });
+    seedMappedScript({ scriptId: "s2", url: "http://x/lib.js", source: "src/lib/utils/math.ts" });
+    // Same basename, wrong directory — the realistic agent miss: suffix
+    // matching already absorbs prefix junk, so what's left is this shape.
+    const err = parseErrorEnvelope(await setBp.handler({ file: "app/handlers.ts", line: 2 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("app/handlers.ts:2");
+    expect(err?.message).toContain("Did you mean: src/handlers.ts?");
+    expect(err?.message).toContain("src/lib/utils/math.ts");
+    expect(err?.message).toContain("list_scripts");
+  });
+
+  it("no_mapping caps the echoed path list and reports the overflow (GH #37)", async () => {
+    setupSession();
+    for (let i = 1; i <= 25; i++) {
+      seedMappedScript({ scriptId: `s${i}`, url: `http://x/chunk${i}.js`, source: `src/mod${i}.ts` });
+    }
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/nope.ts", line: 1 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("Mapped sources (25):");
+    expect(err?.message).toContain("(+5 more)");
+    expect(err?.message).not.toContain("Did you mean"); // no basename match
+    // Capped at 20: the 21st path in insertion order must not be listed.
+    expect(err?.message).not.toContain("src/mod21.ts");
+  });
+
+  it("no_mapping on a MAPPED file with an unmapped line suggests the nearest mapped lines, not paths (GH #37)", async () => {
+    setupSession();
+    sessionState.scripts.upsert({
+      scriptId: "s1", url: "http://x/app.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h-s1",
+    });
+    const gen = new SourceMapGenerator({ file: "http://x/app.js" });
+    gen.addMapping({ generated: { line: 5, column: 0 }, original: { line: 14, column: 0 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 6, column: 0 }, original: { line: 16, column: 0 }, source: "src/foo.ts" });
+    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 15 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("line 15 has no executable code");
+    expect(err?.message).toContain("Nearest mapped line(s): 14, 16");
+    expect(err?.message).toContain("resolve_source_position");
+    // The file itself was right — echoing other paths would only mislead.
+    expect(err?.message).not.toContain("Mapped sources");
+  });
+
+  it("no_mapping on a mapped file with nothing nearby falls back to the generic line hint (GH #37)", async () => {
+    setupSession();
+    seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
+    const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 90 }));
+    expect(err?.error).toBe("no_mapping");
+    expect(err?.message).toContain("line 90 has no executable code");
+    expect(err?.message).toContain("Try a nearby statement line");
+    expect(err?.message).not.toContain("Nearest mapped line(s)");
+  });
+
   it("happy path: binds in the matching script and returns the resolved location", async () => {
     const { fake } = setupSession();
     seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
