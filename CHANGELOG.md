@@ -24,6 +24,10 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
   mapped line(s) (±25-line bounded probe); an empty script store says the maps may
   still be loading. Previously all three cases got the same "try list_scripts" hint —
   the dominant L4 eval failure mode was agents iterating wrong path prefixes.
+  Review hardening: an explicit-column miss on a mapped line blames the column
+  (suggesting a retry without it) instead of falsely claiming the line has no code,
+  a map that attaches mid-call gets a plain retry hint, and verdicts reached while
+  other maps are still loading say the picture may be incomplete.
 
 ## 0.4.0 — 2026-07-11
 

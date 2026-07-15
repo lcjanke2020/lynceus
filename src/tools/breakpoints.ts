@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { requireSession, ROOT_SESSION_KEY, type BreakpointRecord, type BreakpointBinding } from "../session/state.js";
 import {
+  isLineMapped,
   mapOriginalToGenerated,
   mapCdpToOriginal,
   nearestMappedLines,
@@ -44,16 +45,47 @@ const MAX_DID_YOU_MEAN = 5;
 
 const lastSegment = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 
-// Build the no_mapping error (GH #37). mapOriginalToGenerated returning no
-// candidates conflates three situations an agent recovers from differently,
-// so say which one it is instead of always pointing at list_scripts:
-//   - `file` IS mapped, `line` just has no generated position (blank line,
+// Build the no_mapping error (GH #37, hardened in PR #59 round 1).
+// mapOriginalToGenerated returning no candidates conflates situations an
+// agent recovers from differently, so say which one it is instead of always
+// pointing at list_scripts:
+//   - `file` and `line` ARE mapped (column-broad) → the miss is either an
+//     explicit `column` with no mapping at/after it, or a map that finished
+//     attaching after the lookup gave up (await-boundary race) — both are
+//     "retry with a cheaper coordinate", never "line has no code";
+//   - `file` IS mapped, `line` has no generated position (blank line,
 //     comment, type-only code) → suggest the nearest mapped line(s);
 //   - maps are loaded but none references `file` → echo the matchable paths,
 //     same-basename ones first, so one corrected call fixes it;
 //   - nothing is mapped at all → likely a load race or nothing parsed yet.
-function noMappingError(scripts: ScriptStore, file: string, line: number): ToolError {
+// When other maps are still in flight, the loaded-map picture may be
+// incomplete — say so rather than presenting it as definitive.
+// Exported for direct unit tests: the attach-race arm is unreachable
+// deterministically through the tool handler (it needs a map to land between
+// the lookup and this classifier).
+export function noMappingError(
+  scripts: ScriptStore,
+  file: string,
+  line: number,
+  column: number,
+): ToolError {
+  const pendingNote = scripts.hasPendingMaps()
+    ? " Note: some source maps are still loading, so this picture may be incomplete — retrying shortly may also resolve it."
+    : "";
   if (scripts.findByOriginalSource(file).length > 0) {
+    if (isLineMapped(scripts, file, line)) {
+      if (column > 0) {
+        return new ToolError(
+          "no_mapping",
+          `'${file}' line ${line} is source-mapped, but nothing maps at or after column ${column}. ` +
+            `Retry without column — set_breakpoint binds at the line's first mapped column by default.`,
+        );
+      }
+      return new ToolError(
+        "no_mapping",
+        `'${file}:${line}' is mapped now but was not when the lookup ran — its source map likely finished loading mid-call. Retry set_breakpoint.`,
+      );
+    }
     const near = nearestMappedLines(scripts, file, line);
     const hint =
       near.length > 0
@@ -61,7 +93,7 @@ function noMappingError(scripts: ScriptStore, file: string, line: number): ToolE
         : "Try a nearby statement line";
     return new ToolError(
       "no_mapping",
-      `'${file}' is source-mapped, but line ${line} has no executable code in the compiled output. ${hint}, or resolve_source_position to probe coordinates.`,
+      `'${file}' is source-mapped, but line ${line} has no executable code in the compiled output. ${hint}, or resolve_source_position to probe coordinates.${pendingNote}`,
     );
   }
   const sources = scripts.allOriginalSources();
@@ -81,7 +113,7 @@ function noMappingError(scripts: ScriptStore, file: string, line: number): ToolE
   return new ToolError(
     "no_mapping",
     `No source-mapped script matches '${file}:${line}'.${didYouMean} Mapped sources (${sources.length}): ` +
-      `${shown.join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}. list_scripts shows per-script detail.`,
+      `${shown.join(", ")}${overflow > 0 ? ` (+${overflow} more)` : ""}. list_scripts shows per-script detail.${pendingNote}`,
   );
 }
 
@@ -156,7 +188,7 @@ export function registerBreakpointTools(server: McpServer) {
       }
       const candidates = await mapOriginalToGenerated(s.scripts, file, line, column);
       if (candidates.length === 0) {
-        throw noMappingError(s.scripts, file, line);
+        throw noMappingError(s.scripts, file, line, column);
       }
       // Generated-layer idempotency. findBreakpointAt() above matches on the
       // *TS* coordinate, but two different TS lines can minify to the SAME

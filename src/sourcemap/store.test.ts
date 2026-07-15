@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SourceMapGenerator } from "@jridgewell/source-map";
 import {
   ScriptStore,
+  isLineMapped,
   mapCdpToOriginal,
   mapOriginalToGenerated,
   nearestMappedLines,
@@ -640,5 +641,24 @@ describe("nearestMappedLines (no_mapping line hint, GH #37)", () => {
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 18, column: 0 }, source: "src/foo.ts" });
     store.attachMap("s2", undefined, gen.toString());
     expect(nearestMappedLines(store, "src/foo.ts", 17)).toEqual([16, 18]);
+  });
+});
+
+describe("isLineMapped (no_mapping column/race disambiguation, PR #59)", () => {
+  it("true for a mapped line regardless of where its columns start, false for the gap and unknown files", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "s1", url: "http://x/a.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "h1",
+    });
+    // PR #11 sample shape: line 12 maps at columns 2 and 9 only — never 0.
+    const gen = new SourceMapGenerator({ file: "a.js" });
+    gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 12, column: 2 }, source: "src/foo.ts" });
+    gen.addMapping({ generated: { line: 1, column: 30 }, original: { line: 12, column: 9 }, source: "src/foo.ts" });
+    store.attachMap("s1", undefined, gen.toString());
+    expect(isLineMapped(store, "src/foo.ts", 12)).toBe(true);
+    expect(isLineMapped(store, "src/foo.ts", 13)).toBe(false);
+    expect(isLineMapped(store, "src/other.ts", 12)).toBe(false);
   });
 });
