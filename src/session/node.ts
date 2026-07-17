@@ -2,7 +2,7 @@ import CDP from "chrome-remote-interface";
 import { spawn, type ChildProcess } from "node:child_process";
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { sessionState } from "./state.js";
+import { sessionState, type Session } from "./state.js";
 import { connectDebugger } from "./debugger.js";
 import { alreadySession, ToolError } from "../util/errors.js";
 import { log } from "../util/log.js";
@@ -50,10 +50,11 @@ export async function attachNode(opts: AttachNodeArgs = {}): Promise<{
   url: string;
 }> {
   if (sessionState.client) throw alreadySession();
+  const s = sessionState;
   const port = opts.port ?? DEFAULT_NODE_INSPECTOR_PORT;
   const host = opts.host ?? DEFAULT_NODE_INSPECTOR_HOST;
 
-  return await connectNodeInspector({ host, port, attached: true });
+  return await connectNodeInspector(s, { host, port, attached: true });
 }
 
 export async function launchNode(opts: LaunchNodeArgs): Promise<{
@@ -66,6 +67,7 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   script: string;
 }> {
   if (sessionState.client) throw alreadySession();
+  const s = sessionState;
 
   const cwd = opts.cwd ? resolve(opts.cwd) : process.cwd();
   assertDirectory(cwd, "cwd");
@@ -83,7 +85,7 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   });
 
   // Capture stdout/stderr into the durable pull-based buffer
-  // (`sessionState.nodeOutput`). MUST be wired before waitForInspector so
+  // (`s.nodeOutput`). MUST be wired before waitForInspector so
   // the buffer sees startup output too: waitForInspector attaches its own
   // 'data' listeners and detaches them on success, but the chunks it
   // consumes ARE NOT replayed to listeners attached later. Without this
@@ -96,19 +98,19 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   //
   // Side effect: attachOutputCapture's listeners drain the pipes, so the
   // prior explicit resume() that launch_node once needed is no longer required.
-  attachOutputCapture(child);
+  attachOutputCapture(s, child);
 
   // Every launch failure path below MUST call
-  // sessionState.reset() before rethrowing. reset() clears nodeOutput
+  // s.reset() before rethrowing. reset() clears nodeOutput
   // (so a subsequent attach_node doesn't see the failed attempt's
   // startup stderr) AND bumps ownedProcessGeneration (so the
   // attachOutputCapture listeners we attached on the dying child
   // silently no-op if they fire a late 'close' / 'data' event after
   // kill). It is NOT enough to rely on connectNodeInspector's own
-  // sessionState.close() catch — that catch only wraps the
+  // s.close() catch — that catch only wraps the
   // Runtime/Debugger init block. Earlier failures in
   // connectNodeInspector (CDP.List reject, no node-type targets, CDP()
-  // reject before sessionState.client is assigned) escape directly to
+  // reject before s.client is assigned) escape directly to
   // this catch with state still un-reset. (upstream re-review round 2 —
   // Codex P2.)
   let startup: InspectorStartup;
@@ -116,12 +118,12 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
     startup = await waitForInspector(child, DEFAULT_LAUNCH_TIMEOUT_MS);
   } catch (e) {
     killChild(child);
-    sessionState.reset();
+    s.reset();
     throw e;
   }
 
   try {
-    const attached = await connectNodeInspector({
+    const attached = await connectNodeInspector(s, {
       host: DEFAULT_NODE_INSPECTOR_HOST,
       port: startup.port,
       attached: false,
@@ -145,18 +147,18 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   } catch (e) {
     killChild(child);
     // Defensive: reset() here even though connectNodeInspector's own
-    // Runtime/Debugger init catch already calls sessionState.close().
+    // Runtime/Debugger init catch already calls s.close().
     // The pre-init failures listed above (CDP.List / target filter /
     // CDP() reject) escape connectNodeInspector without ever entering
     // that inner catch, so we'd otherwise leave nodeOutput dirty for
     // exactly those failure modes. reset() is idempotent — for the
     // post-init failure path it just re-clears already-cleared state.
-    sessionState.reset();
+    s.reset();
     throw e;
   }
 }
 
-async function connectNodeInspector(opts: {
+async function connectNodeInspector(s: Session, opts: {
   host: string;
   port: number;
   attached: boolean;
@@ -182,20 +184,20 @@ async function connectNodeInspector(opts: {
   const target = nodeTargets[0]!;
 
   const client = await CDP({ port, host, target: target.id });
-  sessionState.kind = "node";
-  sessionState.client = client;
-  sessionState.attached = opts.attached;
-  sessionState.chromePort = port;
-  sessionState.chromeHost = host;
-  sessionState.currentTargetId = target.id;
-  sessionState.ownedProcess = opts.ownedProcess
+  s.kind = "node";
+  s.client = client;
+  s.attached = opts.attached;
+  s.chromePort = port;
+  s.chromeHost = host;
+  s.currentTargetId = target.id;
+  s.ownedProcess = opts.ownedProcess
     ? { kind: "node", handle: opts.ownedProcess }
     : null;
 
   client.on("disconnect", () => log.warn("CDP disconnect (node)"));
 
   try {
-    await connectDebugger(client, undefined);
+    await connectDebugger(s, client, undefined);
     // Trigger the entry pause for --inspect-brk targets; no-op for --inspect.
     // No Debugger.resume — the entry pause flows through PauseTracker.
     await client.send("Runtime.runIfWaitingForDebugger");
@@ -205,7 +207,7 @@ async function connectNodeInspector(opts: {
     // blocked by already_session against a broken state.
     // (Ultrareview round 2 — Codex Medium #1 + Copilot node.ts:63.)
     log.warn("attach_node init failed; tearing down", { error: String(e) });
-    await sessionState.close();
+    await s.close();
     throw e;
   }
 
@@ -335,7 +337,7 @@ function killChild(child: ChildProcess): void {
 const NODE_OUTPUT_LINE_CAP = 1000;
 
 // Attach `'data'` listeners to the child's stdout/stderr that split on
-// newlines and push one NodeOutputEntry per line to sessionState.nodeOutput.
+// newlines and push one NodeOutputEntry per line to the session's nodeOutput.
 // Partial lines carry over across chunks. On the child's 'close' event
 // (not 'exit' — see flushTrailing comment below), any trailing
 // non-newline-terminated content is flushed as a final entry.
@@ -348,7 +350,7 @@ const NODE_OUTPUT_LINE_CAP = 1000;
 // (`'data'` may fire mid-line) so per-chunk entries would split log lines
 // nondeterministically. Per-line is the natural unit for log analysis and
 // matches what tools like `journalctl` / `kubectl logs` give an operator.
-function attachOutputCapture(child: ChildProcess): void {
+function attachOutputCapture(s: Session, child: ChildProcess): void {
   const stdoutBuf = { partial: "" };
   const stderrBuf = { partial: "" };
   // Cross-session guard — snapshot the reset-generation at
@@ -357,7 +359,7 @@ function attachOutputCapture(child: ChildProcess): void {
   // cleared), the listener silently no-ops rather than pushing into a
   // subsequent session's nodeOutput. See SessionState.ownedProcessGeneration.
   // (upstream re-review — Codex P2.)
-  const myGeneration = sessionState.ownedProcessGeneration;
+  const myGeneration = s.ownedProcessGeneration;
 
   // pushLine splits over-cap text into adjacent cap-sized entries —
   // preserves all bytes; continuation is implicit via adjacent `seq` on
@@ -370,13 +372,13 @@ function attachOutputCapture(child: ChildProcess): void {
   // many log producers emit blank separator lines and dropping those
   // loses signal).
   const pushLine = (stream: "stdout" | "stderr", text: string) => {
-    if (sessionState.ownedProcessGeneration !== myGeneration) return;
+    if (s.ownedProcessGeneration !== myGeneration) return;
     if (text.length === 0) {
-      sessionState.nodeOutput.push({ ts: Date.now(), stream, text: "" });
+      s.nodeOutput.push({ ts: Date.now(), stream, text: "" });
       return;
     }
     for (let offset = 0; offset < text.length; offset += NODE_OUTPUT_LINE_CAP) {
-      sessionState.nodeOutput.push({
+      s.nodeOutput.push({
         ts: Date.now(),
         stream,
         text: text.slice(offset, offset + NODE_OUTPUT_LINE_CAP),
