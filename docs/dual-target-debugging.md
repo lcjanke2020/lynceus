@@ -86,10 +86,11 @@ takes `frame_index`) and `get_network_requests` (returns per-item `session_id` b
 not accept one). In: seven tools the notes missed — `get_source` / `get_script_source`
 (`src/tools/source.ts`) and `select_option` / `fill` / `suggest_locator` / `check` /
 `uncheck` (`src/tools/forms.ts`; check + uncheck share one `registerToggle` schema
-site). The full accepting set is the **11 tools** in the table above — the forms/source
-declarations use a different `.describe()` phrasing ("Target a worker/iframe session…")
-than the network/inspect ones ("null or omitted = root"), which is why quick surveys
-undercount; PR 5's amendment pass should also unify that phrasing. The disambiguation
+site). The full accepting set is the **11 tools** in the table above. The declarations span
+three `.describe()` phrasings — the five `forms.ts` tools say "Target a worker/iframe
+session…", while `source.ts` uses the "From list_scripts … null or omitted = root"
+family shared with network/inspect/execution — which is why quick surveys undercount;
+PR 5's amendment pass should unify them. The disambiguation
 table (or a condensed form) ships in all eleven tool descriptions and in
 `src/tools/README.md`. The kind-prefixed id format is deliberately unconfusable with a
 CDP GUID, and a cheap L2 test pins the failure mode: `session_id: "browser_1"` must
