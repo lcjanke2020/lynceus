@@ -75,20 +75,25 @@ compose — a dual-session agent stepping into a worker uses both on one call.
 |---|---|---|
 | Axis | Which **debug target** (browser vs Node process) | Which **CDP flat session** *within* the browser target (root page, worker, iframe) |
 | Values | `browser_1`, `node_1` (kind-prefixed, §3) | CDP-minted GUIDs; `null`/omitted = root |
-| Appears on | Every session-scoped tool (~45) | Input on `get_object_properties`, `get_request_body`, `get_response_body`, `pause`; returned by every tool that mints CDP object/script/request/frame ids (`get_call_stack`, `get_scope`, `evaluate`, `get_object_properties`, `get_network_requests`, the pause summaries) |
+| Appears on | Every session-scoped tool (~45) | Input on 11 tools: `get_object_properties`, `get_request_body`, `get_response_body`, `pause`, `get_source`, `get_script_source`, `select_option`, `fill`, `check`, `uncheck`, `suggest_locator`; returned by every tool that mints CDP object/script/request/frame ids (`list_scripts`, `get_call_stack`, `get_scope`, `evaluate`, `get_object_properties`, `get_network_requests`, the pause summaries) |
 | Default | The only live session; `ambiguous_session` if two | Root session — omitting **never** falls back to "wherever we paused" |
 | Node sessions | `node_1` is a first-class value | Always root (Node has no child sessions in v1) |
 
-Correction to the planning notes, from reading the code (`src/tools/inspect.ts`,
-`network.ts`, `execution.ts`): the `session_id`-**accepting** set is
-`get_object_properties` / `get_request_body` / `get_response_body` / `pause` — not
-`evaluate` (which auto-routes through the paused frame's own session and takes
-`frame_index`) and not `get_network_requests` (which returns per-item `session_id` but
-does not accept one). Still four tools; the disambiguation table (or a condensed form)
-ships in those four tool descriptions and in `src/tools/README.md`. The kind-prefixed id
-format is deliberately unconfusable with a CDP GUID, and a cheap L2 test pins the
-failure mode: `session_id: "browser_1"` must fail with a message pointing at the
-`session` parameter.
+Correction to the planning notes, from reading the code: the planning notes' four-tool
+list (`evaluate`, `get_object_properties`, `get_network_requests`, `pause`) was wrong in
+both directions. Out: `evaluate` (auto-routes through the paused frame's own session and
+takes `frame_index`) and `get_network_requests` (returns per-item `session_id` but does
+not accept one). In: seven tools the notes missed — `get_source` / `get_script_source`
+(`src/tools/source.ts`) and `select_option` / `fill` / `suggest_locator` / `check` /
+`uncheck` (`src/tools/forms.ts`; check + uncheck share one `registerToggle` schema
+site). The full accepting set is the **11 tools** in the table above — the forms/source
+declarations use a different `.describe()` phrasing ("Target a worker/iframe session…")
+than the network/inspect ones ("null or omitted = root"), which is why quick surveys
+undercount; PR 5's amendment pass should also unify that phrasing. The disambiguation
+table (or a condensed form) ships in all eleven tool descriptions and in
+`src/tools/README.md`. The kind-prefixed id format is deliberately unconfusable with a
+CDP GUID, and a cheap L2 test pins the failure mode: `session_id: "browser_1"` must
+fail with a message pointing at the `session` parameter.
 
 ## 3. Session identity: ids and labels
 
@@ -353,7 +358,7 @@ On the `multi-session-support` branch, squash-merged PRs:
 | 2 | LEO-116 | Thread `SessionState` as a parameter through lifecycle + `debugger.ts` (§4) — zero behavior change |
 | 3 | LEO-116 | `SessionRegistry` + accessor cutover + mechanical test migration; guards as total-capacity check (behavior identical); shutdown → `closeAll()` |
 | 4 | LEO-116 | First behavior change: per-kind capacity, lifecycle returns `{session, label}`, `list_sessions` (52→53, `EXPECTED_TOOL_COUNT`), `close_session(session?)`, new error codes (§10) |
-| 5 | LEO-116 | `session` param across ~45 tools; scoped `wait_for_pause`; `session_id` description amendments + disambiguation table (§2); L2 `session_id:"browser_1"` failure-mode test |
+| 5 | LEO-116 | `session` param across ~45 tools; scoped `wait_for_pause`; `session_id` description amendments on all 11 accepting tools + phrasing unification + disambiguation table (§2); L2 `session_id:"browser_1"` failure-mode test |
 | 6 | LEO-116 | L3 full-stack fixture + `fullstack-flow.e2e.test.ts` (the §11 flow, vanilla-page variant) |
 | 7 | LEO-365 | Raced `wait_for_pause` + waiter-cleanup audit (§6); merged timelines via global seq (§7) |
 | 8 | LEO-365 | L4 cart scenario on the LEO-464 app + docs sweep (README killer flow, ARCHITECTURE lanes, session README) |
