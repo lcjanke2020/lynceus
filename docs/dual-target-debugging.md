@@ -76,7 +76,7 @@ compose — a dual-session agent stepping into a worker uses both on one call.
 | | `session` (NEW — this design) | `session_id` (existing) |
 |---|---|---|
 | Axis | Which **debug target** (browser vs Node process) | Which **CDP flat session** *within* the browser target (root page, worker, iframe) |
-| Values | `browser_1`, `node_1` (kind-prefixed, §3) | CDP-minted GUIDs; `null`/omitted = root |
+| Values | `browser_1`, `node_1` (kind-prefixed, §3) | CDP-minted GUIDs; omitted = root. Explicit `null` = root is accepted today by 6 of the 11 accepting tools (`.nullable().optional()` schemas); the five forms tools are `.optional()`-only and reject `null` — PR 5 unifies all 11 to `.nullable().optional()` |
 | Appears on | Every session-scoped tool (~45) | Input on 11 tools: `get_object_properties`, `get_request_body`, `get_response_body`, `pause`, `get_source`, `get_script_source`, `select_option`, `fill`, `check`, `uncheck`, `suggest_locator`; returned by every tool that mints CDP object/script/request/frame ids (`list_scripts`, `get_source`, `get_script_source`, `resolve_source_position`, `get_call_stack`, `get_scope`, `evaluate`, `get_object_properties`, `get_network_requests`, the pause summaries) |
 | Default | The only live session; `ambiguous_session` if two | Root session — omitting **never** falls back to "wherever we paused" |
 | Node sessions | `node_1` is a first-class value | Always root (Node has no child sessions in v1) |
@@ -88,11 +88,15 @@ takes `frame_index`) and `get_network_requests` (returns per-item `session_id` b
 not accept one). In: seven tools the notes missed — `get_source` / `get_script_source`
 (`src/tools/source.ts`) and `select_option` / `fill` / `suggest_locator` / `check` /
 `uncheck` (`src/tools/forms.ts`; check + uncheck share one `registerToggle` schema
-site). The full accepting set is the **11 tools** in the table above. The declarations span
-three `.describe()` phrasings — the five `forms.ts` tools say "Target a worker/iframe
-session…", while `source.ts` uses the "From list_scripts … null or omitted = root"
-family shared with network/inspect/execution — which is why quick surveys undercount;
-PR 5's amendment pass should unify them. The disambiguation
+site). The full accepting set is the **11 tools** in the table above. The declarations
+split two ways, and PR 5's amendment pass unifies both: **phrasing** — the five
+`forms.ts` tools say "Target a worker/iframe session…", while `source.ts` uses the
+"From list_scripts … null or omitted = root" family shared with network/inspect/
+execution (three phrasings in all, which is why quick surveys undercount) — and
+**schema shape** — the six network/inspect/execution/source declarations are
+`z.string().nullable().optional()` (explicit `null` = root), while the five forms
+declarations are `z.string().optional()` and reject explicit `null`. PR 5 moves all 11
+to `.nullable().optional()` with one shared description. The disambiguation
 table (or a condensed form) ships in all eleven tool descriptions and in
 `src/tools/README.md`. The kind-prefixed id format is deliberately unconfusable with a
 CDP GUID, and a cheap L2 test pins the failure mode: `session_id: "browser_1"` must
@@ -306,10 +310,41 @@ get_timeline({
 }) -> { cursor: number, items: TimelineRow[] }
 ```
 
-- **Row shape:** every row carries `{ seq, ts, session, label, event_type }` with the
-  per-type payload flattened alongside; `event_type` discriminates. The network
-  variant's existing `type` field is surfaced as `resource_type` to avoid colliding
-  with `event_type`.
+- **Row shape (locked):**
+
+  ```ts
+  type TimelineRowBase = {
+    seq: number;               // registry-global, the ordering + cursor key
+    ts: number;                // ms timestamp, as on every buffer entry today
+    session: SessionId;        // debug-target axis
+    label: string | null;      // null when the session was launched without one
+  };
+
+  type TimelineRow =
+    | (TimelineRowBase & { event_type: "console" } & ConsoleItem)      // get_console_logs item fields
+    | (TimelineRowBase & { event_type: "network" } & NetworkStartItem) // see below — request-start subset
+    | (TimelineRowBase & { event_type: "node_output" } & NodeOutputItem); // get_node_output item fields
+  ```
+
+  The `console` and `node_output` variants carry their existing reader's item fields
+  with `seq`/`ts` hoisted into the base. The `network` variant is the **request-start
+  subset only**: `{ request_id, session_id: string | null, method, url,
+  resource_type }` — no `status`/`finished`/`duration_ms` (those mutate later, see
+  below). `request_id` + the CDP-child `session_id` are retained precisely so a
+  timeline row round-trips into `get_request_body` / `get_response_body`; the
+  existing `type` field is surfaced as `resource_type` to avoid colliding with
+  `event_type`.
+- **Input defaults:** `since` defaults to `0` (start of retained history); `limit`
+  defaults to `100`; `event_types` defaults to all three. An **empty `event_types`
+  array is `invalid_arg`** — selecting nothing is never intended.
+- **Pagination (locked, and deliberately different from the three readers):** rows are
+  returned **ascending by `seq` — the earliest rows after `since`, up to `limit`** —
+  and `cursor` is the max returned `seq` (`since` echoed back when no rows match).
+  The existing readers keep their tail-window semantics (`RingBuffer.query` takes the
+  *latest* N via `slice(-limit)`); copying that here would make `since:0, limit:100`
+  over seqs 1…1000 return 901…1000 with cursor 1000, silently skipping 900 rows.
+  Forward pagination makes polling lossless within retained history — the retention
+  bound stays the per-buffer 1000-entry ring cap, exactly as today.
 - **Ordering:** a **registry-global monotonic `seq`** — `RingBuffer` seq values are
   allocated from `registry.nextSeq()` instead of each buffer's own counter (today:
   per-buffer, starting at 1). Per-buffer sequences stay monotonic (now sparse, not
@@ -323,8 +358,10 @@ get_timeline({
   status/completion is `get_network_requests`' job. This keeps `since` polling durable
   without re-engineering the network buffer into append-only lifecycle events.
 - **Merge contract:** the server gathers the selected buffers across the selected
-  sessions, orders by `seq`, then applies `limit` — so a busy console can't starve
-  network rows within the same window.
+  sessions, orders by `seq`, then applies `limit` — one coherent global window. Within
+  a single window one noisy stream *can* fill the limit (no per-stream fairness policy
+  is defined); completeness comes from forward pagination — the next `since: cursor`
+  call picks up exactly where the window ended — not from fairness.
 - `"all"` is a reserved word in the `session` value space (as is any future `kind:*`
   form); ids are kind-prefixed so no collision is possible.
 - `get_timeline` lands in the LEO-365 PR (tool count 53 → **54**, §12).
@@ -401,15 +438,19 @@ get_scope      { session: "node_1", frame_index: 0 }
   → req.body is undefined — body-parser ordering bug exposed
 resume         { session: "node_1" }
 get_network_requests { session: "browser_1", url_match: "/api/cart" }
-  → { request_id: "88.42", session_id: null, status: 200, ... }   # metadata only
+  → { cursor: 41, items: [{ request_id: "88.42", session_id: null,
+                            status: 200, ... }] }        # metadata only
 get_response_body    { session: "browser_1", request_id: "88.42", session_id: null }
-  → { items: 0 }                                        # symptom confirmed end-to-end
+  → { request_id: "88.42", base64_encoded: false,
+      body: "{\"items\":0}" }                            # symptom confirmed end-to-end
 ```
 
 Note what the transcript *doesn't* need: no raced waits, no merged timelines, no
 `select_session` bookkeeping — with labels in the returns, per-side narration is
-self-documenting. (Placeholder payloads above are illustrative; exact field names land
-with the implementation and its contract tests.)
+self-documenting. (Payloads for the *new* surface — lifecycle returns, pause summaries
+with `session`/`label` — are illustrative until their contract tests land; responses
+shown for *existing* tools (`get_network_requests`, `get_response_body`) are today's
+real envelopes and are not up for reinterpretation.)
 
 ### As an L4 eval scenario (sketch — implemented in LEO-365 on the LEO-464 app)
 
@@ -438,7 +479,7 @@ On the `multi-session-support` branch, squash-merged PRs:
 | 2 | LEO-116 | Thread `SessionState` as a parameter through lifecycle + `debugger.ts` (§4) — zero behavior change |
 | 3 | LEO-116 | `SessionRegistry` + accessor cutover + mechanical test migration; guards as total-capacity check (behavior identical); shutdown → `closeAll()` |
 | 4 | LEO-116 | First behavior change: per-kind capacity, lifecycle returns `{session, label}`, `list_sessions` (52→53, `EXPECTED_TOOL_COUNT`), `close_session(session?)`, new error codes (§10) |
-| 5 | LEO-116 | `session` param across ~45 tools; scoped `wait_for_pause`; `session_id` description amendments on all 11 accepting tools + phrasing unification + disambiguation table (§2); L2 `session_id:"browser_1"` failure-mode test |
+| 5 | LEO-116 | `session` param across ~45 tools; scoped `wait_for_pause`; `session_id` amendments on all 11 accepting tools — one shared description + schema unification to `.nullable().optional()` + disambiguation table (§2); L2 `session_id:"browser_1"` failure-mode test |
 | 6 | LEO-116 | L3 full-stack fixture + `fullstack-flow.e2e.test.ts` (the §11 flow, vanilla-page variant) |
 | 7 | LEO-365 | Raced `wait_for_pause` + waiter-cleanup audit (§6); `get_timeline` (53→54, pin bump) + global-seq allocation (§7); L2 contract coverage for the discriminated rows |
 | 8 | LEO-365 | L4 cart scenario on the LEO-464 app + docs sweep (README killer flow, ARCHITECTURE lanes, session README) |
