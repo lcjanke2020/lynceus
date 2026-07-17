@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import CDP from "chrome-remote-interface";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import type { Protocol } from "devtools-protocol";
-import { sessionState, registerHandler } from "./state.js";
+import { sessionState, registerHandler, type Session } from "./state.js";
 import { connectDebugger } from "./debugger.js";
 import { alreadySession } from "../util/errors.js";
 import { log } from "../util/log.js";
@@ -105,15 +105,16 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
     ...(opts.chromePath ? { chromePath: opts.chromePath } : {}),
   };
   const chrome = await launch(launchOpts);
-  sessionState.ownedProcess = { kind: "chrome", handle: chrome };
-  sessionState.chromePort = chrome.port;
-  sessionState.chromeHost = "127.0.0.1"; // chrome-launcher always binds localhost
+  const s = sessionState;
+  s.ownedProcess = { kind: "chrome", handle: chrome };
+  s.chromePort = chrome.port;
+  s.chromeHost = "127.0.0.1"; // chrome-launcher always binds localhost
   log.info("launched chrome", { port: chrome.port, pid: chrome.pid, sandbox: useSandbox });
 
   // Pick the first page target.
   const targets = await waitForFirstPage(chrome.port);
   const target = targets[0]!;
-  await connectToTarget(chrome.port, target.id);
+  await connectToTarget(s, chrome.port, target.id);
   return { targetId: target.id, url: target.url };
 }
 
@@ -122,10 +123,11 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
   url: string;
 }> {
   if (sessionState.client) throw alreadySession();
+  const s = sessionState;
   const port = opts.port ?? DEFAULT_PORT;
-  sessionState.chromePort = port;
-  sessionState.chromeHost = opts.host ?? "127.0.0.1";
-  sessionState.attached = true;
+  s.chromePort = port;
+  s.chromeHost = opts.host ?? "127.0.0.1";
+  s.attached = true;
 
   const targets = await CDP.List({ port, host: opts.host });
   const wantType = opts.targetFilter?.type;
@@ -147,7 +149,7 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
     );
   }
   const target = filtered[0]!;
-  await connectToTarget(port, target.id, opts.host);
+  await connectToTarget(s, port, target.id, opts.host);
   log.info("attached to chrome", { port, targetId: target.id, url: target.url });
   return { targetId: target.id, url: target.url };
 }
@@ -167,32 +169,32 @@ async function waitForFirstPage(port: number): Promise<Awaited<ReturnType<typeof
   throw new Error("Chrome did not expose any page targets within 5s");
 }
 
-async function connectToTarget(port: number, targetId: string, host?: string) {
+async function connectToTarget(s: Session, port: number, targetId: string, host?: string) {
   const client = await CDP({ port, host, target: targetId });
-  sessionState.client = client;
-  sessionState.currentTargetId = targetId;
+  s.client = client;
+  s.currentTargetId = targetId;
 
   // Wire Target.attachedToTarget BEFORE setAutoAttach — Chrome immediately
   // enumerates pre-existing eligible children (workers, OOPIFs, service
   // workers) inline with the setAutoAttach response. If the listener is
   // registered after, those attachedToTarget events are dropped.
   try {
-    await connectDebugger(client, undefined);
-    await enableBrowserDomains(client, undefined);
+    await connectDebugger(s, client, undefined);
+    await enableBrowserDomains(s, client, undefined);
   } catch (e) {
     // Required Runtime/Debugger enable failed: tear down so a follow-up
     // launch/attach isn't blocked by already_session against a broken
     // session. (Ultrareview round 2 — Codex Medium #1, symmetric with
     // attach_node's post-init guard.)
     log.warn("connectToTarget init failed; tearing down", { error: String(e) });
-    await sessionState.close();
+    await s.close();
     throw e;
   }
   const onAttached = (params: Protocol.Target.AttachedToTargetEvent) => {
-    void onChildAttached(client, params);
+    void onChildAttached(s, client, params);
   };
   const onDetached = (params: Protocol.Target.DetachedFromTargetEvent) => {
-    detachSession(client, params.sessionId);
+    detachSession(s, client, params.sessionId);
   };
   client.on("Target.attachedToTarget", onAttached);
   client.on("Target.detachedFromTarget", onDetached);
@@ -209,23 +211,24 @@ async function connectToTarget(port: number, targetId: string, host?: string) {
 }
 
 async function onChildAttached(
+  s: Session,
   client: import("chrome-remote-interface").Client,
   params: Protocol.Target.AttachedToTargetEvent,
 ) {
   const sessionId = params.sessionId;
   log.debug("child target attached", { sessionId, type: params.targetInfo.type, url: params.targetInfo.url });
   try {
-    await connectDebugger(client, sessionId);
-    await enableBrowserDomains(client, sessionId);
+    await connectDebugger(s, client, sessionId);
+    await enableBrowserDomains(s, client, sessionId);
     await client.Target.setAutoAttach(
       { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
       sessionId,
     );
     // Inherit pause-on-exceptions setting so child sessions honor it from
     // birth, not only if the user re-issues the tool after they attach.
-    if (sessionState.pauseOnExceptions !== "none") {
+    if (s.pauseOnExceptions !== "none") {
       try {
-        await client.Debugger.setPauseOnExceptions({ state: sessionState.pauseOnExceptions }, sessionId);
+        await client.Debugger.setPauseOnExceptions({ state: s.pauseOnExceptions }, sessionId);
       } catch (e) {
         log.warn("failed to apply pauseOnExceptions to child", { sessionId, error: String(e) });
       }
@@ -236,22 +239,23 @@ async function onChildAttached(
 }
 
 function detachSession(
+  s: Session,
   client: import("chrome-remote-interface").Client,
   sessionId: string,
 ) {
   log.debug("child target detached", { sessionId });
   // Remove every event handler we registered for this sub-session and drop
   // its scripts from the store — those scriptIds are now invalid.
-  const handlers = sessionState.sessionHandlers.get(sessionId);
+  const handlers = s.sessionHandlers.get(sessionId);
   if (handlers) {
     for (const { event, handler } of handlers) {
       (client as unknown as { removeListener: (e: string, h: Function) => void }).removeListener(event, handler);
     }
-    sessionState.sessionHandlers.delete(sessionId);
+    s.sessionHandlers.delete(sessionId);
   }
   // Drop scripts owned by this session so stale scriptIds don't survive.
-  for (const sc of sessionState.scripts.all()) {
-    if (sc.sessionId === sessionId) sessionState.scripts.remove(sc.scriptId, sc.sessionId);
+  for (const sc of s.scripts.all()) {
+    if (sc.sessionId === sessionId) s.scripts.remove(sc.scriptId, sc.sessionId);
   }
 }
 
@@ -260,6 +264,7 @@ function detachSession(
 // invoked separately from connectToTarget so Node sessions can reuse it.
 // (See the session-kind design notes.)
 async function enableBrowserDomains(
+  s: Session,
   client: import("chrome-remote-interface").Client,
   sessionId: string | undefined,
 ): Promise<void> {
@@ -272,12 +277,12 @@ async function enableBrowserDomains(
   const matchEntry = (requestId: string) => (e: { requestId: string; sessionId?: string }) =>
     e.requestId === requestId && e.sessionId === sessionId;
 
-  registerHandler(sessionState, client, sessionId, "Network.requestWillBeSent", (
+  registerHandler(s, client, sessionId, "Network.requestWillBeSent", (
     params: Protocol.Network.RequestWillBeSentEvent,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
-    sessionState.network.push({
+    s.network.push({
       requestId: params.requestId,
       ts: Date.now(),
       url: params.request.url,
@@ -287,12 +292,12 @@ async function enableBrowserDomains(
     });
   });
 
-  registerHandler(sessionState, client, sessionId, "Network.responseReceived", (
+  registerHandler(s, client, sessionId, "Network.responseReceived", (
     params: Protocol.Network.ResponseReceivedEvent,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
-    sessionState.network.update(matchEntry(params.requestId), {
+    s.network.update(matchEntry(params.requestId), {
       status: params.response.status,
       statusText: params.response.statusText,
       mimeType: params.response.mimeType,
@@ -300,20 +305,20 @@ async function enableBrowserDomains(
     });
   });
 
-  registerHandler(sessionState, client, sessionId, "Network.loadingFinished", (
+  registerHandler(s, client, sessionId, "Network.loadingFinished", (
     params: Protocol.Network.LoadingFinishedEvent,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
     // Use the entry's own ts (set at requestWillBeSent) to compute duration.
-    const existing = sessionState.network.query({ filter: matchEntry(params.requestId), limit: 1 }).pop();
-    sessionState.network.update(matchEntry(params.requestId), {
+    const existing = s.network.query({ filter: matchEntry(params.requestId), limit: 1 }).pop();
+    s.network.update(matchEntry(params.requestId), {
       ...(existing ? { durationMs: Date.now() - existing.ts } : {}),
       finished: true,
     });
   });
 
-  registerHandler(sessionState, client, sessionId, "Network.loadingFailed", (
+  registerHandler(s, client, sessionId, "Network.loadingFailed", (
     params: Protocol.Network.LoadingFailedEvent,
     eventSessionId?: string,
   ) => {
@@ -322,8 +327,8 @@ async function enableBrowserDomains(
     // refused, RST, abort, …) is useful for latency/anomaly analysis. Without
     // this, duration_ms is `number | undefined` purely as a function of
     // success vs. failure in the same call to get_network_requests.
-    const existing = sessionState.network.query({ filter: matchEntry(params.requestId), limit: 1 }).pop();
-    sessionState.network.update(matchEntry(params.requestId), {
+    const existing = s.network.query({ filter: matchEntry(params.requestId), limit: 1 }).pop();
+    s.network.update(matchEntry(params.requestId), {
       ...(existing ? { durationMs: Date.now() - existing.ts } : {}),
       failureReason: params.errorText,
       finished: true,
@@ -343,27 +348,28 @@ export async function closeSession(): Promise<void> {
 // Switch to a different target on the same browser without tearing down the
 // chrome process. Used by select_target.
 export async function switchTarget(targetId: string): Promise<{ targetId: string; url: string }> {
-  if (!sessionState.client) throw new Error("No active session");
-  const port = sessionState.chromePort!;
-  const host = sessionState.chromeHost ?? undefined;
-  const attached = sessionState.attached;
-  const ownedProcess = sessionState.ownedProcess;
+  const s = sessionState;
+  if (!s.client) throw new Error("No active session");
+  const port = s.chromePort!;
+  const host = s.chromeHost ?? undefined;
+  const attached = s.attached;
+  const ownedProcess = s.ownedProcess;
   try {
-    await sessionState.client.close().catch(() => {});
+    await s.client.close().catch(() => {});
   } catch {
     /* ignore */
   }
-  sessionState.client = null;
-  sessionState.currentTargetId = null;
-  sessionState.pause.reset();
-  sessionState.scripts.clear();
-  sessionState.breakpoints.clear();
-  sessionState.sessionHandlers.clear();
-  sessionState.chromePort = port;
-  sessionState.chromeHost = host ?? null;
-  sessionState.attached = attached;
-  sessionState.ownedProcess = ownedProcess;
-  await connectToTarget(port, targetId, host);
+  s.client = null;
+  s.currentTargetId = null;
+  s.pause.reset();
+  s.scripts.clear();
+  s.breakpoints.clear();
+  s.sessionHandlers.clear();
+  s.chromePort = port;
+  s.chromeHost = host ?? null;
+  s.attached = attached;
+  s.ownedProcess = ownedProcess;
+  await connectToTarget(s, port, targetId, host);
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
   return { targetId, url: t?.url ?? "" };
