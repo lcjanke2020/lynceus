@@ -326,6 +326,23 @@ Note what the transcript *doesn't* need: no raced waits, no merged timelines, no
 self-documenting. (Placeholder payloads above are illustrative; exact field names land
 with the implementation and its contract tests.)
 
+### As an L4 eval scenario (sketch — implemented in LEO-365 on the LEO-464 app)
+
+- **Scenario id:** `fullstack-cart` — the first `target: "dual"` scenario (the
+  `Scenario.target` discriminator grows a third value alongside `browser` / `node`).
+- **Task prompt:** "After clicking add-to-cart the cart badge shows 0 items. Find the
+  bug. The frontend dev server is at localhost:5173; the backend entry is
+  `server/index.js`."
+- **Oracle checks (deterministic, NDJSON-trace):** (1) two live sessions of different
+  kinds existed concurrently; (2) a breakpoint bound in *each* session's coordinate
+  space; (3) a pause was observed on the Node side in `server/cart.ts`'s handler; (4)
+  the final answer names the body-parser ordering (or the `req.body` read) as the root
+  cause. Checks 1–3 are structural (tool-call envelopes), check 4 is the usual
+  answer-grader — same oracle architecture as today's scenarios, no new grading
+  machinery.
+- **xfail posture:** starts xfail like other new scenarios until a baseline run
+  establishes it's stably passable.
+
 ## 12. Implementation mapping (confirms the LEO-116 / LEO-365 boundary)
 
 On the `multi-session-support` branch, squash-merged PRs:
