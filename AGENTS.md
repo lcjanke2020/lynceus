@@ -33,6 +33,7 @@ The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-ve
 | A test fails on macOS/Windows but passes on Linux | [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md) |
 | Original design rationale + post-implementation discoveries | [docs/design-notes.md](./docs/design-notes.md) |
 | Node.js Inspector session-mode design (`SessionState.kind`, module split, capability gating) | [docs/node-session-design.md](./docs/node-session-design.md) |
+| Concurrent browser + Node session design (`session` addressing, `SessionRegistry`, merged timelines) | [docs/dual-target-debugging.md](./docs/dual-target-debugging.md) |
 | L3 e2e + L4 eval coverage shape for Node sessions | [docs/node-test-coverage-proposal.md](./docs/node-test-coverage-proposal.md) |
 | `examples/sample-node-app/` — shared Node fixture (5 runnable entries — `index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp` — plus the shared helper `handlers.ts`) | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) |
 
