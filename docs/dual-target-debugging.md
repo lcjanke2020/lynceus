@@ -54,7 +54,9 @@ Every session-scoped tool gains an **optional `session: string`** input:
 - **Omitted with two live sessions** → structured `ambiguous_session` error listing the
   candidates (§10). Exception: `wait_for_pause`, whose omitted form is a *race* across
   all sessions (§6).
-- **Omitted with zero sessions** → `no_session`, exactly as today.
+- **Omitted with zero sessions** → `no_session`, exactly as today. One deliberate
+  exception: `close_session` keeps its idempotent zero-session *success* (§5) — today
+  it returns `"no active session"`, not an error, and closing nothing stays a no-op.
 - **Explicit `session` that doesn't exist** → `unknown_session` listing live sessions.
 
 Rejected alternatives (from the ticket, confirmed here):
@@ -75,7 +77,7 @@ compose — a dual-session agent stepping into a worker uses both on one call.
 |---|---|---|
 | Axis | Which **debug target** (browser vs Node process) | Which **CDP flat session** *within* the browser target (root page, worker, iframe) |
 | Values | `browser_1`, `node_1` (kind-prefixed, §3) | CDP-minted GUIDs; `null`/omitted = root |
-| Appears on | Every session-scoped tool (~45) | Input on 11 tools: `get_object_properties`, `get_request_body`, `get_response_body`, `pause`, `get_source`, `get_script_source`, `select_option`, `fill`, `check`, `uncheck`, `suggest_locator`; returned by every tool that mints CDP object/script/request/frame ids (`list_scripts`, `get_call_stack`, `get_scope`, `evaluate`, `get_object_properties`, `get_network_requests`, the pause summaries) |
+| Appears on | Every session-scoped tool (~45) | Input on 11 tools: `get_object_properties`, `get_request_body`, `get_response_body`, `pause`, `get_source`, `get_script_source`, `select_option`, `fill`, `check`, `uncheck`, `suggest_locator`; returned by every tool that mints CDP object/script/request/frame ids (`list_scripts`, `get_source`, `get_script_source`, `resolve_source_position`, `get_call_stack`, `get_scope`, `evaluate`, `get_object_properties`, `get_network_requests`, the pause summaries) |
 | Default | The only live session; `ambiguous_session` if two | Root session — omitting **never** falls back to "wherever we paused" |
 | Node sessions | `node_1` is a first-class value | Always root (Node has no child sessions in v1) |
 
@@ -135,23 +137,64 @@ The refactor therefore replaces a *slot*, not a data model.
 ### Registry shape
 
 ```ts
-// src/session/registry.ts (new) — sketch; signatures are the contract, names indicative
+// src/session/state.ts — the registry is CO-LOCATED with the (still un-exported)
+// SessionState class; that co-location is what lets the class stay un-exported
+// while the registry remains its sole minting path.
+// Sketch; signatures are the contract, names indicative.
 export type SessionId = string; // "browser_1" | "node_1" | ...
+export type SessionStatus = "starting" | "active" | "closing";
+
+interface SessionRecord {
+  id: SessionId;
+  kind: SessionKind;
+  label?: string;
+  status: SessionStatus;
+  state: SessionState;
+}
 
 class SessionRegistry {
-  private sessions = new Map<SessionId, SessionState>();
+  private records = new Map<SessionId, SessionRecord>();
   private counters: Record<SessionKind, number> = { browser: 0, node: 0 };
-  private globalSeq = 0; // §7 — merged-timeline ordering
+  private globalSeq = 0; // §7 — timeline ordering
 
-  create(kind: SessionKind, label?: string): SessionState; // mints id, enforces per-kind cap + label uniqueness
-  get(id?: SessionId): SessionState;        // resolution rules of §2
-  list(): SessionSummary[];                 // { session, kind, label, attached, paused, url? }
-  close(id?: SessionId): Promise<void>;     // resolution rules of §2
-  closeAll(): Promise<void>;                // shutdown path (index.ts); errors aggregated, not masked
+  reserve(kind: SessionKind, label?: string): SessionRecord;
+  //   mints the id and a fresh SessionState with status "starting". The per-kind
+  //   capacity check and label-uniqueness check run HERE, counting reservations —
+  //   two concurrent same-kind launches cannot both pass.
+  activate(id: SessionId): void;    // "starting" → "active"; only now visible to tools
+  abort(id: SessionId): Promise<void>;
+  //   rollback for a failed launch/attach: closes the partial state (kills an owned
+  //   process if one was spawned) and deletes the reservation, freeing capacity.
+  get(id?: SessionId): SessionState;      // resolution rules of §2 — ACTIVE records only
+  list(): SessionSummary[];               // active records: { session, kind, label, attached, paused, url? }
+  close(id?: SessionId): Promise<void>;   // flips to "closing" first (re-entrancy safe)
+  closeAll(): Promise<void>;              // shutdown path (index.ts); errors aggregated, not masked
   nextSeq(): number;
 }
 export const registry = new SessionRegistry();
 ```
+
+**Startup is atomic by construction — reserve → initialize → activate, with rollback.**
+Launch/attach is fallible *after* it has already mutated the world (Chrome can spawn and
+then fail waiting for a page or connecting CDP; Node has analogous connect failures), so
+the lifecycle functions follow one shape:
+
+```ts
+const rec = registry.reserve(kind, label);        // capacity + label enforced here
+try {
+  // spawn / connect / connectDebugger(rec.state, …) — today's fallible init
+  registry.activate(rec.id);
+  return { session: rec.id, label: rec.label, /* …payload of §5 */ };
+} catch (e) {
+  await registry.abort(rec.id);                   // kill partial state, free the slot
+  throw e;
+}
+```
+
+Ordinary tool resolution (`requireSession(id?)` and friends) sees **active records
+only** — a half-built session is unobservable, a failed launch never leaves a ghost
+record or permanently consumed capacity, and `list_sessions` never shows a session that
+can't take a call.
 
 The **accessors keep their names and gain an optional id**, so the ~49 tool-handler read
 sites migrate mechanically:
@@ -173,11 +216,11 @@ automatically per-session (a browser-only tool aimed at `node_1` throws
 ### Lifecycle and the guards
 
 - The four `alreadySession()` guards become a **per-kind capacity check inside
-  `registry.create()`**: a second `launch_chrome` while `browser_1` lives throws
-  `already_session` with an amended message naming the live session and the v1
-  one-per-kind rule. (During the staged implementation the capacity check is total —
-  size ≥ 1 — preserving today's behavior bit-for-bit until the lifecycle-exposure PR
-  flips it to per-kind. §12.)
+  `registry.reserve()`**: a second `launch_chrome` while `browser_1` lives (or is still
+  starting) throws `already_session` with an amended message naming the live session and
+  the v1 one-per-kind rule. (During the staged implementation the capacity check is
+  total — size ≥ 1 — preserving today's behavior bit-for-bit until the
+  lifecycle-exposure PR flips it to per-kind. §12.)
 - `connectDebugger` and the lifecycle functions take the `SessionState` as a parameter
   instead of closing over the singleton import (`connectDebugger(s, client, sessionId)`)
   — a zero-behavior-change threading PR that lands before the registry cutover (§12).
@@ -205,13 +248,17 @@ registry-level React state exists. When the branches sync, RDT handlers switch f
 - `close_session` today returns plain text (`"closed"` / `"no active session"`); the
   lifecycle-exposure PR upgrades it to `{ session, label, status: "closed" }` so the
   agent sees *which* session it closed — a deliberate behavior change, landing in the
-  same PR as the other payload changes.
+  same PR as the other payload changes. The zero-session case stays an **idempotent
+  success** (never `no_session`): `{ session: null, label: null,
+  status: "no-active-session" }` — closing nothing is an achieved no-op, matching
+  today's `"no active session"` text response.
 - **`list_sessions` (new tool)** returns `{ sessions: [{ session, kind, label, attached,
   paused, url? }] }` — the recovery tool that `ambiguous_session` and `unknown_session`
   point at. Callable with zero sessions (returns an empty list, not `no_session`).
 - `close_session` takes optional `session` (§2 resolution).
-- Tool count 52 → **53**; the pinned tool-surface test bumps in the same PR that
-  registers `list_sessions`, via an `EXPECTED_TOOL_COUNT` constant (§12 risk note).
+- Tool count 52 → **53** (`list_sessions`, LEO-116) → **54** (`get_timeline`, LEO-365,
+  §7); the pinned tool-surface test bumps in the same PR as each registration, via an
+  `EXPECTED_TOOL_COUNT` constant (§12 risk note).
 
 ## 6. `wait_for_pause` semantics
 
@@ -220,14 +267,15 @@ Today's tool takes a single `timeout_ms` input and returns the `summarizePause` 
 
 - **Scoped (explicit `session`):** wait for *that* session's next pause. The demo
   transcript uses only this form — per-side narration demos better.
-- **Raced (omitted `session`, ≥1 live):** wait for *any* session's next pause; the
-  return payload names the pausing session (`session`, `label`) ahead of the existing
-  pause summary. This is the one tool where omission with two sessions is not
-  `ambiguous_session` — "something is about to pause, tell me where" is the natural
-  dual-session idiom, and erroring instead would force agents to poll two scoped waits.
-  Note the return then carries **both axes side by side**: the new `session`
-  (`"node_1"`) and the existing CDP-child `session_id` (root/worker GUID) — the §2
-  disambiguation table's worked example.
+- **Raced (omitted `session`, ≥1 live):** wait for *any* session's next pause. The
+  return is **locked here**: the full pause summary (today's `summarizePause` shape,
+  unchanged) with `session` + `label` prepended — an embedded summary, *not* a pointer
+  that would force a scoped follow-up call. This is the one tool where omission with
+  two sessions is not `ambiguous_session` — "something is about to pause, tell me
+  where" is the natural dual-session idiom, and erroring instead would force agents to
+  poll two scoped waits. Note the return then carries **both axes side by side**: the
+  new `session` (`"node_1"`) and the existing CDP-child `session_id` (root/worker
+  GUID) — the §2 disambiguation table's worked example.
 - **Race-loser hygiene:** a raced wait registers a waiter on every live session and must
   cancel the losers when one fires — the `PauseTracker` waiter-cleanup audit is called
   out in the implementing PR (§12). A session closing mid-race removes its waiter; if
@@ -237,25 +285,53 @@ Today's tool takes a single `timeout_ms` input and returns the `summarizePause` 
   strictly a subset of the final contract, so nothing agent-visible changes semantics
   when raced mode lands; the omitted form goes from erroring to working.
 
-## 7. Buffered reads and merged timelines
+## 7. Buffered reads and the merged timeline (`get_timeline`)
 
-- Console / network / node-output reads (`get_console_logs`, `get_network_requests`,
-  `get_node_output`) default to **per-session** (§2 resolution). Their filter inputs
-  (`since`, `level`/`status`/`stream`, `search`/`url_match`, `limit`) are unchanged;
-  every item already carries `seq` + `ts`, and each read returns `{ cursor, items }`.
-- **`session: "all"`** on the read tools returns a merged timeline ordered by a
-  **registry-global monotonic `seq`**: `RingBuffer` seq values are allocated from
-  `registry.nextSeq()` instead of each buffer's own counter (today: per-buffer, starting
-  at 1). Per-buffer sequences stay monotonic (now sparse, not contiguous), so existing
-  cursor semantics — "cursor is the max seq seen" — survive unchanged for both scoped
-  and merged reads, and one cursor works across a merged read. Merged rows carry
-  `session` + `label` columns.
+The three existing readers **stay per-session specialized**: `get_console_logs`,
+`get_network_requests`, and `get_node_output` gain the `session` param (§2 resolution)
+but each still reads exactly one buffer with its own filter inputs (`since`,
+`level`/`status`/`stream`, `search`/`url_match`, `limit`) and response schema. No
+single existing call can return the browser-network + Node-console interleaving the
+full-stack story needs, and a client-side fan-out across three cursors has no clean
+completeness contract — so the merged view is a **new tool** (decision recorded on the
+PR; supersedes the earlier `session:"all"`-on-the-readers sketch):
+
+```ts
+get_timeline({
+  session?: SessionId | "all",   // explicit "all" for the dual-target view;
+                                 // omitted follows §2 (only live session / ambiguous_session)
+  since?: number,
+  limit?: number,                // applied AFTER the global merge
+  event_types?: Array<"console" | "network" | "node_output">,
+}) -> { cursor: number, items: TimelineRow[] }
+```
+
+- **Row shape:** every row carries `{ seq, ts, session, label, event_type }` with the
+  per-type payload flattened alongside; `event_type` discriminates. The network
+  variant's existing `type` field is surfaced as `resource_type` to avoid colliding
+  with `event_type`.
+- **Ordering:** a **registry-global monotonic `seq`** — `RingBuffer` seq values are
+  allocated from `registry.nextSeq()` instead of each buffer's own counter (today:
+  per-buffer, starting at 1). Per-buffer sequences stay monotonic (now sparse, not
+  contiguous), so the existing readers' cursor semantics — "cursor is the max seq
+  seen" — survive unchanged, and one `get_timeline` cursor spans all buffers.
+- **Network rows are request-start events.** A network entry gets its `seq` at
+  `Network.requestWillBeSent`; the later response/finished/failed updates mutate that
+  entry in the network buffer *without* a new seq, which a `since` cursor that has
+  advanced past it would never observe. The timeline therefore treats a network row as
+  an immutable snapshot of the request *start* (method, URL, session); current
+  status/completion is `get_network_requests`' job. This keeps `since` polling durable
+  without re-engineering the network buffer into append-only lifecycle events.
+- **Merge contract:** the server gathers the selected buffers across the selected
+  sessions, orders by `seq`, then applies `limit` — so a busy console can't starve
+  network rows within the same window.
 - `"all"` is a reserved word in the `session` value space (as is any future `kind:*`
   form); ids are kind-prefixed so no collision is possible.
+- `get_timeline` lands in the LEO-365 PR (tool count 53 → **54**, §12).
 - This is the **v1 cross-session correlation floor**: the agent sees the browser's
-  `fetch("/api/cart")` network entry and the Node side's console/output entries
-  interleaved in wall-clock order and correlates by adjacency + URL. Request-id
-  propagation is explicitly future work (§1).
+  `fetch("/api/cart")` request-start row and the Node side's console/output rows
+  interleaved, and correlates by adjacency + URL. Request-id propagation is explicitly
+  future work (§1).
 
 ## 8. Capability gating in dual-session mode
 
@@ -287,8 +363,9 @@ round-trip.
 ## 10. Error envelope additions
 
 Same `ToolError` → `{ error, message }` machinery (the single catch in
-`src/tools/_register.ts`'s `registerJsonTool`), joining the existing 15-code
-vocabulary; three new codes, one amended:
+`src/tools/_register.ts`'s `registerJsonTool`), joining the existing error-code
+vocabulary (deliberately not counted here — codes live at their throw sites and a
+number would drift); three new codes, one amended:
 
 | Code | When | Message contract |
 |---|---|---|
@@ -324,7 +401,9 @@ get_scope      { session: "node_1", frame_index: 0 }
   → req.body is undefined — body-parser ordering bug exposed
 resume         { session: "node_1" }
 get_network_requests { session: "browser_1", url_match: "/api/cart" }
-  → 200, response body { items: 0 }                     # symptom confirmed end-to-end
+  → { request_id: "88.42", session_id: null, status: 200, ... }   # metadata only
+get_response_body    { session: "browser_1", request_id: "88.42", session_id: null }
+  → { items: 0 }                                        # symptom confirmed end-to-end
 ```
 
 Note what the transcript *doesn't* need: no raced waits, no merged timelines, no
@@ -361,7 +440,7 @@ On the `multi-session-support` branch, squash-merged PRs:
 | 4 | LEO-116 | First behavior change: per-kind capacity, lifecycle returns `{session, label}`, `list_sessions` (52→53, `EXPECTED_TOOL_COUNT`), `close_session(session?)`, new error codes (§10) |
 | 5 | LEO-116 | `session` param across ~45 tools; scoped `wait_for_pause`; `session_id` description amendments on all 11 accepting tools + phrasing unification + disambiguation table (§2); L2 `session_id:"browser_1"` failure-mode test |
 | 6 | LEO-116 | L3 full-stack fixture + `fullstack-flow.e2e.test.ts` (the §11 flow, vanilla-page variant) |
-| 7 | LEO-365 | Raced `wait_for_pause` + waiter-cleanup audit (§6); merged timelines via global seq (§7) |
+| 7 | LEO-365 | Raced `wait_for_pause` + waiter-cleanup audit (§6); `get_timeline` (53→54, pin bump) + global-seq allocation (§7); L2 contract coverage for the discriminated rows |
 | 8 | LEO-365 | L4 cart scenario on the LEO-464 app + docs sweep (README killer flow, ARCHITECTURE lanes, session README) |
 
 Boundary confirmed as ticketed, with one adjustment recorded: the **full-stack L3
@@ -377,13 +456,11 @@ after-each + finally-kill for the api-server child.
 
 ## 13. Open questions (non-blocking, owned by implementing PRs)
 
-- **Global-seq allocation vs existing L2 assertions** (§7): if any contract test pins
-  contiguous per-buffer seq values, the LEO-365 PR either relaxes those assertions
-  (monotonicity, not contiguity) or stamps a separate merged-order field. Decide when
-  the tests are in front of us; the cursor contract stays either way.
-- **`wait_for_pause` raced-return shape** (§6): whether the raced return embeds the full
-  pause summary or `{ session, label }` + a pointer to a scoped follow-up. Recommend
-  embedding (fewer round-trips); confirm against transcript ergonomics in PR 7.
+- **Global-seq allocation vs existing L2 assertions** (§7): the global allocation
+  itself is locked (`get_timeline`'s ordering depends on it); what's open is only the
+  size of the test diff — any contract test pinning *contiguous* per-buffer seq values
+  gets relaxed to monotonicity in the LEO-365 PR. The cursor contract survives either
+  way.
 - **`ambiguous_session` for `evaluate` during dual pause**: when both sessions are
   paused, an omitted-`session` `evaluate` is ambiguous like any other tool — no
   "most-recently-paused" magic. Confirmed here; called out because it is the one place
