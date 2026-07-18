@@ -1,5 +1,5 @@
 // Node L2 contract tests. Parity coverage for the debugger-flow
-// tools when sessionState.kind === "node". The browser-mode tests already
+// tools when session.kind === "node". The browser-mode tests already
 // cover full surface semantics; this file's job is to pin that the same
 // surface keeps working when an agent is attached to a Node Inspector target
 // instead of a Chromium page.
@@ -28,7 +28,6 @@
 // resolve without burning the 500ms MAP_LOAD_WAIT_MS deadline.
 
 import { describe, it, expect } from "vitest";
-import { sessionState } from "../../src/session/state.js";
 import { registerSourceTools } from "../../src/tools/source.js";
 import { registerBreakpointTools } from "../../src/tools/breakpoints.js";
 import { registerExecutionTools } from "../../src/tools/execution.js";
@@ -81,8 +80,8 @@ describe("Node session: script discovery", () => {
   it("mapped_only:false surfaces a Node script that has NOT loaded a source map yet", async () => {
     // Mirrors the realistic 'just scriptParsed, no sourceMappingURL or
     // map not yet loaded' state on a Node session.
-    setupSession({ kind: "node" });
-    sessionState.scripts.upsert({
+    const { session } = setupSession({ kind: "node" });
+    session.scripts.upsert({
       scriptId: "node-raw",
       url: "file:///app/dist/no-map.js",
       startLine: 0,
@@ -173,13 +172,13 @@ describe("Node session: pause / step / resume parity", () => {
   });
 
   it("step_over fires Debugger.stepOver with sessionId undefined on a Node root pause", async () => {
-    const { fake } = setupSession({ kind: "node", paused: true });
+    const { fake, session } = setupSession({ kind: "node", paused: true });
     fake.clearSentCalls();
     // Mirror execution.test.ts:128 'same-batch pause' shape: emit the next
     // Debugger.paused synchronously inside the stepOver responder so
     // waitForPauseOrResume resolves before its timeout.
     fake.onSend("Debugger.stepOver", () => {
-      sessionState.pause.onPaused(fake.makePauseState({ reason: "step", sessionId: undefined }));
+      session.pause.onPaused(fake.makePauseState({ reason: "step", sessionId: undefined }));
     });
     const r = parseOkEnvelope<{ paused: boolean; reason: string; session_id: string | null }>(
       await stepOver.handler({ timeout_ms: 50 }),
@@ -192,13 +191,13 @@ describe("Node session: pause / step / resume parity", () => {
   });
 
   it("resume drains the pause state on a Node session", async () => {
-    const { fake } = setupSession({ kind: "node", paused: true });
+    const { fake, session } = setupSession({ kind: "node", paused: true });
     fake.clearSentCalls();
     fake.onSend("Debugger.resume", () => {
-      sessionState.pause.onResumed();
+      session.pause.onResumed();
     });
     expect(parseOkEnvelope(await resume.handler({}))).toBe("resumed");
-    expect(sessionState.pause.isPaused()).toBe(false);
+    expect(session.pause.isPaused()).toBe(false);
     const call = fake.sentCalls.find((c) => c.method === "Debugger.resume");
     expect(call?.sessionId).toBeUndefined();
   });

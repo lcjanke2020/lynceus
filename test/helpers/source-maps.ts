@@ -4,10 +4,11 @@
 // usage in every per-tool test file.
 
 import { SourceMapGenerator } from "@jridgewell/source-map";
-import { sessionState } from "../../src/session/state.js";
+import { requireSession } from "../../src/session/state.js";
 
 /**
- * Adds a script to sessionState.scripts with a one-mapping source map.
+ * Adds a script to the active session's scripts with a one-mapping source
+ * map (resolved via requireSession() at call time — call after setupSession).
  * Returns the (publicly observable) source-map fields so tests can build
  * meaningful assertions.
  *
@@ -30,7 +31,8 @@ export function seedMappedScript(opts: {
 }) {
   const tsLine = opts.tsLine ?? 7;
   const jsLine = opts.jsLine ?? 1;
-  sessionState.scripts.upsert({
+  const session = requireSession();
+  session.scripts.upsert({
     scriptId: opts.scriptId,
     url: opts.url,
     startLine: 0,
@@ -52,6 +54,6 @@ export function seedMappedScript(opts: {
   // No mapUrl here so the consumer keeps `sources` as-given (relative) — the
   // disk-fallback path then resolves them via ScriptInfo.sourceMapURL + url,
   // mirroring the production branch where consumer.sources aren't pre-resolved.
-  sessionState.scripts.attachMap(opts.scriptId, opts.sessionId, gen.toString());
+  session.scripts.attachMap(opts.scriptId, opts.sessionId, gen.toString());
   return { tsLine, jsLine };
 }

@@ -2,9 +2,8 @@ import { mkdirSync } from "node:fs";
 import CDP from "chrome-remote-interface";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import type { Protocol } from "devtools-protocol";
-import { sessionState, registerHandler, type Session } from "./state.js";
+import { registry, getSession, registerHandler, type Session } from "./state.js";
 import { connectDebugger } from "./debugger.js";
-import { alreadySession } from "../util/errors.js";
 import { log } from "../util/log.js";
 import { snapUserDataDir } from "../util/browser-resolve.js";
 
@@ -45,113 +44,129 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
   targetId: string;
   url: string;
 }> {
-  if (sessionState.client) throw alreadySession();
-  // chrome-launcher manages --remote-debugging-port itself: it picks an
-  // unused port, adds the flag, and polls it. Passing our own
-  // --remote-debugging-port=0 in chromeFlags appears AFTER chrome-launcher's,
-  // and since Chrome honors the last occurrence, Chrome picks an ephemeral
-  // port written to DevToolsActivePort while chrome-launcher polls its own
-  // (stale) port → ECONNREFUSED on every connect. Don't pass it; let
-  // chrome-launcher own port selection. `runningChrome.port` then reflects
-  // the actual port Chrome is listening on. (Codex blocker review on PR #11.)
-  // Sandbox decision: an explicit `sandbox` arg from the caller always wins.
-  // When the caller omits it, fall back to the CDP_SANDBOX env (default off);
-  // "true" or "1" enable it (matching the eval runner's EVAL_SANDBOX parsing).
-  // This lets a host with a working sandbox path opt a whole run into
-  // sandbox-on (e.g. the L4 eval runner via EVAL_SANDBOX → CDP_SANDBOX)
-  // without prompt-injecting every launch_chrome call. Unset env → false →
-  // the --no-sandbox automation default (unchanged). Explicit `sandbox: false`
-  // still forces --no-sandbox even if the env is set.
-  const sandboxEnv = process.env.CDP_SANDBOX;
-  const useSandbox = opts.sandbox ?? (sandboxEnv === "true" || sandboxEnv === "1");
-  const userArgs = opts.args ?? [];
-  const userAlreadyDisabled = userArgs.includes("--no-sandbox");
-  // A caller can request the sandbox AND still pass --no-sandbox in args; the
-  // userArgs spread re-adds it last, so Chromium ends up unsandboxed despite the
-  // request. Warn rather than silently dropping the sandbox.
-  if (useSandbox && userAlreadyDisabled) {
-    log.warn("launch_chrome: sandbox requested but --no-sandbox is in args; the flag wins and the sandbox stays OFF");
-  }
-  // Snap-confinement auto-profile. When the effective Chrome path (explicit
-  // chromePath, or CHROME_PATH env that chrome-launcher will pick up) is
-  // under /snap/ AND the caller didn't already specify userDataDir, derive
-  // the snap-confined profile path so chrome-launcher doesn't hand snap-
-  // Chromium a /tmp/... profile that snap confinement rejects (debug port
-  // never opens; chrome-launcher's startup-port poll ECONNREFUSEs). Mirrors
-  // the L3 globalSetup logic in test/e2e/setup/global.ts so the L4 eval
-  // harness (which steers chrome-launcher via CHROME_PATH) and direct
-  // launch_chrome callers inherit the same workaround without making the
-  // agent responsible for it. (Codex review on PR #24.)
-  const effectiveChromePath = opts.chromePath ?? process.env.CHROME_PATH;
-  const autoUserDataDir =
-    !opts.userDataDir && effectiveChromePath?.startsWith("/snap/")
-      ? snapUserDataDir(effectiveChromePath)
-      : undefined;
-  if (autoUserDataDir) {
-    mkdirSync(autoUserDataDir, { recursive: true });
-  }
-  const launchOpts: LaunchOptions = {
-    startingUrl: opts.url ?? "about:blank",
-    chromeFlags: [
-      ...(opts.headless ? ["--headless=new"] : []),
-      ...(!useSandbox && !userAlreadyDisabled ? ["--no-sandbox"] : []),
-      ...userArgs,
-    ],
-    ...(opts.userDataDir
-      ? { userDataDir: opts.userDataDir }
-      : autoUserDataDir
-        ? { userDataDir: autoUserDataDir }
-        : {}),
-    ...(opts.chromePath ? { chromePath: opts.chromePath } : {}),
-  };
-  const chrome = await launch(launchOpts);
-  const s = sessionState;
-  s.ownedProcess = { kind: "chrome", handle: chrome };
-  s.chromePort = chrome.port;
-  s.chromeHost = "127.0.0.1"; // chrome-launcher always binds localhost
-  log.info("launched chrome", { port: chrome.port, pid: chrome.pid, sandbox: useSandbox });
+  // Capacity check (total, interim posture) — the old `alreadySession()`
+  // guard line now lives inside registry.reserve(). Everything after the
+  // reservation runs under reserve → activate/abort so a failed launch
+  // frees the slot instead of leaving a ghost record.
+  const rec = registry.reserve("browser");
+  const s = rec.state;
+  try {
+    // chrome-launcher manages --remote-debugging-port itself: it picks an
+    // unused port, adds the flag, and polls it. Passing our own
+    // --remote-debugging-port=0 in chromeFlags appears AFTER chrome-launcher's,
+    // and since Chrome honors the last occurrence, Chrome picks an ephemeral
+    // port written to DevToolsActivePort while chrome-launcher polls its own
+    // (stale) port → ECONNREFUSED on every connect. Don't pass it; let
+    // chrome-launcher own port selection. `runningChrome.port` then reflects
+    // the actual port Chrome is listening on. (Codex blocker review on PR #11.)
+    // Sandbox decision: an explicit `sandbox` arg from the caller always wins.
+    // When the caller omits it, fall back to the CDP_SANDBOX env (default off);
+    // "true" or "1" enable it (matching the eval runner's EVAL_SANDBOX parsing).
+    // This lets a host with a working sandbox path opt a whole run into
+    // sandbox-on (e.g. the L4 eval runner via EVAL_SANDBOX → CDP_SANDBOX)
+    // without prompt-injecting every launch_chrome call. Unset env → false →
+    // the --no-sandbox automation default (unchanged). Explicit `sandbox: false`
+    // still forces --no-sandbox even if the env is set.
+    const sandboxEnv = process.env.CDP_SANDBOX;
+    const useSandbox = opts.sandbox ?? (sandboxEnv === "true" || sandboxEnv === "1");
+    const userArgs = opts.args ?? [];
+    const userAlreadyDisabled = userArgs.includes("--no-sandbox");
+    // A caller can request the sandbox AND still pass --no-sandbox in args; the
+    // userArgs spread re-adds it last, so Chromium ends up unsandboxed despite the
+    // request. Warn rather than silently dropping the sandbox.
+    if (useSandbox && userAlreadyDisabled) {
+      log.warn("launch_chrome: sandbox requested but --no-sandbox is in args; the flag wins and the sandbox stays OFF");
+    }
+    // Snap-confinement auto-profile. When the effective Chrome path (explicit
+    // chromePath, or CHROME_PATH env that chrome-launcher will pick up) is
+    // under /snap/ AND the caller didn't already specify userDataDir, derive
+    // the snap-confined profile path so chrome-launcher doesn't hand snap-
+    // Chromium a /tmp/... profile that snap confinement rejects (debug port
+    // never opens; chrome-launcher's startup-port poll ECONNREFUSEs). Mirrors
+    // the L3 globalSetup logic in test/e2e/setup/global.ts so the L4 eval
+    // harness (which steers chrome-launcher via CHROME_PATH) and direct
+    // launch_chrome callers inherit the same workaround without making the
+    // agent responsible for it. (Codex review on PR #24.)
+    const effectiveChromePath = opts.chromePath ?? process.env.CHROME_PATH;
+    const autoUserDataDir =
+      !opts.userDataDir && effectiveChromePath?.startsWith("/snap/")
+        ? snapUserDataDir(effectiveChromePath)
+        : undefined;
+    if (autoUserDataDir) {
+      mkdirSync(autoUserDataDir, { recursive: true });
+    }
+    const launchOpts: LaunchOptions = {
+      startingUrl: opts.url ?? "about:blank",
+      chromeFlags: [
+        ...(opts.headless ? ["--headless=new"] : []),
+        ...(!useSandbox && !userAlreadyDisabled ? ["--no-sandbox"] : []),
+        ...userArgs,
+      ],
+      ...(opts.userDataDir
+        ? { userDataDir: opts.userDataDir }
+        : autoUserDataDir
+          ? { userDataDir: autoUserDataDir }
+          : {}),
+      ...(opts.chromePath ? { chromePath: opts.chromePath } : {}),
+    };
+    const chrome = await launch(launchOpts);
+    s.ownedProcess = { kind: "chrome", handle: chrome };
+    s.chromePort = chrome.port;
+    s.chromeHost = "127.0.0.1"; // chrome-launcher always binds localhost
+    log.info("launched chrome", { port: chrome.port, pid: chrome.pid, sandbox: useSandbox });
 
-  // Pick the first page target.
-  const targets = await waitForFirstPage(chrome.port);
-  const target = targets[0]!;
-  await connectToTarget(s, chrome.port, target.id);
-  return { targetId: target.id, url: target.url };
+    // Pick the first page target.
+    const targets = await waitForFirstPage(chrome.port);
+    const target = targets[0]!;
+    await connectToTarget(s, chrome.port, target.id);
+    registry.activate(rec.id);
+    return { targetId: target.id, url: target.url };
+  } catch (e) {
+    await registry.abort(rec);
+    throw e;
+  }
 }
 
 export async function attachChrome(opts: AttachArgs = {}): Promise<{
   targetId: string;
   url: string;
 }> {
-  if (sessionState.client) throw alreadySession();
-  const s = sessionState;
-  const port = opts.port ?? DEFAULT_PORT;
-  s.chromePort = port;
-  s.chromeHost = opts.host ?? "127.0.0.1";
-  s.attached = true;
+  const rec = registry.reserve("browser");
+  const s = rec.state;
+  try {
+    const port = opts.port ?? DEFAULT_PORT;
+    s.chromePort = port;
+    s.chromeHost = opts.host ?? "127.0.0.1";
+    s.attached = true;
 
-  const targets = await CDP.List({ port, host: opts.host });
-  const wantType = opts.targetFilter?.type;
-  const wantUrl = opts.targetFilter?.urlIncludes;
-  const filtered = targets.filter((t) => {
-    // When a type filter is supplied, it is authoritative. Otherwise default
-    // to "page" targets (the common debugging case).
-    if (wantType) {
-      if (t.type !== wantType) return false;
-    } else if (t.type !== "page") {
-      return false;
+    const targets = await CDP.List({ port, host: opts.host });
+    const wantType = opts.targetFilter?.type;
+    const wantUrl = opts.targetFilter?.urlIncludes;
+    const filtered = targets.filter((t) => {
+      // When a type filter is supplied, it is authoritative. Otherwise default
+      // to "page" targets (the common debugging case).
+      if (wantType) {
+        if (t.type !== wantType) return false;
+      } else if (t.type !== "page") {
+        return false;
+      }
+      if (wantUrl && !t.url.includes(wantUrl)) return false;
+      return true;
+    });
+    if (filtered.length === 0) {
+      throw new Error(
+        `No matching targets on the running Chrome (filter type=${wantType ?? "page"}, urlIncludes=${wantUrl ?? "*"})`,
+      );
     }
-    if (wantUrl && !t.url.includes(wantUrl)) return false;
-    return true;
-  });
-  if (filtered.length === 0) {
-    throw new Error(
-      `No matching targets on the running Chrome (filter type=${wantType ?? "page"}, urlIncludes=${wantUrl ?? "*"})`,
-    );
+    const target = filtered[0]!;
+    await connectToTarget(s, port, target.id, opts.host);
+    log.info("attached to chrome", { port, targetId: target.id, url: target.url });
+    registry.activate(rec.id);
+    return { targetId: target.id, url: target.url };
+  } catch (e) {
+    await registry.abort(rec);
+    throw e;
   }
-  const target = filtered[0]!;
-  await connectToTarget(s, port, target.id, opts.host);
-  log.info("attached to chrome", { port, targetId: target.id, url: target.url });
-  return { targetId: target.id, url: target.url };
 }
 
 async function waitForFirstPage(port: number): Promise<Awaited<ReturnType<typeof CDP.List>>> {
@@ -185,7 +200,10 @@ async function connectToTarget(s: Session, port: number, targetId: string, host?
     // Required Runtime/Debugger enable failed: tear down so a follow-up
     // launch/attach isn't blocked by already_session against a broken
     // session. (Ultrareview round 2 — Codex Medium #1, symmetric with
-    // attach_node's post-init guard.)
+    // attach_node's post-init guard.) Registry-world note: this close()
+    // releases the socket/process state only — freeing the SLOT is the
+    // caller's registry rollback (launch/attach abort(), switchTarget's
+    // failure-path registry.close()).
     log.warn("connectToTarget init failed; tearing down", { error: String(e) });
     await s.close();
     throw e;
@@ -342,14 +360,16 @@ async function enableBrowserDomains(
 }
 
 export async function closeSession(): Promise<void> {
-  await sessionState.close();
+  await registry.close();
 }
 
 // Switch to a different target on the same browser without tearing down the
-// chrome process. Used by select_target.
+// chrome process. Used by select_target. The registry record stays "active"
+// throughout — the accessors' client-null sentinel is what makes the
+// mid-switch window read as "no session", exactly as it did pre-registry.
 export async function switchTarget(targetId: string): Promise<{ targetId: string; url: string }> {
-  const s = sessionState;
-  if (!s.client) throw new Error("No active session");
+  const s = getSession();
+  if (!s || !s.client) throw new Error("No active session");
   const port = s.chromePort!;
   const host = s.chromeHost ?? undefined;
   const attached = s.attached;
@@ -369,7 +389,25 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   s.chromeHost = host ?? null;
   s.attached = attached;
   s.ownedProcess = ownedProcess;
-  await connectToTarget(s, port, targetId, host);
+  try {
+    await connectToTarget(s, port, targetId, host);
+  } catch (e) {
+    // A failed reconnect leaves the record ACTIVE but clientless — the one
+    // state the accessors read as "no session" while reserve() still counts
+    // it (round-1 P1: close_session couldn't reach the record, every
+    // launch/attach hit already_session, and only a server restart
+    // recovered). Route the cleanup through the registry so the record is
+    // deleted and the slot freed. Deliberate delta vs the singleton world:
+    // an OWNED Chrome is now killed here rather than orphaned with its
+    // handle lost. (PR 5 scopes this close to the addressed session once
+    // ids thread through switchTarget.)
+    try {
+      await registry.close();
+    } catch {
+      /* the reconnect error is the one worth surfacing */
+    }
+    throw e;
+  }
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
   return { targetId, url: t?.url ?? "" };

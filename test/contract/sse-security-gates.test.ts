@@ -9,7 +9,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { handleSseRequest, buildSseGateConfig, type SseClient, type SseGateConfig } from "../../src/index.js";
-import { sessionState } from "../../src/session/state.js";
+import { resetSessions } from "../setup.js";
 
 let httpServer: Server | undefined;
 const clients = new Map<string, SseClient>();
@@ -35,7 +35,7 @@ afterEach(async () => {
     await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
     httpServer = undefined;
   }
-  sessionState.reset();
+  resetSessions();
 });
 
 // Boots a loopback HTTP server wired like runSseServer, except the gate

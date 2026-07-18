@@ -22,7 +22,8 @@
 // Why launch Chrome in globalSetup instead of per-spec: real-browser launch
 // costs several seconds. Specs share one Chrome — isolation between specs
 // is provided by close_session in the shared afterEach (test/e2e/setup/
-// after-each.ts), which calls sessionState.reset() and ScriptStore.clear().
+// after-each.ts), which closes the active session (resetting its fields and
+// clearing its ScriptStore).
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
