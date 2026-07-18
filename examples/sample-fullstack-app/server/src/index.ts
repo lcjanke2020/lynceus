@@ -4,10 +4,18 @@ import { cartRouter } from "./cart.js";
 const app = express();
 
 // The Vite dev server is a different origin, so the browser preflights the
-// JSON POST — answer CORS for the dev origin (override with CORS_ORIGIN).
-const devOrigin = process.env.CORS_ORIGIN ?? "http://localhost:5173";
+// JSON POST. Both loopback spellings of the dev origin are allowed — a page
+// opened as 127.0.0.1:5173 instead of localhost:5173 would otherwise fail
+// CORS and masquerade as a backend bug, mid-demo (override with CORS_ORIGIN).
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? [process.env.CORS_ORIGIN]
+  : ["http://localhost:5173", "http://127.0.0.1:5173"];
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", devOrigin);
+  const origin = req.headers.origin;
+  if (origin !== undefined && allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Headers", "content-type");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);

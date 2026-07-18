@@ -41,8 +41,9 @@ to be there.
 Knobs (all optional): `PORT` (API port; `PORT=0` picks a free port and prints it to
 stdout as `sample-fullstack-app api listening on http://127.0.0.1:<port>`),
 `VITE_API_URL` (where the frontend sends `/api/cart` calls; default
-`http://127.0.0.1:3001`), `CORS_ORIGIN` (allowed browser origin; default
-`http://localhost:5173`).
+`http://127.0.0.1:3001`), `CORS_ORIGIN` (allowed browser origin, replacing the default
+allow-list of both loopback spellings — `http://localhost:5173` and
+`http://127.0.0.1:5173` — so opening the page under either spelling just works).
 
 ## The bug — do not fix it
 

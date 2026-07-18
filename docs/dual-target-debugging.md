@@ -416,24 +416,29 @@ sent, name the recovery move.
 
 ## 11. Worked example — the full-stack cart bug
 
-*(Transcript uses the LEO-464 demo app: dev-build React FE on Vite, Express BE. The bug:
-`POST /api/cart` returns `{ items: 0 }` because the handler reads `req.body.qty` before
-the JSON body-parser runs.)*
+*(Transcript uses the LEO-464 demo app as built — `examples/sample-fullstack-app/`,
+dev-build React FE on Vite, Express BE. The bug: `POST /api/cart` answers `200` with
+`{"items":[],"count":0}` because `express.json()` is registered after the cart router,
+so the handler reads `req.body === undefined` and a defensive guard silently skips the
+add. The rehearsed operator version of this transcript is the app's `DEMO.md`.)*
 
 ```
 launch_chrome  { url: "http://localhost:5173", label: "frontend" }
   → { session: "browser_1", label: "frontend", targetId, url }
-launch_node    { script: "server/index.js", label: "backend" }
+launch_node    { script: "examples/sample-fullstack-app/server/dist/index.js",
+                 label: "backend" }
   → { session: "node_1", label: "backend", pid, port, ... }   # entry pause per §9
-set_breakpoint { session: "node_1", file: "server/cart.ts", line: 23 }
+wait_for_pause { session: "node_1" }                     # entry pause reached = the
+                                                         # scripts + maps are parsed
+set_breakpoint { session: "node_1", file: "server/src/cart.ts", line: 24 }
 resume         { session: "node_1" }                     # release entry pause
-set_breakpoint { session: "browser_1", file: "src/CartButton.tsx", line: 14 }
-click          { session: "browser_1", selector: "[data-testid=add-to-cart]" }
-wait_for_pause { session: "browser_1" }
-  → paused in CartButton.tsx:14 (onClick)               # FE side of the story
-step_over      { session: "browser_1" } ; resume { session: "browser_1" }
+set_breakpoint { session: "browser_1", file: "src/CartButton.tsx", line: 15 }
+click          { session: "browser_1", selector: "#add-espresso" }   # issued as a pair —
+wait_for_pause { session: "browser_1" }                  # click settles only on resume
+  → paused in CartButton.tsx:15 (handleAddToCart)       # FE side of the story
+get_scope      { session: "browser_1", frame_index: 0 } ; resume { session: "browser_1" }
 wait_for_pause { session: "node_1" }
-  → paused in server/cart.ts:23 (POST /api/cart)        # the fetch crossed the wire
+  → paused in server/src/cart.ts:24 (POST /api/cart)    # the fetch crossed the wire
 get_scope      { session: "node_1", frame_index: 0 }
   → req.body is undefined — body-parser ordering bug exposed
 resume         { session: "node_1" }
@@ -442,7 +447,7 @@ get_network_requests { session: "browser_1", url_match: "/api/cart" }
                             status: 200, ... }] }        # metadata only
 get_response_body    { session: "browser_1", request_id: "88.42", session_id: null }
   → { request_id: "88.42", base64_encoded: false,
-      body: "{\"items\":0}" }                            # symptom confirmed end-to-end
+      body: "{\"items\":[],\"count\":0}" }               # symptom confirmed end-to-end
 ```
 
 Note what the transcript *doesn't* need: no raced waits, no merged timelines, no
@@ -458,10 +463,10 @@ real envelopes and are not up for reinterpretation.)
   `Scenario.target` discriminator grows a third value alongside `browser` / `node`).
 - **Task prompt:** "After clicking add-to-cart the cart badge shows 0 items. Find the
   bug. The frontend dev server is at localhost:5173; the backend entry is
-  `server/index.js`."
+  `examples/sample-fullstack-app/server/dist/index.js`."
 - **Oracle checks (deterministic, NDJSON-trace):** (1) two live sessions of different
   kinds existed concurrently; (2) a breakpoint bound in *each* session's coordinate
-  space; (3) a pause was observed on the Node side in `server/cart.ts`'s handler; (4)
+  space; (3) a pause was observed on the Node side in `server/src/cart.ts`'s handler; (4)
   the final answer names the body-parser ordering (or the `req.body` read) as the root
   cause. Checks 1–3 are structural (tool-call envelopes), check 4 is the usual
   answer-grader — same oracle architecture as today's scenarios, no new grading

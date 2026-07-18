@@ -26,13 +26,19 @@ claude mcp add lynceus -- node <repo>/dist/index.js
 npm run dev        # http://localhost:5173
 ```
 
-Sanity-check the symptom once in a plain browser: click **Add to cart**, watch the
-header stay at `cart: 0`.
+Sanity-check the symptom once in a plain browser **with the API up**: run `npm run api`
+in a throwaway terminal, open http://localhost:5173, click **Add to cart**, watch the
+header stay at `cart: 0`. Then **stop that API process** before the scripted run —
+step 1's `launch_node` starts its own server on :3001 and needs the port free.
+(Without the API running you'd see the *"backend unreachable"* banner instead of the
+planted bug.)
 
 ## The script
 
-Narration cues in *italics*. Expected results in the `→` lines. All paths are relative
-to `examples/sample-fullstack-app/`.
+Narration cues in *italics*. Expected results in the `→` lines. Path forms: the
+`launch_node` `script` is **repo-relative** (it resolves against `cwd`);
+`set_breakpoint` `file` values are **suffix-matched**, so the repo-relative and
+app-relative spellings below both resolve — don't "normalize" one into the other.
 
 **1. Launch the backend under the debugger.**
 
@@ -42,15 +48,22 @@ launch_node { script: "examples/sample-fullstack-app/server/dist/index.js",
 → { session: "node_1", label: "backend", pid, port, ... }   # paused at entry
 ```
 
-**2. Breakpoint the cart handler — in TypeScript coordinates.**
+**2. Drain the entry pause, then breakpoint the cart handler — in TypeScript
+coordinates.**
 
 ```
+wait_for_pause { session: "node_1" }        # FIRST — see the note below
 set_breakpoint { session: "node_1",
                  file: "examples/sample-fullstack-app/server/src/cart.ts", line: 24 }
+→ { id: "bp_1", status: "set", ... }
 resume         { session: "node_1" }        # release the entry pause
 get_node_output{ session: "node_1" }
 → "sample-fullstack-app api listening on http://127.0.0.1:3001"
 ```
+
+> ⚠️ `launch_node` returns as the process spawns; the **entry pause is what guarantees
+> the scripts and their source maps are parsed**. Skip the `wait_for_pause` and the
+> `set_breakpoint` can answer `no_mapping` — and the `resume`, `not_paused`.
 
 *The breakpoint is set in `cart.ts` — the source map takes it to the compiled JS.*
 
@@ -66,11 +79,13 @@ list_sessions  {}
 
 *Two live sessions, one server, one agent. This is the founding-goal slide.*
 
-**4. Breakpoint the click handler, then click.**
+**4. Breakpoint the click handler, then click — click and wait issued together.**
 
 ```
-set_breakpoint { session: "browser_1",
-                 file: "src/CartButton.tsx", line: 15 }
+set_breakpoint { session: "browser_1", file: "src/CartButton.tsx", line: 15 }
+→ { id: "bp_1", status: "set", ... }        # ids are per-session; step 8 removes this one
+
+# issue the next two as PARALLEL calls in one agent turn:
 click          { session: "browser_1", selector: "#add-espresso" }
 wait_for_pause { session: "browser_1" }
 → paused at CartButton.tsx:15, frame `handleAddToCart`
@@ -78,12 +93,17 @@ get_scope      { session: "browser_1", frame_index: 0 }
 → `product` = { id: "espresso", name: "Espresso Machine", ... }
 ```
 
+> ⚠️ The `click` call **doesn't settle while the breakpoint holds the page** — it
+> resolves only after the session resumes. Ask the agent to issue `click` and
+> `wait_for_pause` together (parallel tool calls), or click by hand in the Chrome
+> window and only call `wait_for_pause`. Awaiting the click alone deadlocks the demo.
+
 *Paused in a dev-build React component, TSX coordinates, before the request exists.*
 
 **5. Release the browser; catch the same request on the other side.**
 
 ```
-resume         { session: "browser_1" }     # the fetch departs
+resume         { session: "browser_1" }     # the fetch departs; the pending click settles
 wait_for_pause { session: "node_1" }
 → paused at cart.ts:24, the POST /api/cart handler
 ```
@@ -129,11 +149,19 @@ npm run api:build
 
 ```
 close_session  { session: "node_1" }
-launch_node    { script: ".../server/dist/index.js", label: "backend" }
-resume         { session: "node_1" }        # entry pause; breakpoints re-set if desired
-click          { session: "browser_1", selector: "#add-espresso" }
+launch_node    { script: "examples/sample-fullstack-app/server/dist/index.js",
+                 cwd: "<repo>", label: "backend" }
+→ { session: "node_2", label: "backend", ... }    # fresh id — ids are never recycled
+wait_for_pause { session: "node_2" }              # same entry-pause drain as step 2
+resume         { session: "node_2" }              # no server breakpoint needed this time
+remove_breakpoint { session: "browser_1", id: "bp_1" }   # the step-4 breakpoint — else
+click          { session: "browser_1", selector: "#add-espresso" }  # this click pauses again
 → header shows cart: 1 (fresh server state)
 ```
+
+*Prefer the theater?* Leave the breakpoint armed, issue `click` + `wait_for_pause`
+together again (step-4 rules), and narrate *"same breakpoint fires — but this time the
+request goes through"* before resuming. Costs ~30s; rehearse whichever you'll perform.
 
 **9. Close the loop end-to-end (if time remains).**
 

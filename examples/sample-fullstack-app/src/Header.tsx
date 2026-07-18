@@ -9,7 +9,7 @@ export function Header({ count }: { count: number }) {
 
 function CartBadge({ count }: { count: number }) {
   return (
-    <span id="cart-count" aria-label="items in cart">
+    <span id="cart-count" role="status">
       cart: {count}
     </span>
   );
