@@ -91,6 +91,18 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    // Publish the child on the reserved state IMMEDIATELY — no await sits
+    // between spawn() and this line, so a shutdown's closeAll() racing the
+    // startup always sees (and kills) the child before it settles. The
+    // previous assignment point (inside connectNodeInspector, after
+    // inspector discovery) left a window where closeAll() could return
+    // while the just-spawned debuggee lived on, and process.exit() then
+    // orphaned it. (Round-2 review — Codex P1. The analogous launch_chrome
+    // window sits INSIDE chrome-launcher's launch(), where no handle exists
+    // yet to publish; closing that one needs shutdown to await in-flight
+    // startups — recorded for the PR 4 lifecycle-exposure decision.)
+    s.ownedProcess = { kind: "node", handle: child };
+
     // Capture stdout/stderr into the durable pull-based buffer
     // (`s.nodeOutput`). MUST be wired before waitForInspector so
     // the buffer sees startup output too: waitForInspector attaches its own

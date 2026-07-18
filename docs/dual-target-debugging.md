@@ -176,7 +176,8 @@ class SessionRegistry {
   //   when a racing close/shutdown already deleted the record — and it re-runs
   //   state.close() unconditionally (idempotent) because a racing teardown may
   //   predate startup's last mutations. (PR 3 round-1 review hardening.)
-  get(id?: SessionId): SessionState;      // resolution rules of §2 — ACTIVE records only
+  get(id?: SessionId): SessionState | null; // resolution rules of §2 — ACTIVE records
+  //   only; null when nothing resolves (no live session / unknown id)
   list(): SessionSummary[];               // active records: { session, kind, label, attached, paused, url? }
   close(id?: SessionId): Promise<void>;   // flips to "closing" first; re-entrant close()
   //   and closeAll() await the same memoized in-flight teardown rather than
