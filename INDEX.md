@@ -39,6 +39,7 @@ Where to find everything in this repo.
 | [docs/systemd-service.md](./docs/systemd-service.md) | Linux systemd user-service setup for running the npm package as a persistent local SSE server. |
 | [docs/test-eval-plan.md](./docs/test-eval-plan.md) | The living test/eval spec — 4-layer pyramid, the fake-CDP contract layer (`test/fake-cdp.ts`), L4 cost model, **11 Critical Gotchas** every author has to know. |
 | [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md) | Per-spec Chromium-vs-Chrome gaps (table grows as gaps surface) + host-OS workarounds (Windows 11 chrome-launcher ECONNREFUSED, WSL2 snap-Chromium). |
+| [docs/react-devtools-design.md](./docs/react-devtools-design.md) | React DevTools integration design + spike findings (S2–S6) — the authority doc for RDT-1..6 (LEO-359..364): bridge recipe, lifecycle/event model, cross-version matrix + support floor, tool surface, synthesis + reconciliation ledger. |
 
 ### Component READMEs
 
