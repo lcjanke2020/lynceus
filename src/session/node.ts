@@ -2,9 +2,9 @@ import CDP from "chrome-remote-interface";
 import { spawn, type ChildProcess } from "node:child_process";
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { sessionState, type Session } from "./state.js";
+import { registry, type Session } from "./state.js";
 import { connectDebugger } from "./debugger.js";
-import { alreadySession, ToolError } from "../util/errors.js";
+import { ToolError } from "../util/errors.js";
 import { log } from "../util/log.js";
 
 export interface AttachNodeArgs {
@@ -49,12 +49,19 @@ export async function attachNode(opts: AttachNodeArgs = {}): Promise<{
   targetId: string;
   url: string;
 }> {
-  if (sessionState.client) throw alreadySession();
-  const s = sessionState;
-  const port = opts.port ?? DEFAULT_NODE_INSPECTOR_PORT;
-  const host = opts.host ?? DEFAULT_NODE_INSPECTOR_HOST;
+  const rec = registry.reserve("node");
+  const s = rec.state;
+  try {
+    const port = opts.port ?? DEFAULT_NODE_INSPECTOR_PORT;
+    const host = opts.host ?? DEFAULT_NODE_INSPECTOR_HOST;
 
-  return await connectNodeInspector(s, { host, port, attached: true });
+    const attached = await connectNodeInspector(s, { host, port, attached: true });
+    registry.activate(rec.id);
+    return attached;
+  } catch (e) {
+    await registry.abort(rec);
+    throw e;
+  }
 }
 
 export async function launchNode(opts: LaunchNodeArgs): Promise<{
@@ -66,94 +73,122 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   cwd: string;
   script: string;
 }> {
-  if (sessionState.client) throw alreadySession();
-  const s = sessionState;
-
-  const cwd = opts.cwd ? resolve(opts.cwd) : process.cwd();
-  assertDirectory(cwd, "cwd");
-  const script = isAbsolute(opts.script) ? opts.script : resolve(cwd, opts.script);
-  assertFile(script, "script");
-
-  const inspectMode = opts.inspectMode ?? "inspect-brk";
-  const requestedPort = opts.inspectPort ?? 0;
-  const inspectFlag = `--${inspectMode}=${DEFAULT_NODE_INSPECTOR_HOST}:${requestedPort}`;
-  const args = opts.args ?? [];
-  const child = spawn(process.execPath, [inspectFlag, script, ...args], {
-    cwd,
-    env: { ...process.env, ...(opts.env ?? {}) },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  // Capture stdout/stderr into the durable pull-based buffer
-  // (`s.nodeOutput`). MUST be wired before waitForInspector so
-  // the buffer sees startup output too: waitForInspector attaches its own
-  // 'data' listeners and detaches them on success, but the chunks it
-  // consumes ARE NOT replayed to listeners attached later. Without this
-  // ordering, the "Debugger listening on…" banner plus any early
-  // console.log / ESM-loader errors land in waitForInspector's local
-  // buffer and never reach nodeOutput — exactly the diagnostics an agent
-  // needs when triaging "why did my Node child fail to come up?". Both
-  // listeners coexist fine on the same 'data' event (Node streams
-  // multicast). (upstream review.)
-  //
-  // Side effect: attachOutputCapture's listeners drain the pipes, so the
-  // prior explicit resume() that launch_node once needed is no longer required.
-  attachOutputCapture(s, child);
-
-  // Every launch failure path below MUST call
-  // s.reset() before rethrowing. reset() clears nodeOutput
-  // (so a subsequent attach_node doesn't see the failed attempt's
-  // startup stderr) AND bumps ownedProcessGeneration (so the
-  // attachOutputCapture listeners we attached on the dying child
-  // silently no-op if they fire a late 'close' / 'data' event after
-  // kill). It is NOT enough to rely on connectNodeInspector's own
-  // s.close() catch — that catch only wraps the
-  // Runtime/Debugger init block. Earlier failures in
-  // connectNodeInspector (CDP.List reject, no node-type targets, CDP()
-  // reject before s.client is assigned) escape directly to
-  // this catch with state still un-reset. (upstream re-review round 2 —
-  // Codex P2.)
-  let startup: InspectorStartup;
+  const rec = registry.reserve("node");
+  const s = rec.state;
   try {
-    startup = await waitForInspector(child, DEFAULT_LAUNCH_TIMEOUT_MS);
-  } catch (e) {
-    killChild(child);
-    s.reset();
-    throw e;
-  }
+    const cwd = opts.cwd ? resolve(opts.cwd) : process.cwd();
+    assertDirectory(cwd, "cwd");
+    const script = isAbsolute(opts.script) ? opts.script : resolve(cwd, opts.script);
+    assertFile(script, "script");
 
-  try {
-    const attached = await connectNodeInspector(s, {
-      host: DEFAULT_NODE_INSPECTOR_HOST,
-      port: startup.port,
-      attached: false,
-      ownedProcess: child,
-    });
-    log.info("launched node", {
-      pid: child.pid,
-      port: startup.port,
-      inspectMode,
+    const inspectMode = opts.inspectMode ?? "inspect-brk";
+    const requestedPort = opts.inspectPort ?? 0;
+    const inspectFlag = `--${inspectMode}=${DEFAULT_NODE_INSPECTOR_HOST}:${requestedPort}`;
+    const args = opts.args ?? [];
+    const child = spawn(process.execPath, [inspectFlag, script, ...args], {
       cwd,
-      script,
+      env: { ...process.env, ...(opts.env ?? {}) },
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    return {
-      ...attached,
-      pid: child.pid ?? null,
-      port: startup.port,
-      inspectMode,
-      cwd,
-      script,
-    };
+
+    // Publish the child on the reserved state IMMEDIATELY — no await sits
+    // between spawn() and this line, so a shutdown's closeAll() racing the
+    // startup always sees (and kills) the child before it settles. The
+    // previous assignment point (inside connectNodeInspector, after
+    // inspector discovery) left a window where closeAll() could return
+    // while the just-spawned debuggee lived on, and process.exit() then
+    // orphaned it. (Round-2 review — Codex P1. The analogous launch_chrome
+    // window sits INSIDE chrome-launcher's launch(), where no handle exists
+    // yet to publish; closing that one needs shutdown to await in-flight
+    // startups — recorded for the PR 4 lifecycle-exposure decision.)
+    s.ownedProcess = { kind: "node", handle: child };
+
+    // Capture stdout/stderr into the durable pull-based buffer
+    // (`s.nodeOutput`). MUST be wired before waitForInspector so
+    // the buffer sees startup output too: waitForInspector attaches its own
+    // 'data' listeners and detaches them on success, but the chunks it
+    // consumes ARE NOT replayed to listeners attached later. Without this
+    // ordering, the "Debugger listening on…" banner plus any early
+    // console.log / ESM-loader errors land in waitForInspector's local
+    // buffer and never reach nodeOutput — exactly the diagnostics an agent
+    // needs when triaging "why did my Node child fail to come up?". Both
+    // listeners coexist fine on the same 'data' event (Node streams
+    // multicast). (upstream review.)
+    //
+    // Side effect: attachOutputCapture's listeners drain the pipes, so the
+    // prior explicit resume() that launch_node once needed is no longer required.
+    attachOutputCapture(s, child);
+
+    // Every launch failure path below MUST reset the state (s.reset()
+    // directly, or via s.close()) before rethrowing. reset() clears nodeOutput
+    // (so a subsequent attach_node doesn't see the failed attempt's
+    // startup stderr) AND bumps ownedProcessGeneration (so the
+    // attachOutputCapture listeners we attached on the dying child
+    // silently no-op if they fire a late 'close' / 'data' event after
+    // kill). It is NOT enough to rely on connectNodeInspector's own
+    // s.close() catch — that catch only wraps the
+    // Runtime/Debugger init block. Earlier failures in
+    // connectNodeInspector (CDP.List reject, no node-type targets, CDP()
+    // reject before s.client is assigned) escape directly to
+    // this catch with state still un-reset. (upstream re-review round 2 —
+    // Codex P2.) The outer catch's registry.abort() then drops the
+    // reservation itself; abort's close() on the already-reset state is a
+    // no-op.
+    let startup: InspectorStartup;
+    try {
+      startup = await waitForInspector(child, DEFAULT_LAUNCH_TIMEOUT_MS);
+    } catch (e) {
+      // close(), not killChild + reset (round-4 Copilot): ownedProcess is
+      // already published, so close() tears the child down through the
+      // awaited SIGTERM→SIGKILL escalation — the bare killChild it
+      // replaces sent one unawaited SIGTERM, which a hung startup could
+      // ignore — and its internal reset() still clears nodeOutput and
+      // bumps ownedProcessGeneration before the rethrow.
+      await s.close();
+      throw e;
+    }
+
+    try {
+      const attached = await connectNodeInspector(s, {
+        host: DEFAULT_NODE_INSPECTOR_HOST,
+        port: startup.port,
+        attached: false,
+        ownedProcess: child,
+      });
+      log.info("launched node", {
+        pid: child.pid,
+        port: startup.port,
+        inspectMode,
+        cwd,
+        script,
+      });
+      registry.activate(rec.id);
+      return {
+        ...attached,
+        pid: child.pid ?? null,
+        port: startup.port,
+        inspectMode,
+        cwd,
+        script,
+      };
+    } catch (e) {
+      // Defensive close() even though connectNodeInspector's own
+      // Runtime/Debugger init catch already calls s.close(): the pre-init
+      // failures listed above (CDP.List / target filter / CDP() reject)
+      // escape connectNodeInspector without entering that inner catch, and
+      // the post-connect activate() invariant (registry round-1 hardening)
+      // throws with a LIVE client that only close() releases. close() runs
+      // first so an owned child goes through the proper SIGTERM→SIGKILL
+      // escalation; since the round-2 early ownedProcess publish, every
+      // post-spawn path has ownership, so killChild is belt-and-suspenders
+      // only. Both are idempotent, and close() still clears nodeOutput +
+      // bumps ownedProcessGeneration via its internal reset().
+      await s.close();
+      killChild(child);
+      throw e;
+    }
   } catch (e) {
-    killChild(child);
-    // Defensive: reset() here even though connectNodeInspector's own
-    // Runtime/Debugger init catch already calls s.close().
-    // The pre-init failures listed above (CDP.List / target filter /
-    // CDP() reject) escape connectNodeInspector without ever entering
-    // that inner catch, so we'd otherwise leave nodeOutput dirty for
-    // exactly those failure modes. reset() is idempotent — for the
-    // post-init failure path it just re-clears already-cleared state.
-    s.reset();
+    await registry.abort(rec);
     throw e;
   }
 }

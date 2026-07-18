@@ -14,7 +14,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer } from "../../src/server.js";
-import { sessionState } from "../../src/session/state.js";
+import { resetSessions } from "../setup.js";
 
 let client: Client;
 
@@ -28,7 +28,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await client?.close();
-  sessionState.reset();
+  resetSessions();
 });
 
 describe("tools/list", () => {
@@ -155,7 +155,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
 
   for (const { tool, args } of noSessionCases) {
     it(`${tool}: returns isError envelope with {error: "no_session", message: ...}`, async () => {
-      sessionState.reset(); // ensure no client
+      resetSessions(); // ensure no client
       const result = await client.callTool({ name: tool, arguments: args });
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
@@ -170,7 +170,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
 
 describe("tools/call — schema validation rejects malformed input", () => {
   it("set_breakpoint: missing required 'file' is rejected before reaching the handler", async () => {
-    sessionState.reset();
+    resetSessions();
     // Missing 'file' (required string). The SDK should reject via Zod
     // before the handler runs, surfacing as either a thrown error or
     // an isError envelope — either is acceptable evidence of validation.
@@ -190,7 +190,7 @@ describe("tools/call — schema validation rejects malformed input", () => {
   });
 
   it("set_breakpoint: line:0 is rejected (zod requires positive int)", async () => {
-    sessionState.reset();
+    resetSessions();
     let threw = false;
     let result: any = null;
     try {
@@ -209,7 +209,7 @@ describe("tools/call — schema validation rejects malformed input", () => {
   });
 
   it("clear_console (no args required): handler dispatches without arg-validation rejection — surfaces no_session error envelope, not a transport-level reject", async () => {
-    sessionState.reset();
+    resetSessions();
     const result = await client.callTool({ name: "clear_console", arguments: {} });
     // No session → still expects no_session error envelope, not a transport-level reject.
     expect(result.isError).toBe(true);

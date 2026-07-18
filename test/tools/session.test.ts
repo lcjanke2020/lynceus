@@ -2,17 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { resolve } from "node:path";
-import { sessionState } from "../../src/session/state.js";
+import { getSession, registry } from "../../src/session/state.js";
 import { makeFakeCdp, type FakeCdp } from "../fake-cdp.js";
 
 // IMPLEMENTATION NOTE (Opus PR #10 round-2 Nit): this file uses `vi.mock`
 // to stub chrome-launcher and chrome-remote-interface, deliberately
-// breaking the unified `sessionState.client = fake` seam pattern that
+// breaking the unified setupSession() fake-client seam pattern that
 // every other tool-test file uses. Reason: chrome-launcher's `launch()`
 // and chrome-remote-interface's default export + `.List` are STATIC
-// imports — they're resolved at module-load time, before sessionState
-// even exists. There's no runtime seam to redirect them through; only
-// vitest's module mocking can intercept them. Don't try to "unify the
+// imports — they're resolved at module-load time, before the session
+// registry even exists. There's no runtime seam to redirect them through;
+// only vitest's module mocking can intercept them. Don't try to "unify the
 // style" here; the asymmetry is structural.
 
 // Mock chrome-launcher so launch_chrome doesn't actually spawn Chrome.
@@ -54,7 +54,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // Imports MUST come after vi.mock so the registrar sees the mocked modules.
 import { registerSessionTools } from "../../src/tools/session.js";
-import { autoReset } from "../setup.js";
+import { autoReset, setupSession } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
 autoReset();
@@ -83,14 +83,22 @@ function makeFakeNodeChild(pid = 4242) {
     stdout: PassThrough;
     stderr: PassThrough;
     kill: ReturnType<typeof vi.fn>;
+    signalCode: NodeJS.Signals | null;
   };
   child.pid = pid;
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
+  // Record the delivered signal like a real ChildProcess so a SECOND
+  // killNodeChild() on an already-killed child takes the already-exited
+  // fast path instead of sitting out the full SIGTERM→SIGKILL grace
+  // window (the round-2 shutdown-barrier path closes an owned child that
+  // a later teardown may close again).
+  child.signalCode = null;
   let killed = false;
   child.kill = vi.fn(() => {
     if (!killed) {
       killed = true;
+      child.signalCode = "SIGTERM";
       child.emit("exit", null, "SIGTERM");
     }
     return true;
@@ -269,8 +277,7 @@ describe("launch_chrome", () => {
   });
 
   it("already_session error when a session is already active", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.chromePort = 9999;
+    setupSession();
     const r = await launchChrome.handler({});
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
   });
@@ -318,7 +325,7 @@ describe("attach_chrome", () => {
   });
 
   it("already_session error when session already exists", async () => {
-    sessionState.client = makeFakeCdp() as any;
+    setupSession();
     const r = await attachChrome.handler({});
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
   });
@@ -334,13 +341,14 @@ describe("attach_node", () => {
     );
     expect(r).toEqual({ targetId: "node-target-1", url: "file:///app/server.js" });
     expect(cdpListMock).toHaveBeenCalledWith({ port: 9229, host: "127.0.0.1" });
-    expect(sessionState.kind).toBe("node");
-    expect(sessionState.attached).toBe(true);
+    const s = getSession()!;
+    expect(s.kind).toBe("node");
+    expect(s.attached).toBe(true);
     // Attach mode: we did NOT launch the process, so ownedProcess stays
     // null and close_session won't kill it.
-    expect(sessionState.ownedProcess).toBeNull();
-    expect(sessionState.currentTargetId).toBe("node-target-1");
-    expect(sessionState.chromePort).toBe(9229);
+    expect(s.ownedProcess).toBeNull();
+    expect(s.currentTargetId).toBe("node-target-1");
+    expect(s.chromePort).toBe(9229);
   });
 
   it("defaults port=9229, host=127.0.0.1 when neither is supplied", async () => {
@@ -379,8 +387,7 @@ describe("attach_node", () => {
   });
 
   it("already_session error when a session is already active", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.chromePort = 9999;
+    setupSession();
     const r = await attachNode.handler({ port: 9229 });
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
     // CDP.List must NOT have been called — the guard runs first.
@@ -418,11 +425,12 @@ describe("attach_node", () => {
     expect(r.targetId).toBe("n1");
   });
 
-  it("persists host on sessionState so follow-up CDP.List calls don't fall back to localhost (Ultrareview round 2 — Copilot node.ts:53)", async () => {
+  it("persists host on the session so follow-up CDP.List calls don't fall back to localhost (Ultrareview round 2 — Copilot node.ts:53)", async () => {
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
     await attachNode.handler({ host: "10.0.0.5", port: 9229 });
-    expect(sessionState.chromeHost).toBe("10.0.0.5");
-    expect(sessionState.chromePort).toBe(9229);
+    const s = getSession()!;
+    expect(s.chromeHost).toBe("10.0.0.5");
+    expect(s.chromePort).toBe(9229);
     // Verify list_targets re-uses the persisted host (otherwise a remote
     // attach silently lists localhost targets instead).
     cdpListMock.mockClear();
@@ -435,7 +443,7 @@ describe("attach_node", () => {
     // Before this fix, connectDebugger swallowed Runtime/Debugger.enable
     // errors and attach_node returned success with a half-attached state:
     // no entry pause would fire, no breakpoints would resolve. Now the
-    // failure propagates AND sessionState is rolled back so a follow-up
+    // failure propagates AND the session is rolled back so a follow-up
     // attach attempt isn't blocked by already_session.
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
     const fake = nextFakeForConnect!;
@@ -445,13 +453,17 @@ describe("attach_node", () => {
     const r = await attachNode.handler({ port: 9229 });
     const err = parseErrorEnvelope(r);
     expect(err?.message).toContain("Debugger.enable not supported");
-    // sessionState must be fully reset — the next attach must not see
-    // already_session against the dead client.
-    expect(sessionState.client).toBeNull();
-    expect(sessionState.kind).toBe("browser"); // reset() default
-    expect(sessionState.chromePort).toBeNull();
-    expect(sessionState.chromeHost).toBeNull();
-    expect(sessionState.currentTargetId).toBeNull();
+    // The reservation must be fully aborted — the next attach must not see
+    // already_session against the dead client. (The failed session's
+    // instance is unreachable by design: it was never activated, so the
+    // registry-level "no session" IS the reset contract now.)
+    expect(getSession()).toBeNull();
+    // ...and prove it end-to-end (round-1 review: getSession()===null alone
+    // can't distinguish "slot freed" from "record wedged with a null
+    // client" — only a successful follow-up attach can).
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(await attachNode.handler({ port: 9229 }));
+    expect(r2.targetId).toBe("n1");
   });
 
   it("select_target returns unsupported_target on a Node session (self-protection)", async () => {
@@ -461,11 +473,8 @@ describe("attach_node", () => {
     // The capability table's original entry exists exactly so the state
     // refactor (removing sessionState.chrome) can't silently misbehave on
     // a Node session.
-    nextFakeForConnect = makeFakeCdp();
-    sessionState.client = nextFakeForConnect as any;
-    sessionState.kind = "node";
-    sessionState.currentTargetId = "n1";
-    sessionState.chromePort = 9229;
+    const { session } = setupSession({ kind: "node", chromePort: 9229 });
+    session.currentTargetId = "n1";
     const r = await selectTarget.handler({ id: "n2" });
     const err = parseErrorEnvelope(r);
     expect(err?.error).toBe("unsupported_target");
@@ -510,9 +519,10 @@ describe("launch_node", () => {
     ]);
     expect(opts).toMatchObject({ cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     expect(cdpListMock).toHaveBeenCalledWith({ port: 4567, host: "127.0.0.1" });
-    expect(sessionState.kind).toBe("node");
-    expect(sessionState.attached).toBe(false);
-    expect(sessionState.ownedProcess).toEqual({ kind: "node", handle: child });
+    const s = getSession()!;
+    expect(s.kind).toBe("node");
+    expect(s.attached).toBe(false);
+    expect(s.ownedProcess).toEqual({ kind: "node", handle: child });
   });
 
   it("forwards cwd, script args, env overrides, inspect mode, and explicit inspector port", async () => {
@@ -541,7 +551,7 @@ describe("launch_node", () => {
   });
 
   it("already_session error runs before spawning a child", async () => {
-    sessionState.client = makeFakeCdp() as any;
+    setupSession();
     const r = await launchNode.handler({ script: fixtureScript });
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
     expect(spawnMock).not.toHaveBeenCalled();
@@ -585,9 +595,47 @@ describe("launch_node", () => {
     const err = parseErrorEnvelope(r);
     expect(err?.message).toContain("Debugger unavailable");
     expect(child.kill).toHaveBeenCalled();
-    expect(sessionState.client).toBeNull();
-    expect(sessionState.ownedProcess).toBeNull();
-    expect(sessionState.kind).toBe("browser");
+    // The failed launch aborted its reservation — no session survives (the
+    // never-activated instance is unreachable by design).
+    expect(getSession()).toBeNull();
+    // ...and prove the slot is actually free (round-1 review): a follow-up
+    // launch must succeed, not hit already_session against a wedged record.
+    mockNodeInspectorStartup(makeFakeNodeChild(), 4568);
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(
+      await launchNode.handler({ script: fixtureScript }),
+    );
+    expect(r2.targetId).toBe("n1");
+  });
+
+  it("close-all racing an in-flight launch: the child dies BEFORE closeAll settles, launch errors, slot ends free (round-1/2 review)", async () => {
+    // Shutdown-races-launch: closeAll() tears down the "starting"
+    // reservation while the launch is still connecting. The shutdown
+    // barrier must OWN the just-spawned child — it is published on the
+    // reserved state immediately after spawn(), so closeAll() kills it
+    // before settling (round 2: previously the child was invisible until
+    // inspector discovery, and process.exit() after closeAll() orphaned
+    // it). The strict activate() invariant then turns the late activation
+    // into a loud failure, the catch releases the just-connected client,
+    // and the slot ends free.
+    const child = mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
+    let killCallsWhenShutdownSettled = -1;
+    cdpListMock.mockImplementation(async () => {
+      await registry.closeAll();
+      killCallsWhenShutdownSettled = child.kill.mock.calls.length;
+      return [{ id: "n1", type: "node", url: "" }];
+    });
+    const r = await launchNode.handler({ script: fixtureScript });
+    expect(parseErrorEnvelope(r)).not.toBeNull();
+    // The load-bearing round-2 assertion: no spawned child is still live
+    // when closeAll() settles.
+    expect(killCallsWhenShutdownSettled).toBeGreaterThanOrEqual(1);
+    expect(getSession()).toBeNull();
+    // Slot is free — a follow-up attach succeeds.
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(await attachNode.handler({}));
+    expect(r2.targetId).toBe("n1");
   });
 
   it("close_session kills a launched Node child because lynceus owns it", async () => {
@@ -595,10 +643,11 @@ describe("launch_node", () => {
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
 
     await launchNode.handler({ script: fixtureScript });
-    expect(sessionState.ownedProcess).toEqual({ kind: "node", handle: child });
+    const s = getSession()!;
+    expect(s.ownedProcess).toEqual({ kind: "node", handle: child });
     expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
     expect(child.kill).toHaveBeenCalled();
-    expect(sessionState.client).toBeNull();
+    expect(s.client).toBeNull();
   });
 
   // SIGTERM → grace → SIGKILL escalation on owned Node children.
@@ -705,13 +754,11 @@ describe("close_session", () => {
     expect(parseOkEnvelope(await closeSession.handler({}))).toBe("no active session");
   });
 
-  it("calls sessionState.close() and resets state when a session is active", async () => {
-    const fake = makeFakeCdp();
-    sessionState.client = fake as any;
-    sessionState.chromePort = 9999;
+  it("calls the session's close() and resets state when a session is active", async () => {
+    const { session } = setupSession();
     expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
-    // After close, sessionState.client is null again.
-    expect(sessionState.client).toBeNull();
+    // After close, the session's client is null again.
+    expect(session.client).toBeNull();
   });
 });
 
@@ -722,9 +769,8 @@ describe("list_targets", () => {
   });
 
   it("projects targets with active flag for the current target", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.chromePort = 9999;
-    sessionState.currentTargetId = "page1";
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
     cdpListMock.mockResolvedValue([
       { id: "page1", type: "page", url: "http://x/", title: "Home" },
       { id: "page2", type: "page", url: "http://x/admin", title: "Admin" },
@@ -744,9 +790,8 @@ describe("select_target", () => {
   });
 
   it("returns 'already-active' when id matches current target without reconnecting", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.currentTargetId = "page1";
-    sessionState.chromePort = 9999;
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
     cdpListMock.mockClear();
     const r = parseOkEnvelope<{ id: string; status: string }>(
       await selectTarget.handler({ id: "page1" }),
@@ -754,6 +799,33 @@ describe("select_target", () => {
     expect(r).toEqual({ id: "page1", status: "already-active" });
     // Critical: should NOT have called CDP.List — that's the fast-path guard.
     expect(cdpListMock).not.toHaveBeenCalled();
+  });
+
+  it("failed reconnect frees the registry slot: a fresh attach recovers, never deadlocks (round-1 P1)", async () => {
+    // Round-1 blocking finding: switchTarget nulls the client on an ACTIVE
+    // record before reconnecting. When the reconnect failed, the record
+    // survived active-but-clientless — invisible to close_session (client
+    // sentinel) yet still counted by reserve(), so every follow-up
+    // launch/attach returned already_session until the server restarted.
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+    const badFake = makeFakeCdp();
+    badFake.respond("Debugger.enable", () => {
+      throw new Error("target vanished mid-switch");
+    });
+    nextFakeForConnect = badFake;
+    const failed = await selectTarget.handler({ id: "page2" });
+    expect(parseErrorEnvelope(failed)).not.toBeNull();
+    // The record must be gone, not wedged: accessors see no session AND the
+    // capacity guard lets a fresh attach through.
+    expect(getSession()).toBeNull();
+    nextFakeForConnect = makeFakeCdp();
+    const r = await attachChrome.handler({});
+    expect(parseErrorEnvelope(r)).toBeNull();
   });
 });
 

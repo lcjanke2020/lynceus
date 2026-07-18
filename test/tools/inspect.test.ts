@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { sessionState } from "../../src/session/state.js";
 import { registerInspectTools } from "../../src/tools/inspect.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
@@ -127,8 +126,8 @@ describe("get_scope", () => {
     ] as any;
 
   it("default (no scope_type) merges block + local so block-scoped vars surface; innermost wins", async () => {
-    const { fake } = setupSession();
-    sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
+    const { fake, session } = setupSession();
+    session.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
     fake.respond("Runtime.getProperties", (params: any) => {
       if (params.objectId === "scope-block")
         return {
@@ -169,8 +168,8 @@ describe("get_scope", () => {
   });
 
   it("explicit scope_type reads exactly one scope (single-scope path unchanged)", async () => {
-    const { fake } = setupSession();
-    sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
+    const { fake, session } = setupSession();
+    session.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
     fake.respond("Runtime.getProperties", (params: any) => {
       if (params.objectId === "scope-block")
         return { result: [{ name: "i", value: { type: "number", value: 3 } }] };
@@ -187,10 +186,10 @@ describe("get_scope", () => {
   });
 
   it("merged default throws no_scope naming the lexical set when the frame has no lexical scope", async () => {
-    const { fake } = setupSession();
+    const { fake, session } = setupSession();
     // A frame whose innermost scope is non-lexical (module/global only) — the
     // merge set is empty, so the default path throws no_scope.
-    sessionState.pause.onPaused(
+    session.pause.onPaused(
       fake.makePauseState({
         callFrames: [
           {
@@ -215,8 +214,8 @@ describe("get_scope", () => {
   });
 
   it("merged default short-circuits: stops fetching outer scopes once max_props is exceeded", async () => {
-    const { fake } = setupSession();
-    sessionState.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
+    const { fake, session } = setupSession();
+    session.pause.onPaused(fake.makePauseState({ callFrames: blockLocalFrame() }));
     fake.respond("Runtime.getProperties", (params: any) => {
       if (params.objectId === "scope-block")
         return { result: Array.from({ length: 60 }, (_, n) => ({ name: `b${n}`, value: { type: "number", value: n } })) };

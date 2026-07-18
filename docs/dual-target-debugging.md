@@ -165,13 +165,23 @@ class SessionRegistry {
   //   mints the id and a fresh SessionState with status "starting". The per-kind
   //   capacity check and label-uniqueness check run HERE, counting reservations —
   //   two concurrent same-kind launches cannot both pass.
-  activate(id: SessionId): void;    // "starting" → "active"; only now visible to tools
-  abort(id: SessionId): Promise<void>;
+  activate(id: SessionId): void;    // "starting" → "active"; only now visible to tools.
+  //   STRICT invariant: throws when the record is missing or not "starting"
+  //   (a close/shutdown raced the startup) — the caller's abort() then
+  //   closes the held state. (PR 3 round-1 review hardening.)
+  abort(record: SessionRecord): Promise<void>;
   //   rollback for a failed launch/attach: closes the partial state (kills an owned
   //   process if one was spawned) and deletes the reservation, freeing capacity.
-  get(id?: SessionId): SessionState;      // resolution rules of §2 — ACTIVE records only
+  //   Takes the RECORD, not the id, so rollback can still close the held state
+  //   when a racing close/shutdown already deleted the record — and it re-runs
+  //   state.close() unconditionally (idempotent) because a racing teardown may
+  //   predate startup's last mutations. (PR 3 round-1 review hardening.)
+  get(id?: SessionId): SessionState | null; // resolution rules of §2 — ACTIVE records
+  //   only; null when nothing resolves (no live session / unknown id)
   list(): SessionSummary[];               // active records: { session, kind, label, attached, paused, url? }
-  close(id?: SessionId): Promise<void>;   // flips to "closing" first (re-entrancy safe)
+  close(id?: SessionId): Promise<void>;   // flips to "closing" first; re-entrant close()
+  //   and closeAll() await the same memoized in-flight teardown rather than
+  //   skipping a record that is already "closing". (PR 3 round-1 hardening.)
   closeAll(): Promise<void>;              // shutdown path (index.ts); errors aggregated, not masked
   nextSeq(): number;
 }

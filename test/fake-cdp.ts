@@ -1,8 +1,9 @@
 // Fake CDP client for L2 tool-contract tests.
 //
-// The linchpin file. Tests assign `sessionState.client = makeFakeCdp() as
-// unknown as CDP.Client` and drive the same handler entry points that the
-// production MCP server registers. Quality of the L2 layer hinges on this
+// The linchpin file. Tests wire `makeFakeCdp() as unknown as CDP.Client`
+// into a registry-minted session's `client` (via test/setup.ts#setupSession)
+// and drive the same handler entry points that the production MCP server
+// registers. Quality of the L2 layer hinges on this
 // fake faithfully mirroring three real-Chrome contracts:
 //
 // 1. flatten:true session events — events arrive on the root socket with
@@ -78,7 +79,7 @@ export interface MakePauseStateOpts {
 
 export interface FakeCdp extends EventEmitter {
   // Surface that mirrors `chrome-remote-interface`'s Client. Tests cast
-  // `as unknown as CDP.Client` when assigning to sessionState.client.
+  // `as unknown as CDP.Client` when assigning to a session's client.
   send(method: string, params?: any, sessionId?: string): Promise<any>;
   close(): Promise<void>;
 
