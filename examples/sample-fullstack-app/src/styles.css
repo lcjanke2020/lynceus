@@ -1,0 +1,78 @@
+:root {
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 2px solid #1a1a1a;
+  padding-bottom: 0.5rem;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+
+#cart-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+#api-error {
+  color: #a4262c;
+  border: 1px solid #a4262c;
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+
+#products {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 1rem;
+}
+
+.product {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  padding: 1rem;
+}
+
+.product h2 {
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
+}
+
+.price {
+  color: #555;
+  margin: 0 0 0.75rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #1a1a1a;
+  border-radius: 4px;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #333;
+}
