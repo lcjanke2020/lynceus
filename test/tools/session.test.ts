@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { resolve } from "node:path";
-import { getSession } from "../../src/session/state.js";
+import { getSession, registry } from "../../src/session/state.js";
 import { makeFakeCdp, type FakeCdp } from "../fake-cdp.js";
 
 // IMPLEMENTATION NOTE (Opus PR #10 round-2 Nit): this file uses `vi.mock`
@@ -450,6 +450,12 @@ describe("attach_node", () => {
     // instance is unreachable by design: it was never activated, so the
     // registry-level "no session" IS the reset contract now.)
     expect(getSession()).toBeNull();
+    // ...and prove it end-to-end (round-1 review: getSession()===null alone
+    // can't distinguish "slot freed" from "record wedged with a null
+    // client" — only a successful follow-up attach can).
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(await attachNode.handler({ port: 9229 }));
+    expect(r2.targetId).toBe("n1");
   });
 
   it("select_target returns unsupported_target on a Node session (self-protection)", async () => {
@@ -584,6 +590,37 @@ describe("launch_node", () => {
     // The failed launch aborted its reservation — no session survives (the
     // never-activated instance is unreachable by design).
     expect(getSession()).toBeNull();
+    // ...and prove the slot is actually free (round-1 review): a follow-up
+    // launch must succeed, not hit already_session against a wedged record.
+    mockNodeInspectorStartup(makeFakeNodeChild(), 4568);
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(
+      await launchNode.handler({ script: fixtureScript }),
+    );
+    expect(r2.targetId).toBe("n1");
+  });
+
+  it("close-all racing an in-flight launch: launch errors, cleans up, and frees the slot (round-1 review)", async () => {
+    // Shutdown-races-launch: closeAll() tears down the "starting"
+    // reservation while the launch is still connecting. The strict
+    // activate() invariant must turn the late activation into a loud
+    // failure (not a silent success for an untracked live session), the
+    // catch path must release the just-connected client and child, and the
+    // slot must end up free.
+    const child = mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
+    cdpListMock.mockImplementation(async () => {
+      await registry.closeAll();
+      return [{ id: "n1", type: "node", url: "" }];
+    });
+    const r = await launchNode.handler({ script: fixtureScript });
+    expect(parseErrorEnvelope(r)).not.toBeNull();
+    expect(child.kill).toHaveBeenCalled();
+    expect(getSession()).toBeNull();
+    // Slot is free — a follow-up attach succeeds.
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(await attachNode.handler({}));
+    expect(r2.targetId).toBe("n1");
   });
 
   it("close_session kills a launched Node child because lynceus owns it", async () => {
@@ -747,6 +784,33 @@ describe("select_target", () => {
     expect(r).toEqual({ id: "page1", status: "already-active" });
     // Critical: should NOT have called CDP.List — that's the fast-path guard.
     expect(cdpListMock).not.toHaveBeenCalled();
+  });
+
+  it("failed reconnect frees the registry slot: a fresh attach recovers, never deadlocks (round-1 P1)", async () => {
+    // Round-1 blocking finding: switchTarget nulls the client on an ACTIVE
+    // record before reconnecting. When the reconnect failed, the record
+    // survived active-but-clientless — invisible to close_session (client
+    // sentinel) yet still counted by reserve(), so every follow-up
+    // launch/attach returned already_session until the server restarted.
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+    const badFake = makeFakeCdp();
+    badFake.respond("Debugger.enable", () => {
+      throw new Error("target vanished mid-switch");
+    });
+    nextFakeForConnect = badFake;
+    const failed = await selectTarget.handler({ id: "page2" });
+    expect(parseErrorEnvelope(failed)).not.toBeNull();
+    // The record must be gone, not wedged: accessors see no session AND the
+    // capacity guard lets a fresh attach through.
+    expect(getSession()).toBeNull();
+    nextFakeForConnect = makeFakeCdp();
+    const r = await attachChrome.handler({});
+    expect(parseErrorEnvelope(r)).toBeNull();
   });
 });
 

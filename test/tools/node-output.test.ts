@@ -391,9 +391,12 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     // Regression for the close-vs-reset race. close_session resets the
     // session instance, but the previous child's 'close' event can
     // fire later — the SIGTERM/SIGKILL escalation only waits
-    // for 'exit', not 'close'. Without the cross-session guard, the
-    // late flush would push the previous child's trailing partial line
-    // into the new session's nodeOutput.
+    // for 'exit', not 'close'. Registry-world note (round-1 review): the
+    // stale listener closes over the OLD instance, so cross-session
+    // contamination is structurally impossible now and the
+    // ownedProcessGeneration guard is defense-in-depth (it stops the dead
+    // instance's buffer from mutating post-reset). This test pins the
+    // observable contract either way: the new session's buffer stays clean.
     const child1 = arrangeLaunchedNode(4567);
     await launchNode.handler({ script: fixtureScript });
     // Sanity: write a trailing-partial line so the 'close' flush has
