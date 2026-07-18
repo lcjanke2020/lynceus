@@ -5,7 +5,7 @@ import { PauseTracker } from "./pause.js";
 import { RingBuffer, type ConsoleEntry, type NetworkEntry, type NodeOutputEntry } from "./buffers.js";
 import { ScriptStore } from "../sourcemap/store.js";
 import { log } from "../util/log.js";
-import { noSession, notPaused, unsupportedTarget } from "../util/errors.js";
+import { alreadySession, noSession, notPaused, unsupportedTarget } from "../util/errors.js";
 import { TOOL_KIND_SUPPORT } from "./capabilities.js";
 
 export interface BreakpointBinding {
@@ -257,19 +257,161 @@ export async function killNodeChild(
   if (postKillTimer) clearTimeout(postKillTimer);
 }
 
-export const sessionState = new SessionState();
+// ── Session registry ────────────────────────────────────────────────────────
+// Replaces the former `sessionState` singleton *slot*. Every piece of
+// per-session data was already an instance field on SessionState; the registry
+// owns which instances exist. See docs/dual-target-debugging.md §4.
 
-export function getSession(): SessionState | null {
-  return sessionState.client ? sessionState : null;
+// Debug-target session id: kind-prefixed and ordinal ("browser_1", "node_1"),
+// minted by the registry at launch/attach, monotonic per kind for the life of
+// the process — a closed session's id is never recycled, so a stale id can
+// never silently alias a new session. (Design doc §3. Distinct from the CDP
+// child-session `session_id` axis — see doc §2.)
+export type SessionId = string;
+
+export type SessionStatus = "starting" | "active" | "closing";
+
+export interface SessionRecord {
+  id: SessionId;
+  kind: SessionKind;
+  label?: string;
+  status: SessionStatus;
+  state: SessionState;
 }
 
-export function requireSession(): SessionState {
-  if (!sessionState.client) throw noSession();
-  return sessionState;
+// Startup is atomic by construction: reserve → initialize → activate, with
+// abort() as the rollback. A half-built session is never observable through
+// the accessors (they resolve ACTIVE records only), and a failed launch never
+// leaves a ghost record or permanently consumed capacity.
+class SessionRegistry {
+  private readonly records = new Map<SessionId, SessionRecord>();
+  private readonly counters: Record<SessionKind, number> = { browser: 0, node: 0 };
+
+  // Mints the id and a fresh SessionState at status "starting". The capacity
+  // check runs HERE, counting reservations, so two concurrent launches can
+  // never both pass the guard. Interim posture: the check is TOTAL (any live
+  // record blocks) to preserve the single-session behavior of the four old
+  // `alreadySession()` guard sites bit-for-bit; the lifecycle-exposure PR
+  // flips it to per-kind and adds label uniqueness (`duplicate_label`).
+  reserve(kind: SessionKind, label?: string): SessionRecord {
+    if (this.records.size > 0) throw alreadySession();
+    this.counters[kind] += 1;
+    const state = new SessionState();
+    state.kind = kind;
+    const record: SessionRecord = {
+      id: `${kind}_${this.counters[kind]}`,
+      kind,
+      ...(label !== undefined ? { label } : {}),
+      status: "starting",
+      state,
+    };
+    this.records.set(record.id, record);
+    return record;
+  }
+
+  activate(id: SessionId): void {
+    const record = this.records.get(id);
+    if (record) record.status = "active";
+  }
+
+  // Rollback for a failed launch/attach: closes the partial state (kills an
+  // owned process if one was spawned) and deletes the reservation, freeing
+  // the capacity reserve() consumed.
+  async abort(id: SessionId): Promise<void> {
+    const record = this.records.get(id);
+    if (!record) return;
+    record.status = "closing";
+    try {
+      await record.state.close();
+    } finally {
+      this.records.delete(id);
+    }
+  }
+
+  // Resolution per design doc §2, ACTIVE records only. With the total
+  // capacity check above, "no id" can only mean the one active record;
+  // the >1 branch is unreachable until per-kind capacity lands, so it is a
+  // loud invariant error rather than a silent wrong pick (`ambiguous_session`
+  // replaces it in the lifecycle-exposure PR).
+  get(id?: SessionId): SessionState | null {
+    if (id !== undefined) {
+      const record = this.records.get(id);
+      return record?.status === "active" ? record.state : null;
+    }
+    let only: SessionRecord | null = null;
+    for (const record of this.records.values()) {
+      if (record.status !== "active") continue;
+      if (only) throw new Error("invariant: multiple active sessions cannot exist at total capacity 1");
+      only = record;
+    }
+    return only?.state ?? null;
+  }
+
+  // Close one session: the addressed record, or (id omitted) the single
+  // not-already-closing record. Flips to "closing" FIRST so a re-entrant
+  // close resolves nothing instead of double-closing; the record is dropped
+  // even when close() rejects (state.close() resets in its own finally).
+  async close(id?: SessionId): Promise<void> {
+    let record: SessionRecord | undefined;
+    if (id !== undefined) {
+      record = this.records.get(id);
+    } else {
+      record = [...this.records.values()].find((r) => r.status !== "closing");
+    }
+    if (!record || record.status === "closing") return;
+    record.status = "closing";
+    try {
+      await record.state.close();
+    } finally {
+      this.records.delete(record.id);
+    }
+  }
+
+  // Shutdown path (index.ts). Errors are aggregated, not masked: one
+  // session's rejection must never hide another session's close.
+  async closeAll(): Promise<void> {
+    const ids = [...this.records.keys()];
+    const results = await Promise.allSettled(ids.map((id) => this.close(id)));
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((f) => f.reason),
+        "one or more sessions failed to close",
+      );
+    }
+  }
+
+  // Test seam (test/setup.ts#resetSessions): drop every record WITHOUT
+  // close() side effects — the L2 suites wire fake clients and fake child
+  // processes whose kill/close must not fire from teardown. Instance-per-
+  // session makes per-instance reset unnecessary for isolation: a dropped
+  // record's late callbacks close over their own dead instance. Production
+  // teardown always goes through close()/closeAll().
+  resetForTests(): void {
+    this.records.clear();
+  }
 }
 
-export function requirePaused(): SessionState {
-  const s = requireSession();
+export const registry = new SessionRegistry();
+
+// The accessors keep their pre-registry names and gain an optional session
+// id. They also keep the `client` liveness sentinel the singleton accessors
+// had: an active record whose client is (still or temporarily) null reads as
+// "no session" — switchTarget relies on exactly that window while it swaps
+// CDP sockets on the same record.
+export function getSession(session?: SessionId): SessionState | null {
+  const s = registry.get(session);
+  return s?.client ? s : null;
+}
+
+export function requireSession(session?: SessionId): SessionState {
+  const s = getSession(session);
+  if (!s) throw noSession();
+  return s;
+}
+
+export function requirePaused(session?: SessionId): SessionState {
+  const s = requireSession(session);
   if (!s.pause.isPaused()) throw notPaused();
   return s;
 }

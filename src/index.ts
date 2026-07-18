@@ -6,7 +6,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "./server.js";
-import { getSession } from "./session/state.js";
+import { registry } from "./session/state.js";
 import { log } from "./util/log.js";
 import { envWithFallback } from "./util/env.js";
 
@@ -179,8 +179,7 @@ async function runStdioServer(): Promise<void> {
   const shutdown = async (signal: string) => {
     log.info(`shutdown signal: ${signal}`);
     try {
-      const session = getSession();
-      if (session) await session.close();
+      await registry.closeAll();
     } catch (e) {
       log.warn("error during shutdown", { error: String(e) });
     }
@@ -259,8 +258,7 @@ async function runSseServer(mode: SseMode): Promise<void> {
     await closeSseClients(clients);
     await closeHttpServer(httpServer);
     try {
-      const session = getSession();
-      if (session) await session.close();
+      await registry.closeAll();
     } catch (e) {
       log.warn("error during shutdown", { error: String(e) });
     }
