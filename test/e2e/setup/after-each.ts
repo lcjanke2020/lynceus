@@ -12,10 +12,10 @@
 
 import { afterEach } from "vitest";
 import { closeSession } from "../../../src/session/browser.js";
-import { sessionState } from "../../../src/session/state.js";
+import { getSession } from "../../../src/session/state.js";
 
 afterEach(async () => {
-  if (sessionState.client) {
+  if (getSession()) {
     try {
       await closeSession();
     } catch {

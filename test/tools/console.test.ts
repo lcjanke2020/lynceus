@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sessionState } from "../../src/session/state.js";
+import { requireSession } from "../../src/session/state.js";
 import { registerConsoleTools } from "../../src/tools/console.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
@@ -15,7 +15,7 @@ const seedConsoleEntry = (
   text: string,
   extra: Partial<{ mappedFile: string; mappedLine: number; url: string; lineNumber: number }> = {},
 ) => {
-  sessionState.console.push({
+  requireSession().console.push({
     ts: Date.now(),
     level,
     text,

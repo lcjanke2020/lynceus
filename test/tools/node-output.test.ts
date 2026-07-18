@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { sessionState } from "../../src/session/state.js";
+import { getSession, requireSession } from "../../src/session/state.js";
 import { makeFakeCdp, type FakeCdp } from "../fake-cdp.js";
 
 // Same mock seam as test/tools/session.test.ts — chrome-remote-interface +
@@ -57,7 +57,7 @@ beforeEach(() => {
 });
 
 const seedOutput = (stream: "stdout" | "stderr", text: string) => {
-  sessionState.nodeOutput.push({
+  requireSession().nodeOutput.push({
     ts: Date.now(),
     stream,
     text,
@@ -162,8 +162,8 @@ describe("launch_node → nodeOutput capture pipeline", () => {
 
   // Mocked Node child with controllable stdio. Mirrors makeFakeNodeChild in
   // test/tools/session.test.ts but adds a `kill` no-op (close_session in
-  // these tests goes through autoReset's sessionState.reset(), not through
-  // a real close path that would hit the SIGTERM/SIGKILL escalation).
+  // these tests goes through autoReset's registry drop, not through a real
+  // close path that would hit the SIGTERM/SIGKILL escalation).
   function makeFakeNodeChild(pid = 7777) {
     const child = new EventEmitter() as EventEmitter & {
       pid: number;
@@ -216,7 +216,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     // Clear the startup-banner entry pushed by the test above's regression
     // (capture is wired BEFORE waitForInspector now, so the banner lands in
     // the buffer too). Assertions below pin only what we drive here.
-    sessionState.nodeOutput.clear();
+    requireSession().nodeOutput.clear();
 
     child.stdout.write("hello\nworld\n");
     child.stderr.write("warn: x\n");
@@ -234,7 +234,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
   it("partial lines carry across chunks; \\r\\n is normalized by stripping trailing \\r", async () => {
     const child = arrangeLaunchedNode();
     await launchNode.handler({ script: fixtureScript });
-    sessionState.nodeOutput.clear();
+    requireSession().nodeOutput.clear();
 
     // Split a line across two chunks; second chunk uses \r\n.
     child.stdout.write("part-");
@@ -254,7 +254,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     // AFTER all stdio streams have closed.
     const child = arrangeLaunchedNode();
     await launchNode.handler({ script: fixtureScript });
-    sessionState.nodeOutput.clear();
+    requireSession().nodeOutput.clear();
 
     child.stdout.write("final-without-newline");
     child.emit("close", 0, null);
@@ -269,7 +269,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     // or never sent) would otherwise yield a line ending in '\r'.
     const child = arrangeLaunchedNode();
     await launchNode.handler({ script: fixtureScript });
-    sessionState.nodeOutput.clear();
+    requireSession().nodeOutput.clear();
 
     child.stdout.write("partial-cr\r");
     child.emit("close", 0, null);
@@ -286,7 +286,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     // continuation is implicit via adjacent `seq` on the same `stream`.
     const child = arrangeLaunchedNode();
     await launchNode.handler({ script: fixtureScript });
-    sessionState.nodeOutput.clear();
+    requireSession().nodeOutput.clear();
 
     const blob = "y".repeat(2500);
     child.stdout.write(blob);
@@ -325,8 +325,8 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     // failure modes that throw BEFORE its inner Runtime/Debugger init
     // catch runs: CDP.List rejecting, the type === "node" filter
     // yielding zero targets, and CDP() rejecting before
-    // sessionState.client is assigned. None of those reach
-    // connectNodeInspector's own sessionState.close() — they escape
+    // s.client is assigned. None of those reach
+    // connectNodeInspector's own s.close() — they escape
     // straight to launchNode's outer catch, which previously did NOT
     // reset state. Without the outer-catch reset, the inspector
     // banner captured during the successful waitForInspector phase
@@ -345,9 +345,10 @@ describe("launch_node → nodeOutput capture pipeline", () => {
 
     const r = await launchNode.handler({ script: fixtureScript });
     expect(parseErrorEnvelope(r)?.error).toBeDefined();
-    // Buffer is clean even though waitForInspector succeeded and the
-    // banner was captured into nodeOutput before the failure.
-    expect(sessionState.nodeOutput.size()).toBe(0);
+    // The failed launch aborted its reservation, taking the banner-carrying
+    // instance (and its dirty nodeOutput) with it — no session survives to
+    // leak into the attach below.
+    expect(getSession()).toBeNull();
 
     const attachNode = sessionTools.get("attach_node")!;
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
@@ -359,7 +360,7 @@ describe("launch_node → nodeOutput capture pipeline", () => {
   it("failed launch_node followed by attach_node leaves nodeOutput empty (upstream re-review — Codex P2 race 1)", async () => {
     // Regression for cross-session contamination on failed launch. The
     // failed attempt's stderr (e.g., an ESM-loader error or any startup
-    // noise) would otherwise sit in sessionState.nodeOutput and be
+    // noise) would otherwise sit in the session's nodeOutput and be
     // exposed by the next attach_node, breaking the documented
     // "attach_node leaves nodeOutput empty" contract.
     const failingChild = makeFakeNodeChild(8888);
@@ -374,9 +375,9 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     });
     const failedR = await launchNode.handler({ script: fixtureScript });
     expect(parseErrorEnvelope(failedR)?.error).toBe("launch_failed");
-    // Sanity: failed-launch path called sessionState.reset() so the buffer
-    // is clean immediately after the failure (before any subsequent attach).
-    expect(sessionState.nodeOutput.size()).toBe(0);
+    // Sanity: the failed-launch path aborted its reservation, so no session
+    // (and no dirty buffer) survives the failure to be seen by the attach.
+    expect(getSession()).toBeNull();
 
     const attachNode = sessionTools.get("attach_node")!;
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
@@ -387,8 +388,8 @@ describe("launch_node → nodeOutput capture pipeline", () => {
   });
 
   it("late 'close' on a previous child does not contaminate a subsequent session (upstream re-review — Codex P2 race 2)", async () => {
-    // Regression for the close-vs-reset race. close_session calls
-    // sessionState.reset(), but the previous child's 'close' event can
+    // Regression for the close-vs-reset race. close_session resets the
+    // session instance, but the previous child's 'close' event can
     // fire later — the SIGTERM/SIGKILL escalation only waits
     // for 'exit', not 'close'. Without the cross-session guard, the
     // late flush would push the previous child's trailing partial line
@@ -400,14 +401,15 @@ describe("launch_node → nodeOutput capture pipeline", () => {
     child1.stdout.write("trailing-from-old-child");
     await new Promise<void>((r) => setImmediate(r));
 
-    // Simulate close_session by resetting directly. This bumps
-    // ownedProcessGeneration, the snapshot guard's invariant.
-    sessionState.reset();
-    expect(sessionState.nodeOutput.size()).toBe(0);
+    // Simulate close_session by resetting the live instance directly. This
+    // bumps ownedProcessGeneration, the snapshot guard's invariant.
+    const s = requireSession();
+    s.reset();
+    expect(s.nodeOutput.size()).toBe(0);
 
-    // Spin up a fresh Node session. setupSession internally calls
-    // reset() once more, bumping the generation again — both bumps
-    // invalidate child1's listener.
+    // Spin up a fresh Node session. setupSession drops the old record and
+    // mints a fresh instance; child1's listener still closes over the OLD
+    // instance, whose bumped generation invalidates it.
     setupSession({ kind: "node" });
 
     // NOW the old child's 'close' fires. Without the guard, this would

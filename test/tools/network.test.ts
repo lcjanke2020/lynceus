@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sessionState } from "../../src/session/state.js";
+import { requireSession } from "../../src/session/state.js";
 import { registerNetworkTools } from "../../src/tools/network.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
@@ -27,7 +27,7 @@ const seedReq = (
     sessionId: string;
   }> = {},
 ) => {
-  sessionState.network.push({
+  requireSession().network.push({
     requestId,
     ts: Date.now(),
     url,

@@ -12,7 +12,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { createServer, request, type Server, type ClientRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { handleSseRequest, type SseClient } from "../../src/index.js";
-import { sessionState } from "../../src/session/state.js";
+import { resetSessions } from "../setup.js";
 
 let httpServer: Server | undefined;
 let clientReq: ClientRequest | undefined;
@@ -41,7 +41,7 @@ afterEach(async () => {
     await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
     httpServer = undefined;
   }
-  sessionState.reset();
+  resetSessions();
   delete process.env.CDP_MCP_SSE_KEEPALIVE_MS;
   delete process.env.LYNCEUS_SSE_KEEPALIVE_MS;
 });

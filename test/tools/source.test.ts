@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { sessionState } from "../../src/session/state.js";
 import { registerSourceTools } from "../../src/tools/source.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
@@ -20,8 +19,8 @@ describe("list_scripts", () => {
   });
 
   it("filters out scripts without a URL", async () => {
-    setupSession();
-    sessionState.scripts.upsert({
+    const { session } = setupSession();
+    session.scripts.upsert({
       scriptId: "anon",
       url: "", // anonymous inline; should be filtered
       startLine: 0, startColumn: 0, endLine: 1, endColumn: 0,
@@ -33,8 +32,8 @@ describe("list_scripts", () => {
   });
 
   it("default mapped_only=true hides scripts without a consumer", async () => {
-    setupSession();
-    sessionState.scripts.upsert({
+    const { session } = setupSession();
+    session.scripts.upsert({
       scriptId: "raw", url: "http://x/raw.js",
       startLine: 0, startColumn: 0, endLine: 1, endColumn: 0,
       executionContextId: 1, hash: "h",
