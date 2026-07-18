@@ -69,6 +69,38 @@ describe("SessionRegistry.close / closeAll — in-flight teardown is awaited", (
     expect(getSession()).toBeNull();
   });
 
+  it("abort() serializes with an in-flight teardown, then re-closes for post-teardown mutations", async () => {
+    const rec = registry.reserve("node");
+    registry.activate(rec.id);
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let closeCalls = 0;
+    rec.state.close = (async () => {
+      closeCalls += 1;
+      if (closeCalls === 1) await blocker;
+    }) as Session["close"];
+
+    const inFlight = registry.close(rec.id);
+    let abortSettled = false;
+    const aborting = registry.abort(rec).then(() => {
+      abortSettled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // While the first teardown is still in flight, abort must neither
+    // re-enter close() concurrently nor settle.
+    expect(closeCalls).toBe(1);
+    expect(abortSettled).toBe(false);
+
+    release();
+    await Promise.all([inFlight, aborting]);
+    // ...and it re-ran the close afterwards — the earlier teardown may
+    // predate startup's last mutations.
+    expect(closeCalls).toBe(2);
+    expect(getSession()).toBeNull();
+  });
+
   it("closeAll() aggregates a rejected close instead of masking it, and still drops the record", async () => {
     const rec = registry.reserve("node");
     registry.activate(rec.id);

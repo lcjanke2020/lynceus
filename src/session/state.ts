@@ -345,6 +345,17 @@ class SessionRegistry {
   // just-connected state.)
   async abort(record: SessionRecord): Promise<void> {
     record.status = "closing";
+    // Serialize with any in-flight close()/closeAll() teardown of the same
+    // record before re-closing (round-3 hardening): the overlap was benign
+    // — SessionState.close()'s side effects are individually idempotent —
+    // but unordered. Await the earlier teardown first (swallowing its
+    // rejection so the lifecycle error that triggered this rollback stays
+    // primary), THEN re-run state.close(): the earlier teardown may
+    // predate startup's last mutations (a new client, a new child), and
+    // the re-close is what releases those.
+    if (record.closePromise) {
+      await record.closePromise.catch(() => {});
+    }
     try {
       await record.state.close();
     } finally {

@@ -174,10 +174,10 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
       // the post-connect activate() invariant (registry round-1 hardening)
       // throws with a LIVE client that only close() releases. close() runs
       // first so an owned child goes through the proper SIGTERM→SIGKILL
-      // escalation; killChild stays for the pre-init paths where
-      // ownedProcess was never assigned. Both are idempotent, and close()
-      // still clears nodeOutput + bumps ownedProcessGeneration via its
-      // internal reset().
+      // escalation; since the round-2 early ownedProcess publish, every
+      // post-spawn path has ownership, so killChild is belt-and-suspenders
+      // only. Both are idempotent, and close() still clears nodeOutput +
+      // bumps ownedProcessGeneration via its internal reset().
       await s.close();
       killChild(child);
       throw e;
