@@ -138,8 +138,13 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
     try {
       startup = await waitForInspector(child, DEFAULT_LAUNCH_TIMEOUT_MS);
     } catch (e) {
-      killChild(child);
-      s.reset();
+      // close(), not killChild + reset (round-4 Copilot): ownedProcess is
+      // already published, so close() tears the child down through the
+      // awaited SIGTERM→SIGKILL escalation — the bare killChild it
+      // replaces sent one unawaited SIGTERM, which a hung startup could
+      // ignore — and its internal reset() still clears nodeOutput and
+      // bumps ownedProcessGeneration before the rethrow.
+      await s.close();
       throw e;
     }
 
