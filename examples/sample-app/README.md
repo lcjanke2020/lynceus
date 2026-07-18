@@ -1,6 +1,6 @@
 # examples/sample-app/
 
-**Last updated: 2026-05-16**
+**Last updated: 2026-07-17**
 
 The shared web-app fixture used by L3 e2e tests and L4 evals. A small Vite + TypeScript app with intentional bugs the agent is supposed to find.
 
@@ -40,7 +40,7 @@ Other scenarios use their own copies under `evals/sample-app-variants/<name>/`. 
 | `network-bug` | A fetch that fails silently. |
 | `worker-bug` | A bug that only manifests in the Web Worker. |
 
-All 14 L4 scenarios are now registered (8 debugger + 6 driving/session-portability from issue #12). `compute-step` is the canonical demo (root [README](../../README.md) + `npm run eval:quick` target); the rest run via `npm run eval`. See [evals/README.md](../../evals/README.md) for the full scenario table.
+All 18 L4 scenarios are now registered (14 browser — 8 debugger + 6 driving/session-portability from issue #12 — plus 4 Node scenarios on `sample-node-app`). `compute-step` is the canonical demo (root [README](../../README.md) + `npm run eval:quick` target); the rest run via `npm run eval`. See [evals/README.md](../../evals/README.md) for the full scenario table.
 
 ## Running standalone
 
