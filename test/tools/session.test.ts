@@ -83,14 +83,22 @@ function makeFakeNodeChild(pid = 4242) {
     stdout: PassThrough;
     stderr: PassThrough;
     kill: ReturnType<typeof vi.fn>;
+    signalCode: NodeJS.Signals | null;
   };
   child.pid = pid;
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
+  // Record the delivered signal like a real ChildProcess so a SECOND
+  // killNodeChild() on an already-killed child takes the already-exited
+  // fast path instead of sitting out the full SIGTERM→SIGKILL grace
+  // window (the round-2 shutdown-barrier path closes an owned child that
+  // a later teardown may close again).
+  child.signalCode = null;
   let killed = false;
   child.kill = vi.fn(() => {
     if (!killed) {
       killed = true;
+      child.signalCode = "SIGTERM";
       child.emit("exit", null, "SIGTERM");
     }
     return true;
@@ -600,21 +608,28 @@ describe("launch_node", () => {
     expect(r2.targetId).toBe("n1");
   });
 
-  it("close-all racing an in-flight launch: launch errors, cleans up, and frees the slot (round-1 review)", async () => {
+  it("close-all racing an in-flight launch: the child dies BEFORE closeAll settles, launch errors, slot ends free (round-1/2 review)", async () => {
     // Shutdown-races-launch: closeAll() tears down the "starting"
-    // reservation while the launch is still connecting. The strict
-    // activate() invariant must turn the late activation into a loud
-    // failure (not a silent success for an untracked live session), the
-    // catch path must release the just-connected client and child, and the
-    // slot must end up free.
+    // reservation while the launch is still connecting. The shutdown
+    // barrier must OWN the just-spawned child — it is published on the
+    // reserved state immediately after spawn(), so closeAll() kills it
+    // before settling (round 2: previously the child was invisible until
+    // inspector discovery, and process.exit() after closeAll() orphaned
+    // it). The strict activate() invariant then turns the late activation
+    // into a loud failure, the catch releases the just-connected client,
+    // and the slot ends free.
     const child = mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
+    let killCallsWhenShutdownSettled = -1;
     cdpListMock.mockImplementation(async () => {
       await registry.closeAll();
+      killCallsWhenShutdownSettled = child.kill.mock.calls.length;
       return [{ id: "n1", type: "node", url: "" }];
     });
     const r = await launchNode.handler({ script: fixtureScript });
     expect(parseErrorEnvelope(r)).not.toBeNull();
-    expect(child.kill).toHaveBeenCalled();
+    // The load-bearing round-2 assertion: no spawned child is still live
+    // when closeAll() settles.
+    expect(killCallsWhenShutdownSettled).toBeGreaterThanOrEqual(1);
     expect(getSession()).toBeNull();
     // Slot is free — a follow-up attach succeeds.
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);

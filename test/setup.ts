@@ -15,7 +15,12 @@ export interface SessionFixture {
 }
 
 export interface SetupOpts {
-  /** Skip registering the session — for tests that exercise the no_session error path. */
+  /**
+   * Exercise the no_session error path: the instance is configured but its
+   * registry record is DROPPED (not just left clientless), so the accessors
+   * see no session and a follow-up launch/attach is not blocked by the
+   * capacity guard — mirroring the old clientless-singleton semantics.
+   */
   noClient?: boolean;
   /** Mark the debugger as paused before the test starts, with an optional sessionId. */
   paused?: boolean;

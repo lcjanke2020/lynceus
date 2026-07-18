@@ -161,20 +161,30 @@ describe("launch_node → nodeOutput capture pipeline", () => {
   const fixtureScript = "test/fixtures/node-launch-entry.js";
 
   // Mocked Node child with controllable stdio. Mirrors makeFakeNodeChild in
-  // test/tools/session.test.ts but adds a `kill` no-op (close_session in
-  // these tests goes through autoReset's registry drop, not through a real
-  // close path that would hit the SIGTERM/SIGKILL escalation).
+  // test/tools/session.test.ts: kill() emits 'exit' and records the signal
+  // like a real ChildProcess, so the launch-failure paths that close an
+  // owned child (the round-2 early ownedProcess assignment makes the child
+  // visible to close() from spawn time) resolve killNodeChild's escalation
+  // promptly instead of sitting out the SIGTERM→SIGKILL grace window.
   function makeFakeNodeChild(pid = 7777) {
     const child = new EventEmitter() as EventEmitter & {
       pid: number;
       stdout: PassThrough;
       stderr: PassThrough;
       kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
     };
     child.pid = pid;
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = vi.fn(() => true);
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      if (child.signalCode == null) {
+        child.signalCode = "SIGTERM";
+        child.emit("exit", null, "SIGTERM");
+      }
+      return true;
+    });
     return child;
   }
 
