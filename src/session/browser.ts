@@ -122,7 +122,7 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
     registry.activate(rec.id);
     return { targetId: target.id, url: target.url };
   } catch (e) {
-    await registry.abort(rec.id);
+    await registry.abort(rec);
     throw e;
   }
 }
@@ -164,7 +164,7 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
     registry.activate(rec.id);
     return { targetId: target.id, url: target.url };
   } catch (e) {
-    await registry.abort(rec.id);
+    await registry.abort(rec);
     throw e;
   }
 }
@@ -200,7 +200,10 @@ async function connectToTarget(s: Session, port: number, targetId: string, host?
     // Required Runtime/Debugger enable failed: tear down so a follow-up
     // launch/attach isn't blocked by already_session against a broken
     // session. (Ultrareview round 2 — Codex Medium #1, symmetric with
-    // attach_node's post-init guard.)
+    // attach_node's post-init guard.) Registry-world note: this close()
+    // releases the socket/process state only — freeing the SLOT is the
+    // caller's registry rollback (launch/attach abort(), switchTarget's
+    // failure-path registry.close()).
     log.warn("connectToTarget init failed; tearing down", { error: String(e) });
     await s.close();
     throw e;
@@ -386,7 +389,25 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   s.chromeHost = host ?? null;
   s.attached = attached;
   s.ownedProcess = ownedProcess;
-  await connectToTarget(s, port, targetId, host);
+  try {
+    await connectToTarget(s, port, targetId, host);
+  } catch (e) {
+    // A failed reconnect leaves the record ACTIVE but clientless — the one
+    // state the accessors read as "no session" while reserve() still counts
+    // it (round-1 P1: close_session couldn't reach the record, every
+    // launch/attach hit already_session, and only a server restart
+    // recovered). Route the cleanup through the registry so the record is
+    // deleted and the slot freed. Deliberate delta vs the singleton world:
+    // an OWNED Chrome is now killed here rather than orphaned with its
+    // handle lost. (PR 5 scopes this close to the addressed session once
+    // ids thread through switchTarget.)
+    try {
+      await registry.close();
+    } catch {
+      /* the reconnect error is the one worth surfacing */
+    }
+    throw e;
+  }
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
   return { targetId, url: t?.url ?? "" };

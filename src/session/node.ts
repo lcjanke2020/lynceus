@@ -59,7 +59,7 @@ export async function attachNode(opts: AttachNodeArgs = {}): Promise<{
     registry.activate(rec.id);
     return attached;
   } catch (e) {
-    await registry.abort(rec.id);
+    await registry.abort(rec);
     throw e;
   }
 }
@@ -107,8 +107,8 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
     // prior explicit resume() that launch_node once needed is no longer required.
     attachOutputCapture(s, child);
 
-    // Every launch failure path below MUST call
-    // s.reset() before rethrowing. reset() clears nodeOutput
+    // Every launch failure path below MUST reset the state (s.reset()
+    // directly, or via s.close()) before rethrowing. reset() clears nodeOutput
     // (so a subsequent attach_node doesn't see the failed attempt's
     // startup stderr) AND bumps ownedProcessGeneration (so the
     // attachOutputCapture listeners we attached on the dying child
@@ -155,19 +155,23 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
         script,
       };
     } catch (e) {
+      // Defensive close() even though connectNodeInspector's own
+      // Runtime/Debugger init catch already calls s.close(): the pre-init
+      // failures listed above (CDP.List / target filter / CDP() reject)
+      // escape connectNodeInspector without entering that inner catch, and
+      // the post-connect activate() invariant (registry round-1 hardening)
+      // throws with a LIVE client that only close() releases. close() runs
+      // first so an owned child goes through the proper SIGTERM→SIGKILL
+      // escalation; killChild stays for the pre-init paths where
+      // ownedProcess was never assigned. Both are idempotent, and close()
+      // still clears nodeOutput + bumps ownedProcessGeneration via its
+      // internal reset().
+      await s.close();
       killChild(child);
-      // Defensive: reset() here even though connectNodeInspector's own
-      // Runtime/Debugger init catch already calls s.close().
-      // The pre-init failures listed above (CDP.List / target filter /
-      // CDP() reject) escape connectNodeInspector without ever entering
-      // that inner catch, so we'd otherwise leave nodeOutput dirty for
-      // exactly those failure modes. reset() is idempotent — for the
-      // post-init failure path it just re-clears already-cleared state.
-      s.reset();
       throw e;
     }
   } catch (e) {
-    await registry.abort(rec.id);
+    await registry.abort(rec);
     throw e;
   }
 }

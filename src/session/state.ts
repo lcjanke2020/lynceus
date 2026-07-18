@@ -277,6 +277,11 @@ export interface SessionRecord {
   label?: string;
   status: SessionStatus;
   state: SessionState;
+  // In-flight teardown, memoized so a re-entrant close() — and closeAll()
+  // during shutdown — awaits the same teardown instead of skipping it
+  // (round-1 review: skipping let shutdown exit while a SIGTERM→SIGKILL
+  // escalation was still pending on an owned child).
+  closePromise?: Promise<void>;
 }
 
 // Startup is atomic by construction: reserve → initialize → activate, with
@@ -309,22 +314,41 @@ class SessionRegistry {
     return record;
   }
 
+  // "starting" → "active". Strict invariant (round-1 review): activating a
+  // record that was closed or aborted during startup — the shutdown-races-
+  // launch case — must fail loudly. A silent no-op here would let the
+  // lifecycle caller return success for a live, connected session that no
+  // accessor can see (leaked process + open socket, and every tool
+  // reporting no_session). The throw lands in the caller's catch, whose
+  // abort() closes the held state even though the record is already gone.
   activate(id: SessionId): void {
     const record = this.records.get(id);
-    if (record) record.status = "active";
+    if (!record || record.status !== "starting") {
+      throw new Error(
+        record
+          ? `invariant: cannot activate session ${id} — record status is "${record.status}"`
+          : `invariant: cannot activate session ${id} — the record was closed during startup`,
+      );
+    }
+    record.status = "active";
   }
 
   // Rollback for a failed launch/attach: closes the partial state (kills an
-  // owned process if one was spawned) and deletes the reservation, freeing
-  // the capacity reserve() consumed.
-  async abort(id: SessionId): Promise<void> {
-    const record = this.records.get(id);
-    if (!record) return;
+  // owned process if one was spawned) and drops the reservation, freeing
+  // the capacity reserve() consumed. Takes the RECORD, not the id, and
+  // deliberately does not reuse a memoized closePromise: when a racing
+  // close/closeAll tore the record down while startup was still mutating
+  // the state (assigning a new client, a new child process), that earlier
+  // teardown predates the mutation — rollback must re-run state.close(),
+  // which is idempotent for everything already torn down. (Round-1 review:
+  // an id-keyed abort no-oped after the racing delete and leaked the
+  // just-connected state.)
+  async abort(record: SessionRecord): Promise<void> {
     record.status = "closing";
     try {
       await record.state.close();
     } finally {
-      this.records.delete(id);
+      this.records.delete(record.id);
     }
   }
 
@@ -347,31 +371,23 @@ class SessionRegistry {
     return only?.state ?? null;
   }
 
-  // Close one session: the addressed record, or (id omitted) the single
-  // not-already-closing record. Flips to "closing" FIRST so a re-entrant
-  // close resolves nothing instead of double-closing; the record is dropped
-  // even when close() rejects (state.close() resets in its own finally).
+  // Close one session: the addressed record, or (id omitted) the sole
+  // record. Idempotent and re-entrancy safe: the record flips to "closing"
+  // before the first await, and a second close() — or closeAll() — awaits
+  // the same in-flight teardown via the record's memoized closePromise
+  // instead of skipping it.
   async close(id?: SessionId): Promise<void> {
-    let record: SessionRecord | undefined;
-    if (id !== undefined) {
-      record = this.records.get(id);
-    } else {
-      record = [...this.records.values()].find((r) => r.status !== "closing");
-    }
-    if (!record || record.status === "closing") return;
-    record.status = "closing";
-    try {
-      await record.state.close();
-    } finally {
-      this.records.delete(record.id);
-    }
+    const record = id !== undefined ? this.records.get(id) : [...this.records.values()][0];
+    if (!record) return;
+    await this.closeRecord(record);
   }
 
-  // Shutdown path (index.ts). Errors are aggregated, not masked: one
-  // session's rejection must never hide another session's close.
+  // Shutdown path (index.ts). Awaits every record — including one whose
+  // close is already in flight — and aggregates errors rather than masking
+  // them: one session's rejection must never hide another session's close.
   async closeAll(): Promise<void> {
-    const ids = [...this.records.keys()];
-    const results = await Promise.allSettled(ids.map((id) => this.close(id)));
+    const records = [...this.records.values()];
+    const results = await Promise.allSettled(records.map((r) => this.closeRecord(r)));
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failures.length > 0) {
       throw new AggregateError(
@@ -379,6 +395,20 @@ class SessionRegistry {
         "one or more sessions failed to close",
       );
     }
+  }
+
+  private closeRecord(record: SessionRecord): Promise<void> {
+    if (!record.closePromise) {
+      record.status = "closing";
+      record.closePromise = (async () => {
+        try {
+          await record.state.close();
+        } finally {
+          this.records.delete(record.id);
+        }
+      })();
+    }
+    return record.closePromise;
   }
 
   // Test seam (test/setup.ts#resetSessions): drop every record WITHOUT

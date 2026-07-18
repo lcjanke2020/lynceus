@@ -181,7 +181,11 @@ async function runStdioServer(): Promise<void> {
     try {
       await registry.closeAll();
     } catch (e) {
-      log.warn("error during shutdown", { error: String(e) });
+      log.warn("error during shutdown", {
+        error: String(e),
+        // AggregateError's String() is just the summary — keep the per-session reasons.
+        ...(e instanceof AggregateError ? { errors: e.errors.map(String) } : {}),
+      });
     }
     try {
       await server.close();
@@ -260,7 +264,11 @@ async function runSseServer(mode: SseMode): Promise<void> {
     try {
       await registry.closeAll();
     } catch (e) {
-      log.warn("error during shutdown", { error: String(e) });
+      log.warn("error during shutdown", {
+        error: String(e),
+        // AggregateError's String() is just the summary — keep the per-session reasons.
+        ...(e instanceof AggregateError ? { errors: e.errors.map(String) } : {}),
+      });
     }
     process.exit(0);
   };
