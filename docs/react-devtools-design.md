@@ -29,9 +29,9 @@
 > setter-on-`ReactDevToolsBackend`, single-object listener, sentinel readiness,
 > hook-stub-skip) matches the gate comment.
 >
-> A PR #66 review round (Codex / Fable / Kimi / Copilot, 2026-07-18) tightened §2.1, §2.5,
-> §2.6, §3.2, §4.3, §5.3, §6.1–§6.3 and logged four new reconciliation rows (§6.5 #7–10);
-> the spike findings themselves are unchanged from the original.
+> The PR #66 review rounds (Codex / Fable / Kimi / Copilot, 2026-07-18) tightened §1, §2.1,
+> §2.5, §2.6, §3.2, §4.1, §4.3, §5.3, §6.1–§6.3 and logged four new reconciliation rows
+> (§6.5 #7–10); the spike findings themselves are unchanged from the original.
 
 ## Document status — contributing spikes
 
@@ -161,7 +161,7 @@ function reactSourceToOriginal(store: ScriptStore, source: [string, string, numb
   return mapCdpToOriginal(store, { scriptId: script.scriptId, lineNumber: line - 1, columnNumber: col - 1 }, script.sessionId);
 }
 ```
-So the conclusion (round-trip feasible via existing machinery) holds — but the URL→scriptId index is a small new piece, not zero, and `sessionId` must be preserved.
+So the conclusion (round-trip feasible via existing machinery) holds — but the url → candidates index is a small new piece, not zero, and `sessionId` must be preserved.
 
 **Follow-up (resolved in S3/§3.4):** what `source` do fragments, memo/forwardRef wrappers, and Suspense boundaries report? S3 answered this — `source` is present for memo/forwardRef (pointing at the inner fn) and `null` for the root, `Context.Provider`/`Suspense` boundary fibers, and createRoot-owned structural components (App, Layout, Header, Main). See §3.4.
 
@@ -490,8 +490,8 @@ nodes" = components for which the runtime returns a `[name, url, line, col]` tup
 | 18.3.1 (**prod**) | ✅ | **`bundleType 0`** | **14/14** — identical opcodes | values readable; **edit surface off** | 8/14 | n/a (by design) | ⚠️ **`production_build_detected`** (§4.3) |
 
 The delta stream is identical across all five dev versions too: `increment()` (pure state)
-→ **0** `operations`; `addTodo()` → `ADD` + `REORDER` + `SUSPENSE_RESIZE`; `reorderTodos()`
-→ `REORDER`; stale-closure → `liveCount 6 / staleObserved 0` on every version; transport
+→ **0** `operations`; `addTodo()` → `ADD` + `REORDER_CHILDREN` + `SUSPENSE_RESIZE`; `reorderTodos()`
+→ `REORDER_CHILDREN`; stale-closure → `liveCount 6 / staleObserved 0` on every version; transport
 `gaps: 0, parseErrors: 0` throughout. In other words, everything §2/§3 established on 18.3.1
 holds **unchanged** on 16.8/16.14/17/19 — the v7 `operations` format and the dehydrated
 `inspectElement` envelope are version-invariant because the *backend* produces them, not the
