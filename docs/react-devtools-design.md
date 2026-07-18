@@ -23,11 +23,15 @@
 > the corrected authority on two points where the gate comment has drifted: (1) the `source`
 > tuple points at the component's **definition site**, not the "actual call site" the gate
 > comment described (S3-confirmed; §2.5, §3.4); (2) the gate comment's "no new source-map
-> plumbing needed" undersells it — a `url → scriptId` reverse index is a genuinely new piece,
+> plumbing needed" undersells it — a `url → candidates` reverse index is a genuinely new piece,
 > `sessionId` must be threaded through, and the real signature is
 > `mapCdpToOriginal(store, frame, sessionId)` (§2.5). Everything else (bootstrap ordering,
 > setter-on-`ReactDevToolsBackend`, single-object listener, sentinel readiness,
 > hook-stub-skip) matches the gate comment.
+>
+> A PR #66 review round (Codex / Fable / Kimi / Copilot, 2026-07-18) tightened §2.1, §2.5,
+> §2.6, §3.2, §4.3, §5.3, §6.1–§6.3 and logged four new reconciliation rows (§6.5 #7–10);
+> the spike findings themselves are unchanged from the original.
 
 ## Document status — contributing spikes
 
@@ -49,7 +53,7 @@
 
 Provisional structure to be validated/revised by the spike.
 
-- **Layer 0 — `FrameworkAdapter` seam.** `src/framework/adapter.ts`; tool layer dispatches by framework; only `react` resolves in v1. Mirrors PR #54's `VendorAdapter`.
+- **Layer 0 — `FrameworkAdapter` seam.** `src/framework/adapter.ts`; tool layer dispatches by framework; only `react` resolves in v1. Mirrors the eval harness's `VendorAdapter` seam (`evals/harness/vendor.ts`).
 - **Layer 1 — Backend injection.** `Page.addScriptToEvaluateOnNewDocument` + `Runtime.addBinding({name: "__lynceusReact__"})`, with the binding wired directly into `react-devtools-core`'s `connectWithCustomMessagingProtocol({onSubscribe, onUnsubscribe, onMessage})` — **no hand-rolled Wall needed** (this seed originally proposed a "custom Wall"; §2.1/§2.2 supersede that — the protocol callbacks *are* the Wall). `Page.reload()` after `addScriptToEvaluateOnNewDocument` for already-loaded pages.
 - **Layer 2 — Per-session state.** `reactBridge` field on `SessionState` (cleared on `reset()`; generation counter mirroring LEO-120's `ownedProcessGeneration`); `ReactBridgeEvent` in `buffers.ts`; reused `RingBuffer<T>`.
 - **Layer 3 — Tools.** 8 core MCP tools (+ 2 stretch) in `src/tools/react.ts`: `attach_react_devtools` / `detach_react_devtools` / `get_react_tree` / `inspect_react_component` / `find_react_component` / `start_react_profiling` / `stop_react_profiling` / `get_react_profile`; **stretch:** `override_react_props` / `override_react_hook_state`.
@@ -65,7 +69,7 @@ The v7 backend bundle (`dist/backend.js`, 622 KB UMD, MIT) exposes the following
 
 | Function | Purpose | Useful for |
 |---|---|---|
-| `initialize(settings)` | Patches `console`, sets default appearance settings. Optional. | Settings UI; can skip in v1. |
+| `initialize(settings)` | Installs the bundle's rich hook (calls `installHook(window, …)`) and patches `console` / default appearance settings. | **Mandatory in this architecture** — call before `connectWithCustomMessagingProtocol` (§2.2 step 4): the bootstrap makes the page's inline hook stub skip itself, so skipping `initialize()` leaves no rich hook for React to inject into. Only the *settings* aspect is ignorable in v1. |
 | `connectToDevTools(opts)` | Opens a WebSocket to a frontend on `host:port` (default `localhost:8097`). | Not what we want — it's WebSocket-bound. |
 | `connectWithCustomMessagingProtocol({onSubscribe, onUnsubscribe, onMessage})` | Takes a custom messaging protocol via callbacks; returns an unsubscribe function. | **This is the Wall abstraction we want.** |
 
@@ -145,15 +149,16 @@ Reply event name is **`inspectedElement`** (past-tense; not `inspectElement`). R
 
 (2) **React 18.3.1's source-attribution is runtime stack-based, not `__source` props.** We tested a page that explicitly set `__source: {fileName, lineNumber, columnNumber}` on every `React.createElement` call (simulating `@babel/plugin-transform-react-jsx-source`). The reported `source` for inspected Counter instances was `["Counter", "http://127.0.0.1:8765/react18-jsx.html", 49, 24]` — line 49 is the `function Counter(...)` **definition site**, not the `__source` we passed (nor the `createElement` call sites). So the babel `jsx-source` plugin is **no longer a prerequisite** for source positions; React derives them from the component function's runtime definition location. (S3/§3.4 characterizes this precisely across wrapper types and confirms the "definition site" wording.) **Scope:** this is a **development-build** result — production React builds may strip or alter source attribution, and pre-18 React may still depend on `__source`; do not assume it holds everywhere.
 
-(3) **Source-map plumbing is nearly free — one small addition.** The `scriptUrl` is a live URL (the served HTML in our spike; in a real Vite/webpack app it'd be the bundled JS URL). lynceus's existing `src/sourcemap/store.ts` already tracks `Debugger.scriptParsed` and maps a CDP frame → original TS via the **free function** `mapCdpToOriginal(store, frame, sessionId)`, where `frame` is `{scriptId, lineNumber, columnNumber}`. Two things the round-trip must respect: **(a)** there is **no URL→scriptId reverse lookup today** — `ScriptStore` is keyed by `(sessionId, scriptId)` and exposes `get()` / `all()`; a small `url → script` index over `ScriptInfo.url` is the one genuinely new piece to add. **(b)** scripts are **per flat session**, so the matched script's `sessionId` must be threaded through, or an iframe/worker script routes through the wrong Debugger agent (per the AGENTS.md session-ID rule). Sketch against the real API:
+(3) **Source-map plumbing is nearly free — one small addition.** The `scriptUrl` is a live URL (the served HTML in our spike; in a real Vite/webpack app it'd be the bundled JS URL). lynceus's existing `src/sourcemap/store.ts` already tracks `Debugger.scriptParsed` and maps a CDP frame → original TS via the **free function** `mapCdpToOriginal(store, frame, sessionId)`, where `frame` is `{scriptId, lineNumber, columnNumber}`. Two things the round-trip must respect: **(a)** there is **no URL→scriptId reverse lookup today** — `ScriptStore` is keyed by `(sessionId, scriptId)` and exposes `get()` / `all()`; a small `url → candidates` index over `ScriptInfo.url` is the one genuinely new piece to add (URL alone is **not** unique — inline scripts share the document URL and the same bundle URL can load in multiple realms — so matches must be disambiguated by the originating session/execution context). **(b)** scripts are **per flat session**, so the matched script's `sessionId` must be threaded through, or an iframe/worker script routes through the wrong Debugger agent (per the AGENTS.md session-ID rule). Sketch against the real API:
 ```ts
 function reactSourceToOriginal(store: ScriptStore, source: [string, string, number, number]) {
   const [, scriptUrl, line, col] = source;
-  const script = store.all().find((s) => s.url === scriptUrl); // or a maintained url→script index
+  const script = store.all().find((s) => s.url === scriptUrl); // real impl: url → candidates index, disambiguated by session/execution context (URLs are not unique)
   if (!script) return null;
-  // React `source` line is 1-based; mapCdpToOriginal expects a 0-based CDP lineNumber
-  // (it re-adds 1 for the source-map lookup — store.ts:153). Confirm React's column base similarly.
-  return mapCdpToOriginal(store, { scriptId: script.scriptId, lineNumber: line - 1, columnNumber: col }, script.sessionId);
+  // React `source` line AND column are 1-based (§4.2: `function X() {` declarations at 2-space
+  // indent report col 3). mapCdpToOriginal expects 0-based CDP coordinates — it re-adds 1 to the
+  // line only for the source-map lookup (see `mapCdpToOriginal` in store.ts) — so decrement both.
+  return mapCdpToOriginal(store, { scriptId: script.scriptId, lineNumber: line - 1, columnNumber: col - 1 }, script.sessionId);
 }
 ```
 So the conclusion (round-trip feasible via existing machinery) holds — but the URL→scriptId index is a small new piece, not zero, and `sessionId` must be preserved.
@@ -175,7 +180,7 @@ So the conclusion (round-trip feasible via existing machinery) holds — but the
 ```
 attached: true
 operationsCount: 1
-inspectedReply.value.type: 11 (function component / root)
+inspectedReply.value.type: 11 (root)
 otherEventNames: overrideComponentFilters, backendInitialized, isReloadAndProfileSupportedByBackend
 spikeErrors: []
 ---- GATE: PASS ----
@@ -265,8 +270,8 @@ is neither silent nor frequent (the binding never actually drops), so manual
 |---|---|---|---|
 | initial mount | 1 | 271 ints | 15 `ADD` + 1 `SUSPENSE_ADD` |
 | `increment()` — pure state change | **0** | — | — |
-| `addTodo()` — mount one node | 1 | 46 ints | `ADD` + `REORDER` + `SUSPENSE_RESIZE` |
-| `reorderTodos()` — reverse list | 1 | 10 ints | `REORDER` |
+| `addTodo()` — mount one node | 1 | 46 ints | `ADD` + `REORDER_CHILDREN` + `SUSPENSE_RESIZE` |
+| `reorderTodos()` — reverse list | 1 | 10 ints | `REORDER_CHILDREN` |
 
 Mount is one big batch of `ADD`s; every subsequent **structural** change is a tiny
 incremental patch. This forces `get_react_tree` to be **cursor-based like
@@ -276,9 +281,10 @@ prior-art expectation empirically.
 
 **Operations format (v7), mirrored in `operations-decode.mjs`:** header
 `[rendererID, rootID, stringTableSize, …stringTable…]` then opcodes. **Two interleaved
-opcode families** share one array: the component tree (`ADD=1, REMOVE=2, REORDER=3,
+opcode families** share one array: the component tree (`ADD=1, REMOVE=2, REORDER_CHILDREN=3,
 UPDATE_TREE_BASE_DURATION=4, UPDATE_ERRORS_OR_WARNINGS=5, REMOVE_ROOT=6, SET_SUBTREE_MODE=7`)
-and a v7 **suspense tree** (`ADD=8, REMOVE=9, REORDER=10, RESIZE=11, SUSPENDERS=12`). Gotchas
+and a v7 **suspense tree** (`SUSPENSE_ADD=8, SUSPENSE_REMOVE=9, SUSPENSE_REORDER_CHILDREN=10,
+SUSPENSE_RESIZE=11, SUSPENSE_SUSPENDERS=12`; names as in §3.9's reference table). Gotchas
 for whoever lifts the decoder (LEO-360/RDT-2): the non-root `ADD` carries **five** fields
 *after* `id`/`type` (`parentID, ownerID, displayNameStringID, keyStringID, namePropStringID`
 — the 5th is easy to miss and desyncs the whole walk; see the full operand order in §3.9),
@@ -594,7 +600,11 @@ extending `ToolError` + `_register.ts`** to thread `recoverable` + `data` throug
 **Read vs write — the contract (resolving the earlier ambiguity).** `production_build_detected`
 is a **write-side hard error, not a session-level one.** The override tools
 (`override_react_props` / `override_react_hook_state`, LEO-363) **fail** with it — `canEdit*`
-is false, so the write genuinely cannot succeed. The **read** tools (`get_react_tree` /
+is false, so the write genuinely cannot succeed. (PR #66 review caveat: that holds for
+**function components**, whose overrides ride the `__DEV__`-injected reconciler hooks; §5.4 shows
+**class-component** props/state/context writes are backend-side mutations that can succeed on a
+production renderer, and S4's `canEdit*` evidence comes from an all-function-component fixture —
+the exact write-gating is §6.5 #9, owned by RDT-5.) The **read** tools (`get_react_tree` /
 `inspect_react_component`) do **not** fail: they return the complete tree and the surviving
 values, ideally tagged once with a `production_build_detected` **warning annotation** so the
 agent knows the edit surface is off and names may be degraded. Non-recoverable *for writes*,
@@ -796,7 +806,7 @@ One scenario can't do both jobs. Together they let the MECHANIC axis actually di
   }
   // oracleMinimumToolCalls ≈ 6  (attach + get_react_tree/find + inspect + navigate + launch + answer)
   ```
-- **Expected signal:** a source-reader can answer correctly with mechanic=0 (the `[]` is right there) → A is the **lazy-solver probe**. The mechanic now keys on data the bridge *actually returns* (current hook state), so a mechanic=1 means the agent genuinely used the bridge to confirm the runtime symptom. The harness `xfail` tag is on *correctness*, not mechanic, so A needs no tag; its value is the mechanic signal itself.
+- **Expected signal:** a source-reader can answer correctly with mechanic=0 (the `[]` is right there) → A is the **lazy-solver probe**. The mechanic now keys on data the bridge *actually returns* (current hook state), so a mechanic=1 means the agent genuinely used the bridge to confirm the runtime symptom. The harness has both `xfailCorrectness` **and** `xfailMechanic` tags (the latter added 2026-07-08 and applied defensively to `adversarial-out-of-order` — see `evals/README.md` — for exactly this statically-readable shape); whether A ships with a defensive `xfailMechanic` is an LEO-361 call (open question below). A's value is the mechanic signal itself.
 
 ### Scenario B — `react-provider-context` (bridge-mandatory)
 
@@ -836,6 +846,8 @@ One scenario can't do both jobs. Together they let the MECHANIC axis actually di
 - **Assert bridge-sourced *payload*, not just tool invocation (hard requirement).** Both mechanic checks currently pass on `inspected && !isError`. A model could call `inspect_react_component` on the wrong element (or get a benign result) and still score mechanic=1. LEO-361 should require the returned payload to carry the *expected runtime value* — the frozen `count` for A, the resolved `theme`/context value on the widget for B — so the mechanic proves a real bridge read.
 - **Tighten the correctness regexes — they are deliberately loose sketches.** Scenario A's `\[\]` branch matches any brackets in the answer; Scenario B's original bare-`dark` branch matched a common word without identifying the *nearest* Provider (tightened above to require the inner/nearest Provider be named). Both need real pattern hardening (and negative tests) in LEO-361.
 - **Anti-`evaluate` guard.** Mirror the driving scenarios' `mutatedViaEvaluate` guard: forbid solving via raw `evaluate` reaching into `__REACT_DEVTOOLS_GLOBAL_HOOK__` directly — the dedicated React tools are what's under test.
+- **Decide a defensive `xfailMechanic` for Scenario A.** A is statically readable by design, the same shape that earned `adversarial-out-of-order` its defensive `xfailMechanic` (evals/README.md, 2026-07-08). Decide per model tier whether A carries the tag; a steady `XPASS!` on strong models is the intended bonus signal.
+- **Make Scenario B's bug runtime-only by construction (PR #66 review).** The sketch derives the inner Provider's value from props/state; if that state is deterministic from checked-in source, an agent can trace all files and answer with mechanic=0 — defeating bridge-mandatory. Seed the wrong value through genuinely runtime-only state (fetched, randomized, or driven by a harness action) and have the oracle assert the bridge-returned payload carries it.
 
 ## 5.4 Overrides-via-bridge feasibility (LEO-9X.6 / LEO-363)
 
@@ -931,8 +943,10 @@ messaging protocol — no bespoke Wall code. The proven bootstrap recipe (§2.2,
 - Set `window.__LYNCEUS_BRIDGE_BOOTSTRAP__ = true` first so a page's inline hook stub self-skips
   (the bundle's `installHook` early-returns if `__REACT_DEVTOOLS_GLOBAL_HOOK__` is already an
   own-property).
-- Install the reverse-channel dispatcher; its listener takes a **single `{event, payload}` object**
-  — positional args silently no-op (§2.2).
+- Install the reverse-channel dispatcher. The dispatcher itself is *called* positionally
+  (`__lynceusReactDispatch__("event", payload)`, §2.4); what it must hand the backend listener
+  registered via `onSubscribe` is a **single `{event, payload}` object** — positional delivery
+  to that listener silently no-ops (§2.2).
 - `Object.defineProperty(window, 'ReactDevToolsBackend', {set})` so attach fires **synchronously**
   on the UMD root assignment, ahead of React (measured ~30 ms after bootstrap vs React's first
   `hook.inject` at ~290 ms, §3.7).
@@ -948,7 +962,7 @@ Two L1 additions the spike surfaced: (1) a **`Page.addScriptToEvaluateOnNewDocum
 not yet in the tree** — RDT-1 lands it, tracked on `SessionState` and replayed to child sessions the
 way `pauseOnExceptions` is (this is the pre-React injection guarantee). (2) **Capture renderer
 metadata at attach** — `bundleType`, `version`, `rendererPackageName` — the load-bearing inputs for
-build-detection (§4.3) and the dormant version guard (§4.5).
+build-detection (§4.3) and the dormant version guard (§4.6).
 
 **L2 (refined) — reset per new-document navigation, not per history nav.** `reactBridge` on
 `SessionState`, cleared on `reset()`, with a generation counter mirroring LEO-120's
@@ -974,7 +988,7 @@ shapes every implementer must honor:
 - Source-dependent tools tolerate **`source: null` on a version-variant minority** and must not
   treat `line:col` as authoritative — source is runtime-derived, shifts across React majors, and
   widens on 19 (§3.4, §4.2). Resolve to the enclosing symbol/range through the existing
-  `mapCdpToOriginal`; the one new piece is a `url → scriptId` index, with `sessionId` preserved
+  `mapCdpToOriginal`; the one new piece is a `url → candidates` index (URLs are not unique — §2.5), with `sessionId` preserved
   (§2.5).
 
 **L4 (extended) — three envelopes.** Browser-only via `TOOL_KIND_SUPPORT`; a new `requireReactBridge(s)`
@@ -985,8 +999,8 @@ guard modeled on `requirePaused()` returns **`no_react_bridge`**. Plus **`produc
 
 ## 6.2 LEO-209 open questions — all resolved
 
-All six of the parent ticket's open questions are now answered — the two S6 owns outright plus the
-four the spikes already settled:
+All six of the parent ticket's open questions are now answered — the three S6 owns (the two
+LEO-217 was tasked to close, plus the RSC scoping) plus the three the spikes already settled:
 
 | # | Open question (LEO-209) | Resolution | Owner |
 |---|---|---|---|
@@ -994,7 +1008,7 @@ four the spikes already settled:
 | 2 | `attach_react_devtools` opt-in vs auto-attach default | **Opt-in per session.** S3's Pivot-2 did not trigger: the binding survives every nav type and reattach is automatic + cheap (§3.1), so manual attach stays viable. Keep the opt-in tool; do not auto-attach. | **S6** ← S3 §3.1 |
 | 3 | RSC (React 19+) agent-debuggable surface | **Out of v1 — client components only.** RSC payloads are partially opaque; the read/inspect surface targets client components. File a **separate RSC follow-on** (not one of RDT-1–6). | **S6** |
 | 4 | Subscription deltas vs full-tree snapshots | **Delta/patch stream.** `operations` is a patch stream (§3.2); `get_react_tree` is cursor-based, serving a snapshot from accumulated state. | S3 §3.2 |
-| 5 | Source-map round-trip `componentId` ↔ `file:line:col` | **Feasible via existing machinery.** `mapCdpToOriginal` suffices; the only new piece is a `url → scriptId` index (with `sessionId` threaded), and tools tolerate `source: null` (§2.5, §3.4, §4.2). | S2 §2.5 / S3 §3.4 |
+| 5 | Source-map round-trip `componentId` ↔ `file:line:col` | **Feasible via existing machinery.** `mapCdpToOriginal` suffices; the only new piece is a `url → candidates` index (with `sessionId` threaded; URLs are not unique — §2.5), and tools tolerate `source: null` (§2.5, §3.4, §4.2). | S2 §2.5 / S3 §3.4 |
 | 6 | Re-attach on reload — does the binding survive `Page.frameNavigated`? | **Yes, all nav types.** The binding + injected bootstrap survive same-origin, cross-origin, back/forward (bfcache), and hard reload; state resets per new-document nav (§3.1). | S3 §3.1 |
 
 ## 6.3 Consolidated decisions (single source of truth)
@@ -1015,7 +1029,8 @@ The follow-on tickets cite this block:
 - **Build detection:** the reliable discriminators are **`bundleType 0` + per-element `canEdit* ===
   false`** (§4.3) — *not* name/source stripping (that is app-minification, not React's `bundleType`).
   `production_build_detected` is a **write-side hard error** (the override tools genuinely cannot
-  succeed) and a **read-side warning annotation** (tree + surviving values still return):
+  succeed for function components — class-component writes are §6.5 #9, owned by RDT-5) and a
+  **read-side warning annotation** (tree + surviving values still return):
   non-recoverable *for writes*, non-fatal *for reads*. (Exact warning-field shape — a top-level
   flag vs a one-time metadata tag — is deferred to RDT-1/RDT-2.)
 - **Transport:** embed the real backend + `connectWithCustomMessagingProtocol`; no hand-rolled Wall.
@@ -1060,6 +1075,10 @@ Linear itself.)
 | 4 | RDT-2 (LEO-360) | "top-level components rendered via `createRoot` can report `source: null`." | Broaden per §3.4/§4.2: null also covers provider/boundary fibers + structural components on 16–18 (set shrinks on 19). Tolerate null generally, not just `createRoot` tops. |
 | 5 | RDT-2 (LEO-360) | "RSC … explicitly out of v1 per design doc" — but no RSC follow-on ticket exists. | The design doc now makes the call (§6.2 #3); **file a separate RSC follow-on**. |
 | 6 | (unowned) | §4.3's richer `production_build_detected` envelope (`recoverable` + `data`) needs `ToolError` + `_register.ts` changes; today's contract is flat `{error, message}`. | **Recommend RDT-1** (it introduces the first react envelope, so RDT-5 inherits a consistent shape); alternatively RDT-5, or keep flat `{error, message}` for v1 and defer. |
+| 7 | RDT-1 (LEO-359) | Bridge model has no frame/execution-context identity: `Page.addScriptToEvaluateOnNewDocument` runs in **every frame** and `Runtime.bindingCalled` carries the originating execution context, so same-process iframes spin up independent backends with overlapping renderer/element IDs while an unqualified `Runtime.evaluate` reverse-routes to the default realm (PR #66 review). | Decide v1 scope in RDT-1: declare **main-frame-only** explicitly (simplest; every spike fixture was single-frame), or key bridge state by flat `sessionId` + execution context/frame + generation and route reverse messages to that realm. |
+| 8 | RDT-1 (LEO-359) | `detach_react_devtools` has no lifecycle contract: `Runtime.removeBinding` only stops notifications (the page-global function survives), `Page.removeScriptToEvaluateOnNewDocument` only stops future injections, and a same-document reattach cannot rely on the `ReactDevToolsBackend` setter re-firing (the UMD global is already assigned) (PR #66 review). | RDT-1 specifies detach cleanup (invoke the backend's returned unsubscribe, clear `reactBridge`, bump the generation to fence late events), idempotency, and the same-document reattach path. |
+| 9 | RDT-5 (LEO-363) | §4.3 ("production ⇒ override writes hard-fail") vs §5.4 (class-component props/state/context writes are backend-side mutations that work without the `__DEV__`-injected hooks); S4's `canEdit* === false` evidence is from an all-function-component fixture (PR #66 review). | Gate writes on **per-element capability** (`canEdit*` / element type), not blanket `bundleType`; if prod class-component writes stay disabled anyway, record that as deliberate product policy. Conditional ticket — decide when RDT-5 is greenlit. |
+| 10 | RDT-2 (LEO-360) | "`get_react_tree` is cursor-based" (§3.2/§6.1) vs "serves a snapshot from accumulated state" can read as two different public contracts (PR #66 review). | Internal accumulation is delta-driven either way; RDT-2 pins the **public** tool contract — snapshot-only, cursor/delta reads like `get_console_logs`, or both. |
 
 ---
 
