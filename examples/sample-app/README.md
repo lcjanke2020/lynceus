@@ -7,13 +7,16 @@ The shared web-app fixture used by L3 e2e tests and L4 evals. A small Vite + Typ
 ## Stack
 
 - Vite 5 + TypeScript 5 (no framework; vanilla DOM).
-- Three source files:
+- Two HTML entries and four source files:
 
 | File | What it does |
 |---|---|
+| `index.html` | Canonical counter/form/worker fixture used by the existing browser specs and evals. |
+| `fullstack.html` | Isolated vanilla page for `fullstack-flow.e2e.test.ts`; takes the port-0 Node API in `?api_port=`. |
 | `src/main.ts` | Entry — wires the `#go` button to `handlers.ts`, posts to the worker. |
 | `src/handlers.ts` | The bug surface. `computeStep()` is the canonical off-by-one. |
 | `src/worker.ts` | A tiny Web Worker — used by scenarios that need a worker target. |
+| `src/fullstack.ts` | Browser half of the dual-session L3 flow: click → `GET /api/x` → render the Node response. |
 
 ## The canonical bug — `compute-step`
 
@@ -51,4 +54,4 @@ npm run dev          # listens on :5173 with HMR
 npm run build        # tsc + vite build → dist/ used by L3 e2e tests
 ```
 
-The L3 e2e harness builds this app via `npm run sample:build` at the repo root (the `pretest:e2e` hook runs it for you). You only need `npm run dev` for manual exploration.
+The L3 e2e harness builds both HTML entries via `npm run sample:build` at the repo root (the `pretest:e2e` hook runs it for you). You only need `npm run dev` for manual exploration.

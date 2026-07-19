@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**Last updated: 2026-07-06**
+**Last updated: 2026-07-19**
 
 Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropped into this repo. Read this end-to-end before doing anything else.
 
@@ -35,7 +35,7 @@ The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-ve
 | Node.js Inspector session-mode design (`SessionState.kind`, module split, capability gating) | [docs/node-session-design.md](./docs/node-session-design.md) |
 | Concurrent browser + Node session design (`session` addressing, `SessionRegistry`, merged timelines) | [docs/dual-target-debugging.md](./docs/dual-target-debugging.md) |
 | L3 e2e + L4 eval coverage shape for Node sessions | [docs/node-test-coverage-proposal.md](./docs/node-test-coverage-proposal.md) |
-| `examples/sample-node-app/` — shared Node fixture (5 runnable entries — `index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp` — plus the shared helper `handlers.ts`) | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) |
+| `examples/sample-node-app/` — shared Node fixture (6 runnable entries — `index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp`, `fullstack-api` — plus the shared helper `handlers.ts`) | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) |
 
 ## Eval run storage
 
