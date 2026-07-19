@@ -5,6 +5,12 @@ import { mapOriginalToGenerated } from "../sourcemap/store.js";
 import { readOriginalSource } from "../sourcemap/original-source.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+import {
+  childSessionIdSchema,
+  sessionSchema,
+  withChildSessionDisambiguation,
+  type SessionInput,
+} from "./_session_input.js";
 
 // Highest addressable 1-based line, i.e. the largest line number
 // set_breakpoint could bind. A trailing newline yields an empty final segment
@@ -28,9 +34,10 @@ export function registerSourceTools(server: McpServer) {
       mapped_only: z.boolean().optional().describe("Default true: only return scripts whose map loaded"),
       url_includes: z.string().optional(),
       limit: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { mapped_only?: boolean; url_includes?: string; limit?: number }) => {
-      const s = requireSession();
+    async (input: { mapped_only?: boolean; url_includes?: string; limit?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       const mappedOnly = input.mapped_only ?? true;
       let scripts = s.scripts.all().filter((sc) => !!sc.url);
       if (mappedOnly) scripts = scripts.filter((sc) => !!sc.consumer);
@@ -55,17 +62,16 @@ export function registerSourceTools(server: McpServer) {
   registerJsonTool(
     server,
     "get_source",
-    "Fetch the ORIGINAL TypeScript source for a file, resolved through source maps. Use this — not get_script_source — to read line numbers for set_breakpoint, which takes TS coordinates: get_script_source returns compiled JS whose line numbers do NOT correspond to set_breakpoint's. Matches by TS path or fragment (e.g. src/foo.ts), like set_breakpoint / resolve_source_position. Lines are 1-based and are exactly the coordinates set_breakpoint expects.",
+    withChildSessionDisambiguation(
+      "Fetch the ORIGINAL TypeScript source for a file, resolved through source maps. Use this — not get_script_source — to read line numbers for set_breakpoint, which takes TS coordinates: get_script_source returns compiled JS whose line numbers do NOT correspond to set_breakpoint's. Matches by TS path or fragment (e.g. src/foo.ts), like set_breakpoint / resolve_source_position. Lines are 1-based and are exactly the coordinates set_breakpoint expects.",
+    ),
     {
       file: z.string().describe("TS file path or fragment (e.g. src/foo.ts)"),
-      session_id: z
-        .string()
-        .nullable()
-        .optional()
-        .describe("From list_scripts, to disambiguate a worker/iframe copy. null or omitted = root."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
-    async (input: { file: string; session_id?: string | null }) => {
-      const s = requireSession();
+    async (input: { file: string; session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       const res = await readOriginalSource(s, input.file, input.session_id);
       if (!res.ok) {
         const hint =
@@ -91,13 +97,16 @@ export function registerSourceTools(server: McpServer) {
   registerJsonTool(
     server,
     "get_script_source",
-    "Fetch the raw generated (JS) source text for a script by CDP script ID. NOTE: this is COMPILED JS — its line numbers are NOT set_breakpoint coordinates (set_breakpoint takes TypeScript lines). To read TS line numbers use get_source; to translate a TS coordinate to JS use resolve_source_position. Pass `session_id` from list_scripts to fetch a worker/iframe script — CDP scriptIds are per-Debugger-agent, so omitting session_id always routes to root.",
+    withChildSessionDisambiguation(
+      "Fetch the raw generated (JS) source text for a script by CDP script ID. NOTE: this is COMPILED JS — its line numbers are NOT set_breakpoint coordinates (set_breakpoint takes TypeScript lines). To read TS line numbers use get_source; to translate a TS coordinate to JS use resolve_source_position. Pass `session_id` from list_scripts to fetch a worker/iframe script — CDP scriptIds are per-Debugger-agent, so omitting session_id always routes to root.",
+    ),
     {
       script_id: z.string(),
-      session_id: z.string().nullable().optional().describe("From list_scripts. null or omitted = root."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
-    async (input: { script_id: string; session_id?: string | null }) => {
-      const s = requireSession();
+    async (input: { script_id: string; session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       // null is the explicit "root" sentinel from the projection; CDP wants undefined.
       const sid = input.session_id ?? undefined;
       const result = await s.client!.send(
@@ -117,9 +126,10 @@ export function registerSourceTools(server: McpServer) {
       file: z.string(),
       line: z.number().int().positive().describe("1-based"),
       column: z.number().int().nonnegative().optional(),
+      session: sessionSchema,
     },
-    async (input: { file: string; line: number; column?: number }) => {
-      const s = requireSession();
+    async (input: { file: string; line: number; column?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       const candidates = await mapOriginalToGenerated(s.scripts, input.file, input.line, input.column ?? 0);
       return {
         query: { file: input.file, line: input.line, column: input.column ?? 0 },

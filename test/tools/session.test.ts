@@ -54,7 +54,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // Imports MUST come after vi.mock so the registrar sees the mocked modules.
 import { registerSessionTools } from "../../src/tools/session.js";
-import { autoReset, setupSession } from "../setup.js";
+import { autoReset, setupAdditionalSession, setupSession } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
 autoReset();
@@ -897,6 +897,27 @@ describe("select_target", () => {
     expect(r).toEqual({ id: "page1", status: "already-active" });
     // Critical: should NOT have called CDP.List — that's the fast-path guard.
     expect(cdpListMock).not.toHaveBeenCalled();
+  });
+
+  it("switches the explicitly addressed browser while a Node session remains live", async () => {
+    const browser = setupSession();
+    browser.session.currentTargetId = "page1";
+    const node = setupAdditionalSession({ kind: "node" });
+    const nodeClient = node.session.client;
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+    nextFakeForConnect = makeFakeCdp();
+
+    const r = parseOkEnvelope<{ id: string; url: string; status: string }>(
+      await selectTarget.handler({ id: "page2", session: browser.sessionId }),
+    );
+
+    expect(r).toEqual({ id: "page2", url: "http://x/admin", status: "switched" });
+    expect(getSession(browser.sessionId)?.currentTargetId).toBe("page2");
+    expect(getSession(node.sessionId)?.client).toBe(nodeClient);
+    expect(registry.list()).toHaveLength(2);
   });
 
   it("failed reconnect frees the registry slot: a fresh attach recovers, never deadlocks (round-1 P1)", async () => {

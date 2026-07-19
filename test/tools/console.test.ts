@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { requireSession } from "../../src/session/state.js";
 import { registerConsoleTools } from "../../src/tools/console.js";
-import { setupSession, autoReset } from "../setup.js";
+import { setupSession, setupAdditionalSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
 autoReset();
@@ -118,6 +118,29 @@ describe("get_console_logs", () => {
     );
     expect(r.items).toEqual([]);
     expect(r.cursor).toBe(99);
+  });
+
+  it("explicit session reads only that target's buffer; omission is ambiguous with two live", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    browser.session.console.push({
+      ts: Date.now(),
+      level: "log",
+      text: "browser-only",
+      source: "console-api",
+    });
+    node.session.console.push({
+      ts: Date.now(),
+      level: "log",
+      text: "node-only",
+      source: "console-api",
+    });
+
+    const scoped = parseOkEnvelope<{ items: Array<{ text: string }> }>(
+      await getLogs.handler({ session: node.sessionId }),
+    );
+    expect(scoped.items.map((item) => item.text)).toEqual(["node-only"]);
+    expect(parseErrorEnvelope(await getLogs.handler({}))?.error).toBe("ambiguous_session");
   });
 });
 
