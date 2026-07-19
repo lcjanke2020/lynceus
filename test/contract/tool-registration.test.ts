@@ -49,6 +49,31 @@ const EXPECTED_TOOL_NAMES = [
 ];
 const EXPECTED_TOOL_COUNT = EXPECTED_TOOL_NAMES.length;
 
+const SESSION_ADDRESS_EXEMPT = new Set([
+  "launch_chrome",
+  "attach_chrome",
+  "attach_node",
+  "launch_node",
+  "list_sessions",
+]);
+const SESSION_ADDRESSED_TOOL_NAMES = EXPECTED_TOOL_NAMES.filter(
+  (name) => !SESSION_ADDRESS_EXEMPT.has(name),
+);
+
+const CHILD_SESSION_ID_TOOL_NAMES = [
+  "get_object_properties",
+  "get_request_body",
+  "get_response_body",
+  "pause",
+  "get_source",
+  "get_script_source",
+  "select_option",
+  "fill",
+  "check",
+  "uncheck",
+  "suggest_locator",
+];
+
 let client: Client;
 
 beforeAll(async () => {
@@ -96,6 +121,34 @@ describe("tools/list", () => {
       // well-formed.
       expect(tool.inputSchema).toBeDefined();
       expect(tool.inputSchema.type).toBe("object");
+    }
+  });
+
+  it("every addressed tool exposes the debug-target session selector", async () => {
+    const r = await client.listTools();
+    const byName = new Map(r.tools.map((tool) => [tool.name, tool]));
+    expect(SESSION_ADDRESSED_TOOL_NAMES).toHaveLength(48); // 47 ordinary tools + close_session
+    for (const name of SESSION_ADDRESSED_TOOL_NAMES) {
+      const schema = byName.get(name)?.inputSchema as any;
+      expect(schema?.properties?.session, `${name} is missing session`).toBeDefined();
+      expect(schema.properties.session.description).toContain("Debug-target session id");
+    }
+  });
+
+  it("all 11 child-session-aware tools expose both axes and the shared disambiguation", async () => {
+    const r = await client.listTools();
+    const byName = new Map(r.tools.map((tool) => [tool.name, tool]));
+    expect(CHILD_SESSION_ID_TOOL_NAMES).toHaveLength(11);
+    for (const name of CHILD_SESSION_ID_TOOL_NAMES) {
+      const tool = byName.get(name)!;
+      const schema = tool.inputSchema as any;
+      expect(schema.properties.session, `${name} is missing session`).toBeDefined();
+      expect(schema.properties.session_id, `${name} is missing session_id`).toBeDefined();
+      expect(schema.properties.session_id.description).toContain(
+        "distinct from `session`",
+      );
+      expect(tool.description).toContain("`session` selects");
+      expect(tool.description).toContain("`session_id` selects");
     }
   });
 });
@@ -220,6 +273,40 @@ describe("tools/call — schema validation rejects malformed input", () => {
     // No session → still expects no_session error envelope, not a transport-level reject.
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
+    expect(JSON.parse(content[0]!.text).error).toBe("no_session");
+  });
+
+  it("session_id rejects a debug-target id and points the caller to session", async () => {
+    resetSessions();
+    let message = "";
+    try {
+      const result = await client.callTool({
+        name: "pause",
+        arguments: { session_id: "browser_1" },
+      });
+      message = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("browser_1");
+    expect(message).toContain("pass it as `session`");
+    expect(message).toContain("not `session_id`");
+  });
+
+  it("forms accept explicit null session_id as the root sentinel", async () => {
+    resetSessions();
+    const result = await client.callTool({
+      name: "fill",
+      arguments: {
+        by: "css",
+        css: "#name",
+        value: "Ada",
+        session_id: null,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    // Accepted by Zod and reached the handler; only the absent debug target failed.
     expect(JSON.parse(content[0]!.text).error).toBe("no_session");
   });
 });

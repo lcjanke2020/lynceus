@@ -12,6 +12,7 @@ import {
 import { normalizeSourcePath, pathMatches } from "../sourcemap/normalize.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 // Look up an existing breakpoint by normalized (file, line, column). Column
 // is always a number here — the caller is responsible for collapsing an
@@ -163,9 +164,10 @@ export function registerBreakpointTools(server: McpServer) {
       column: z.number().int().nonnegative().optional(),
       condition: z.string().optional().describe("Expression — pause only when truthy"),
       log_message: z.string().optional().describe("Logpoint: log instead of pausing"),
+      session: sessionSchema,
     },
-    async (input: { file: string; line: number; column?: number; condition?: string; log_message?: string }) => {
-      const s = requireSession();
+    async (input: { file: string; line: number; column?: number; condition?: string; log_message?: string } & SessionInput) => {
+      const s = requireSession(input.session);
       // Normalize once at the top so lookup, mapping, and storage cannot
       // drift. column collapses `undefined` and omitted to 0 — matching what
       // mapOriginalToGenerated and list_breakpoints already do. condition /
@@ -265,9 +267,9 @@ export function registerBreakpointTools(server: McpServer) {
     server,
     "remove_breakpoint",
     "Remove a breakpoint by ID (returned from set_breakpoint).",
-    { id: z.string() },
-    async (input: { id: string }) => {
-      const s = requireSession();
+    { id: z.string(), session: sessionSchema },
+    async (input: { id: string } & SessionInput) => {
+      const s = requireSession(input.session);
       const rec = s.breakpoints.get(input.id);
       if (!rec) throw new ToolError("not_found", `No breakpoint with id ${input.id}`);
       for (const b of rec.bindings) {
@@ -286,9 +288,9 @@ export function registerBreakpointTools(server: McpServer) {
     server,
     "list_breakpoints",
     "List all currently active breakpoints.",
-    undefined,
-    async () => {
-      const s = requireSession();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requireSession(input.session);
       return Array.from(s.breakpoints.values()).map((bp) => ({
         id: bp.id,
         file: bp.file,
@@ -308,9 +310,10 @@ export function registerBreakpointTools(server: McpServer) {
     "Configure whether the debugger pauses on exceptions. Applies to the root AND all currently-attached child sessions (workers/iframes/service workers), and is remembered so newly-attached children inherit the setting.",
     {
       state: z.enum(["none", "uncaught", "all"]),
+      session: sessionSchema,
     },
-    async (input: { state: "none" | "uncaught" | "all" }) => {
-      const s = requireSession();
+    async (input: { state: "none" | "uncaught" | "all" } & SessionInput) => {
+      const s = requireSession(input.session);
       // Persist so onChildAttached can replay to future attachments.
       s.pauseOnExceptions = input.state;
       // Apply to every currently-attached session. ROOT_SESSION_KEY → undefined

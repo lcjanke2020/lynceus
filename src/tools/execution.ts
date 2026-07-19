@@ -9,15 +9,21 @@ import {
 } from "../sourcemap/store.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+import {
+  childSessionIdSchema,
+  sessionSchema,
+  withChildSessionDisambiguation,
+  type SessionInput,
+} from "./_session_input.js";
 
 export function registerExecutionTools(server: McpServer) {
   registerJsonTool(
     server,
     "resume",
     "Resume execution. Dispatched to the session that paused (root, worker, OOPIF, …).",
-    undefined,
-    async () => {
-      const s = requirePaused();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requirePaused(input.session);
       const sid = s.pause.current()!.sessionId;
       // Install the resumed-event listener BEFORE sending Debugger.resume.
       // CRI emits events synchronously, so the Debugger.resumed event can
@@ -58,38 +64,53 @@ export function registerExecutionTools(server: McpServer) {
     server,
     "step_over",
     "Step over the current line. Awaits the next pause (or returns null if execution continues).",
-    { timeout_ms: z.number().int().positive().optional() },
-    async (input: { timeout_ms?: number }) =>
-      stepThen((s, sid) => s.client!.send("Debugger.stepOver", undefined, sid), input.timeout_ms),
+    { timeout_ms: z.number().int().positive().optional(), session: sessionSchema },
+    async (input: { timeout_ms?: number } & SessionInput) =>
+      stepThen(
+        (s, sid) => s.client!.send("Debugger.stepOver", undefined, sid),
+        input.timeout_ms,
+        input.session,
+      ),
   );
 
   registerJsonTool(
     server,
     "step_into",
     "Step into the next function call.",
-    { timeout_ms: z.number().int().positive().optional() },
-    async (input: { timeout_ms?: number }) =>
-      stepThen((s, sid) => s.client!.send("Debugger.stepInto", undefined, sid), input.timeout_ms),
+    { timeout_ms: z.number().int().positive().optional(), session: sessionSchema },
+    async (input: { timeout_ms?: number } & SessionInput) =>
+      stepThen(
+        (s, sid) => s.client!.send("Debugger.stepInto", undefined, sid),
+        input.timeout_ms,
+        input.session,
+      ),
   );
 
   registerJsonTool(
     server,
     "step_out",
     "Step out of the current function.",
-    { timeout_ms: z.number().int().positive().optional() },
-    async (input: { timeout_ms?: number }) =>
-      stepThen((s, sid) => s.client!.send("Debugger.stepOut", undefined, sid), input.timeout_ms),
+    { timeout_ms: z.number().int().positive().optional(), session: sessionSchema },
+    async (input: { timeout_ms?: number } & SessionInput) =>
+      stepThen(
+        (s, sid) => s.client!.send("Debugger.stepOut", undefined, sid),
+        input.timeout_ms,
+        input.session,
+      ),
   );
 
   registerJsonTool(
     server,
     "pause",
-    "Pause execution manually at the next statement. By default targets the root page; pass `session_id` (from list_targets or a script's session_id) to pause a specific worker/iframe/service-worker.",
+    withChildSessionDisambiguation(
+      "Pause execution manually at the next statement. By default targets the root page; pass `session_id` (from list_targets or a script's session_id) to pause a specific worker/iframe/service-worker.",
+    ),
     {
-      session_id: z.string().nullable().optional().describe("null or omitted = root."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
-    async (input: { session_id?: string | null }) => {
-      const s = requireSession();
+    async (input: { session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       const sid = input.session_id ?? undefined;
       await s.client!.send("Debugger.pause", undefined, sid);
       return { paused_session: sid ?? null };
@@ -100,9 +121,12 @@ export function registerExecutionTools(server: McpServer) {
     server,
     "wait_for_pause",
     "Block until the debugger pauses (or times out). Returns the pause reason and a TS-mapped call stack.",
-    { timeout_ms: z.number().int().positive().optional().describe("Default 30000") },
-    async (input: { timeout_ms?: number }) => {
-      const s = requireSession();
+    {
+      timeout_ms: z.number().int().positive().optional().describe("Default 30000"),
+      session: sessionSchema,
+    },
+    async (input: { timeout_ms?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       const timeoutMs = input.timeout_ms ?? 30000;
       let state;
       try {
@@ -180,8 +204,9 @@ export function enrichPauseTimeout(
 async function stepThen(
   send: (s: ReturnType<typeof requirePaused>, sessionId: string | undefined) => Promise<unknown>,
   timeoutMs?: number,
+  session?: string,
 ) {
-  const s = requirePaused();
+  const s = requirePaused(session);
   // Capture the paused session BEFORE marking resumed — pauseState is cleared
   // by onResumed and we still need the sessionId to route the step command.
   const sid = s.pause.current()!.sessionId;

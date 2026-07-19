@@ -1,28 +1,29 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeFile } from "node:fs/promises";
-import { requireSession, requireCapable } from "../session/state.js";
+import { requireSession, requireCapable, type Session } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 import { locatorShape, type LocatorSpec } from "../locator.js";
 import { normalizeLocator, locatorHelpersScript, locatorReadScript } from "./_locator_runtime.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 const waitStateSchema = z.enum(["visible", "hidden", "attached", "detached"]);
 
 type WaitState = z.infer<typeof waitStateSchema>;
 
-interface LocateInput extends LocatorSpec {
+interface LocateInput extends LocatorSpec, SessionInput {
   include_hidden?: boolean;
   limit?: number;
 }
 
-interface WaitForInput extends LocatorSpec {
+interface WaitForInput extends LocatorSpec, SessionInput {
   state?: WaitState;
   timeout_ms?: number;
   interval_ms?: number;
 }
 
-interface FormStateInput {
+interface FormStateInput extends SessionInput {
   names?: string[];
   form_selector?: string;
 }
@@ -41,9 +42,9 @@ export function registerDomTools(server: McpServer) {
     server,
     "query_selector",
     "Find an element by CSS selector. Returns nodeId + a short preview.",
-    { selector: z.string() },
-    async (input: { selector: string }) => {
-      const s = requireSession();
+    { selector: z.string(), session: sessionSchema },
+    async (input: { selector: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "query_selector");
       const doc = await s.client!.send("DOM.getDocument", { depth: 1 });
       const found = await s.client!.send("DOM.querySelector", {
@@ -71,9 +72,10 @@ export function registerDomTools(server: McpServer) {
       selector: z.string().optional(),
       node_id: z.number().int().positive().optional(),
       outer: z.boolean().optional().describe("Default true"),
+      session: sessionSchema,
     },
-    async (input: { selector?: string; node_id?: number; outer?: boolean }) => {
-      const s = requireSession();
+    async (input: { selector?: string; node_id?: number; outer?: boolean } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_element_html");
       let nodeId = input.node_id;
       if (!nodeId) {
@@ -103,12 +105,13 @@ export function registerDomTools(server: McpServer) {
       ...locatorShape,
       include_hidden: z.boolean().optional().describe("Default false: only return visible matches."),
       limit: z.number().int().positive().max(100).optional().describe("Default 20."),
+      session: sessionSchema,
     },
     async (input: LocateInput) => {
-      const s = requireSession();
+      const s = requireSession(input.session);
       requireCapable(s, "locate");
       const locator = normalizeLocator(input);
-      const result = await evaluateLocator(locator, {
+      const result = await evaluateLocator(s, locator, {
         includeHidden: input.include_hidden ?? false,
         limit: input.limit ?? 20,
       });
@@ -126,9 +129,10 @@ export function registerDomTools(server: McpServer) {
       state: waitStateSchema.optional().describe("Default visible."),
       timeout_ms: z.number().int().positive().optional().describe("Default 5000."),
       interval_ms: z.number().int().positive().optional().describe("Default 100."),
+      session: sessionSchema,
     },
     async (input: WaitForInput) => {
-      const s = requireSession();
+      const s = requireSession(input.session);
       requireCapable(s, "wait_for");
       const locator = normalizeLocator(input);
       const state = input.state ?? "visible";
@@ -138,7 +142,7 @@ export function registerDomTools(server: McpServer) {
       let lastResult: LocateResult | null = null;
 
       while (Date.now() - started <= timeoutMs) {
-        lastResult = await evaluateLocator(locator, { includeHidden: true, limit: 20 });
+        lastResult = await evaluateLocator(s, locator, { includeHidden: true, limit: 20 });
         if (!lastResult.ok) throw new ToolError("invalid_locator", lastResult.error ?? "Invalid locator");
         if (matchesWaitState(lastResult, state)) {
           return {
@@ -165,9 +169,10 @@ export function registerDomTools(server: McpServer) {
     {
       names: z.array(z.string()).optional(),
       form_selector: z.string().optional().describe("Optional CSS selector for the form or container to inspect."),
+      session: sessionSchema,
     },
     async (input: FormStateInput) => {
-      const s = requireSession();
+      const s = requireSession(input.session);
       requireCapable(s, "get_form_state");
       const res = await s.client!.send("Runtime.evaluate", {
         expression: buildFormStateExpression(input),
@@ -183,9 +188,9 @@ export function registerDomTools(server: McpServer) {
     server,
     "click",
     "Click an element matched by CSS selector. Uses synthetic input events.",
-    { selector: z.string() },
-    async (input: { selector: string }) => {
-      const s = requireSession();
+    { selector: z.string(), session: sessionSchema },
+    async (input: { selector: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "click");
       const expr = `(() => {
         const el = document.querySelector(${JSON.stringify(input.selector)});
@@ -213,9 +218,14 @@ export function registerDomTools(server: McpServer) {
     server,
     "type_text",
     "Focus a CSS-selected element and type text into it.",
-    { selector: z.string(), text: z.string(), clear_first: z.boolean().optional() },
-    async (input: { selector: string; text: string; clear_first?: boolean }) => {
-      const s = requireSession();
+    {
+      selector: z.string(),
+      text: z.string(),
+      clear_first: z.boolean().optional(),
+      session: sessionSchema,
+    },
+    async (input: { selector: string; text: string; clear_first?: boolean } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "type_text");
       const focus = await s.client!.send("Runtime.evaluate", {
         expression: `(() => {
@@ -237,9 +247,9 @@ export function registerDomTools(server: McpServer) {
     server,
     "press_key",
     "Send a key press to the focused element (e.g. Enter, Tab, Escape).",
-    { key: z.string() },
-    async (input: { key: string }) => {
-      const s = requireSession();
+    { key: z.string(), session: sessionSchema },
+    async (input: { key: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "press_key");
       await s.client!.send("Input.dispatchKeyEvent", { type: "keyDown", key: input.key });
       await s.client!.send("Input.dispatchKeyEvent", { type: "keyUp", key: input.key });
@@ -256,9 +266,10 @@ export function registerDomTools(server: McpServer) {
       path: z.string().optional().describe("If set, save to this absolute path and return path instead of base64"),
       format: z.enum(["png", "jpeg"]).optional(),
       quality: z.number().int().min(1).max(100).optional(),
+      session: sessionSchema,
     },
-    async (input: { full_page?: boolean; path?: string; format?: "png" | "jpeg"; quality?: number }) => {
-      const s = requireSession();
+    async (input: { full_page?: boolean; path?: string; format?: "png" | "jpeg"; quality?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "screenshot");
       const r = await s.client!.send("Page.captureScreenshot", {
         format: input.format ?? "png",
@@ -283,10 +294,10 @@ function pairsToObj(pairs: string[]): Record<string, string> {
 }
 
 async function evaluateLocator(
+  s: Session,
   locator: LocatorSpec,
   options: { includeHidden: boolean; limit: number },
 ): Promise<LocateResult> {
-  const s = requireSession();
   const res = await s.client!.send("Runtime.evaluate", {
     expression: buildLocateExpression(locator, options),
     returnByValue: true,

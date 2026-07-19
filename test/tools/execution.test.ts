@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { registerExecutionTools } from "../../src/tools/execution.js";
-import { setupSession, autoReset } from "../setup.js";
+import { setupSession, setupAdditionalSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
 autoReset();
@@ -178,6 +178,26 @@ describe("step_over / step_into / step_out", () => {
     const call = fake.sentCalls.find((c) => c.method === "Debugger.stepOver");
     expect(call?.sessionId).toBe("SW1");
   });
+
+  it("explicit session selects the paused debugger when browser and Node are both live", async () => {
+    const browser = setupSession({ paused: true });
+    const node = setupAdditionalSession({ kind: "node", paused: true });
+    browser.fake.clearSentCalls();
+    node.fake.clearSentCalls();
+
+    await stepOver.handler({ session: node.sessionId, timeout_ms: 20 });
+
+    expect(node.fake.sentCalls.some((c) => c.method === "Debugger.stepOver")).toBe(true);
+    expect(browser.fake.sentCalls.some((c) => c.method === "Debugger.stepOver")).toBe(false);
+  });
+
+  it("omitted session is ambiguous when browser and Node are both live", async () => {
+    setupSession({ paused: true });
+    setupAdditionalSession({ kind: "node", paused: true });
+    expect(parseErrorEnvelope(await stepOver.handler({ timeout_ms: 20 }))?.error).toBe(
+      "ambiguous_session",
+    );
+  });
 });
 
 describe("pause", () => {
@@ -208,6 +228,20 @@ describe("pause", () => {
       parseOkEnvelope<{ paused_session: string | null }>(await pause.handler({ session_id: null })),
     ).toEqual({ paused_session: null });
     expect(fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBeUndefined();
+  });
+
+  it("composes debug-target session with child-CDP session_id", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    browser.fake.clearSentCalls();
+    node.fake.clearSentCalls();
+
+    await pause.handler({ session: node.sessionId, session_id: "CHILD_1" });
+
+    expect(node.fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBe(
+      "CHILD_1",
+    );
+    expect(browser.fake.sentCalls.some((c) => c.method === "Debugger.pause")).toBe(false);
   });
 });
 
@@ -272,6 +306,27 @@ describe("wait_for_pause", () => {
     );
     expect(r.session_id).toBe("SW1");
     expect(r.call_stack[0].session_id).toBe("SW1");
+  });
+
+  it("explicit session scopes the wait when browser and Node are both paused", async () => {
+    setupSession({ paused: true, pausedSessionId: "BROWSER_CHILD" });
+    const node = setupAdditionalSession({
+      kind: "node",
+      paused: true,
+      pausedSessionId: "NODE_CHILD",
+    });
+    const r = parseOkEnvelope<{ session_id: string | null }>(
+      await waitForPause.handler({ session: node.sessionId, timeout_ms: 100 }),
+    );
+    expect(r.session_id).toBe("NODE_CHILD");
+  });
+
+  it("omitted session stays ambiguous with two live sessions until raced waits land in LEO-365", async () => {
+    setupSession({ paused: true });
+    setupAdditionalSession({ kind: "node", paused: true });
+    expect(
+      parseErrorEnvelope(await waitForPause.handler({ timeout_ms: 100 }))?.error,
+    ).toBe("ambiguous_session");
   });
 });
 

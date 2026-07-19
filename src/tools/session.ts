@@ -5,6 +5,7 @@ import { launchChrome, attachChrome, switchTarget } from "../session/browser.js"
 import { attachNode, launchNode } from "../session/node.js";
 import { requireSession, requireCapable, registry } from "../session/state.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 // Shared across the four launch/attach tools. Labels are the human-facing
 // half of session addressing (design §3) — ids stay the only thing tools
@@ -158,10 +159,7 @@ export function registerSessionTools(server: McpServer) {
     "close_session",
     "Close a debug session. Kills the underlying process (Chrome or Node) if we launched it; leaves it alone if we attached. Returns { session, label, status }. Omit `session` when only one is live; with two live sessions pass the id (see list_sessions). Closing when nothing is live is a no-op success (status: 'no-active-session').",
     {
-      session: z
-        .string()
-        .optional()
-        .describe('Which session to close (e.g. "browser_1"). Omit when only one session is live.'),
+      session: sessionSchema,
     },
     async (input: { session?: string }) => {
       return await registry.closeAddressed(input.session);
@@ -182,9 +180,9 @@ export function registerSessionTools(server: McpServer) {
     server,
     "list_targets",
     "List all debuggable targets: on a browser session, the pages, workers, and iframes; on a Node session, the single root target.",
-    undefined,
-    async () => {
-      const s = requireSession();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requireSession(input.session);
       const targets = await CDP.List({ port: s.chromePort!, host: s.chromeHost ?? undefined });
       return targets.map((t) => ({
         id: t.id,
@@ -200,12 +198,12 @@ export function registerSessionTools(server: McpServer) {
     server,
     "select_target",
     "Switch the active page target. Closes the current CDP socket and opens a new one.",
-    { id: z.string().describe("Target ID from list_targets") },
-    async (input: { id: string }) => {
-      const s = requireSession();
+    { id: z.string().describe("Target ID from list_targets"), session: sessionSchema },
+    async (input: { id: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "select_target");
       if (s.currentTargetId === input.id) return { id: input.id, status: "already-active" };
-      const r = await switchTarget(input.id);
+      const r = await switchTarget(s, input.id);
       return { id: r.targetId, url: r.url, status: "switched" };
     },
   );
