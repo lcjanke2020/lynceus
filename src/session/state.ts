@@ -492,11 +492,19 @@ class SessionRegistry {
   async closeAddressed(id?: SessionId): Promise<CloseResult> {
     if (id !== undefined) {
       const record = this.records.get(id);
-      if (!record || record.status !== "active") {
+      // A record that is "active" OR already "closing" (an in-flight teardown
+      // from a prior/concurrent close) is a real session — close_session by id
+      // is idempotent: snapshot its identity, await the memoized teardown via
+      // closeRecord(), and report success. Only a genuinely absent record — or
+      // a not-yet-observable "starting" one, whose id the agent can't have seen
+      // — is unknown_session. (Review round 3, Codex + Copilot: a retry during
+      // an owned Node child's SIGTERM grace window otherwise got a false
+      // unknown_session while the original close was still doing the work.)
+      if (!record || record.status === "starting") {
         throw unknownSession(id, this.list());
       }
       const result: CloseResult = { session: record.id, label: record.label ?? null, status: "closed" };
-      await this.closeRecord(record);
+      await this.closeRecord(record); // re-entrant: awaits the in-flight closePromise when already closing
       return result;
     }
     const active = [...this.records.values()].filter((r) => r.status === "active");

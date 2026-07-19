@@ -216,6 +216,23 @@ describe("SessionRegistry — per-kind capacity, labels, and §2 resolution", ()
     await expect(registry.closeAddressed("node_999")).rejects.toMatchObject({ code: "unknown_session" });
   });
 
+  it("closeAddressed(id) is idempotent while the first close is in flight (not unknown_session)", async () => {
+    // Review round 3 (Codex + Copilot): a "closing" record is still a real
+    // session — a retried/concurrent explicit close must await the in-flight
+    // teardown and report success, not unknown_session.
+    const node = live("node", "backend");
+    let release!: () => void;
+    node.state.close = (async () => {
+      await new Promise<void>((r) => (release = r));
+    }) as Session["close"];
+    const first = registry.closeAddressed(node.id); // flips the record to "closing", memoizes teardown
+    const second = registry.closeAddressed(node.id); // retry during the in-flight close
+    release();
+    const expected = { session: node.id, label: "backend", status: "closed" };
+    expect(await first).toEqual(expected);
+    expect(await second).toEqual(expected);
+  });
+
   it("list(): reports id, kind, label, and the live flags", () => {
     const n = live("node", "backend");
     n.state.attached = true;
