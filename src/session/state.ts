@@ -452,14 +452,17 @@ class SessionRegistry {
   // before the first await, and a second close() — or closeAll() — awaits
   // the same in-flight teardown via the record's memoized closePromise
   // instead of skipping it. The id-less branch resolves the sole active record
-  // (not first-inserted) so it can't pick a "starting"/"closing" record now
-  // that a second session is reachable — but prefer closeState() when the
-  // caller already holds the SessionState (switchTarget).
+  // ONLY when exactly one is active — with two it no-ops rather than pick one
+  // arbitrarily (there are no id-less production callers now; switchTarget uses
+  // closeState()). Prefer closeState()/an id when a specific session is meant.
   async close(id?: SessionId): Promise<void> {
-    const record =
-      id !== undefined
-        ? this.records.get(id)
-        : [...this.records.values()].find((r) => r.status === "active");
+    let record: SessionRecord | undefined;
+    if (id !== undefined) {
+      record = this.records.get(id);
+    } else {
+      const active = [...this.records.values()].filter((r) => r.status === "active");
+      record = active.length === 1 ? active[0] : undefined;
+    }
     if (!record) return;
     await this.closeRecord(record);
   }

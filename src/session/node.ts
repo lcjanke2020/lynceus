@@ -237,7 +237,7 @@ async function connectNodeInspector(s: Session, opts: {
   s.chromePort = port;
   s.chromeHost = host;
   s.currentTargetId = target.id;
-  s.url = target.url ?? null; // null = unknown; the return keeps the "" string form
+  s.url = target.url || null; // null = unknown (|| so a discovery "" also normalizes); return keeps the "" string form
   s.ownedProcess = opts.ownedProcess
     ? { kind: "node", handle: opts.ownedProcess }
     : null;

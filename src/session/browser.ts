@@ -124,7 +124,7 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
     const targets = await waitForFirstPage(chrome.port);
     const target = targets[0]!;
     await connectToTarget(s, chrome.port, target.id);
-    s.url = target.url;
+    s.url = target.url || null;
     registry.activate(rec.id);
     return { session: rec.id, label: rec.label ?? null, targetId: target.id, url: target.url };
   } catch (e) {
@@ -168,7 +168,7 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
     }
     const target = filtered[0]!;
     await connectToTarget(s, port, target.id, opts.host);
-    s.url = target.url;
+    s.url = target.url || null;
     log.info("attached to chrome", { port, targetId: target.id, url: target.url });
     registry.activate(rec.id);
     return { session: rec.id, label: rec.label ?? null, targetId: target.id, url: target.url };
@@ -212,7 +212,7 @@ async function connectToTarget(s: Session, port: number, targetId: string, host?
     // attach_node's post-init guard.) Registry-world note: this close()
     // releases the socket/process state only — freeing the SLOT is the
     // caller's registry rollback (launch/attach abort(), switchTarget's
-    // failure-path registry.close()).
+    // failure-path closeState()).
     log.warn("connectToTarget init failed; tearing down", { error: String(e) });
     await s.close();
     throw e;
@@ -414,6 +414,6 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   }
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
-  s.url = t?.url ?? null; // null = unknown; keep the string form only in the tool return
+  s.url = t?.url || null; // null = unknown (|| so an empty "" also normalizes); string form kept only in the tool return
   return { targetId, url: t?.url ?? "" };
 }

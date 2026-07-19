@@ -851,6 +851,13 @@ describe("list_sessions", () => {
       url: "http://localhost:5173/",
     });
   });
+
+  it("normalizes an empty discovery url to null (never \"\") — review round 2", async () => {
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    await attachNode.handler({ port: 9229 });
+    const r = parseOkEnvelope<{ sessions: Array<{ url: string | null }> }>(await listSessions.handler({}));
+    expect(r.sessions[0]!.url).toBeNull();
+  });
 });
 
 describe("list_targets", () => {
