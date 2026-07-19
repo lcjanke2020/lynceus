@@ -65,6 +65,7 @@ const attachChrome = tools.get("attach_chrome")!;
 const attachNode = tools.get("attach_node")!;
 const launchNode = tools.get("launch_node")!;
 const closeSession = tools.get("close_session")!;
+const listSessions = tools.get("list_sessions")!;
 const listTargets = tools.get("list_targets")!;
 const selectTarget = tools.get("select_target")!;
 
@@ -276,6 +277,28 @@ describe("launch_chrome", () => {
     }
   });
 
+  it("returns session id + label and threads the label into the registry", async () => {
+    launchMock.mockResolvedValue({ port: 9999, pid: 1, kill: vi.fn() });
+    cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "http://x/", title: "" }]);
+    const r = parseOkEnvelope<{ session: string; label: string | null; targetId: string }>(
+      await launchChrome.handler({ label: "frontend" }),
+    );
+    expect(r.session).toMatch(/^browser_\d+$/);
+    expect(r.label).toBe("frontend");
+    expect(registry.list()[0]).toMatchObject({ session: r.session, label: "frontend", kind: "browser" });
+  });
+
+  it("duplicate_label when the label is already held by a live session", async () => {
+    const rec = registry.reserve("node", "backend");
+    registry.activate(rec.id);
+    launchMock.mockResolvedValue({ port: 9999, pid: 1, kill: vi.fn() });
+    cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "http://x/", title: "" }]);
+    const err = parseErrorEnvelope(await launchChrome.handler({ label: "backend" }));
+    expect(err?.error).toBe("duplicate_label");
+    expect(err?.message).toContain(rec.id);
+    expect(launchMock).not.toHaveBeenCalled(); // guard runs before spawning
+  });
+
   it("already_session error when a session is already active", async () => {
     setupSession();
     const r = await launchChrome.handler({});
@@ -336,10 +359,13 @@ describe("attach_node", () => {
     cdpListMock.mockResolvedValue([
       { id: "node-target-1", type: "node", url: "file:///app/server.js" },
     ]);
-    const r = parseOkEnvelope<{ targetId: string; url: string }>(
+    const r = parseOkEnvelope<{ session: string; label: string | null; targetId: string; url: string }>(
       await attachNode.handler({ port: 9229 }),
     );
-    expect(r).toEqual({ targetId: "node-target-1", url: "file:///app/server.js" });
+    // Ids climb across tests (counters aren't reset); pin the shape, not the ordinal.
+    expect(r.session).toMatch(/^node_\d+$/);
+    const { session: _s, ...rest } = r;
+    expect(rest).toEqual({ label: null, targetId: "node-target-1", url: "file:///app/server.js" });
     expect(cdpListMock).toHaveBeenCalledWith({ port: 9229, host: "127.0.0.1" });
     const s = getSession()!;
     expect(s.kind).toBe("node");
@@ -386,8 +412,11 @@ describe("attach_node", () => {
     expect(methods).not.toContain("Debugger.resume");
   });
 
-  it("already_session error when a session is already active", async () => {
-    setupSession();
+  it("already_session error when a node session is already active", async () => {
+    // Per-kind capacity: the incumbent must be a NODE session for attach_node
+    // to be refused. A live browser session would NOT block it (that path is
+    // the "coexists with a browser session" test below).
+    setupSession({ kind: "node" });
     const r = await attachNode.handler({ port: 9229 });
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
     // CDP.List must NOT have been called — the guard runs first.
@@ -551,10 +580,28 @@ describe("launch_node", () => {
   });
 
   it("already_session error runs before spawning a child", async () => {
-    setupSession();
+    // Same-kind incumbent required under per-kind capacity — a node session
+    // blocks launch_node.
+    setupSession({ kind: "node" });
     const r = await launchNode.handler({ script: fixtureScript });
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("coexists with a live browser session (per-kind capacity, LEO-116 pt 3)", async () => {
+    // The founding-goal behavior change: a live BROWSER session no longer
+    // blocks launch_node — both kinds share one server.
+    setupSession(); // browser_1 live (fake client)
+    mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    const r = parseOkEnvelope<{ session: string; label: string | null }>(
+      await launchNode.handler({ script: fixtureScript, label: "backend" }),
+    );
+    expect(r.session).toMatch(/^node_\d+$/);
+    expect(r.label).toBe("backend");
+    // Both sessions live at once — the two summaries the demo's list_sessions shows.
+    const kinds = registry.list().map((x) => x.kind).sort();
+    expect(kinds).toEqual(["browser", "node"]);
   });
 
   it("not_found error for a missing script runs before spawning a child", async () => {
@@ -645,7 +692,7 @@ describe("launch_node", () => {
     await launchNode.handler({ script: fixtureScript });
     const s = getSession()!;
     expect(s.ownedProcess).toEqual({ kind: "node", handle: child });
-    expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+    expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
     expect(child.kill).toHaveBeenCalled();
     expect(s.client).toBeNull();
   });
@@ -693,7 +740,7 @@ describe("launch_node", () => {
       cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
       await launchNode.handler({ script: fixtureScript });
 
-      expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+      expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
       // Critical: ONLY SIGTERM — no escalation when the child is cooperative.
       expect(child.kill).toHaveBeenCalledTimes(1);
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
@@ -723,7 +770,7 @@ describe("launch_node", () => {
         // also drains the microtask queue at each step so the synchronous emit
         // inside kill("SIGKILL") propagates.
         await vi.advanceTimersByTimeAsync(2500);
-        expect(parseOkEnvelope(await closePromise)).toBe("closed");
+        expect(parseOkEnvelope<{ status: string }>(await closePromise).status).toBe("closed");
       } finally {
         vi.useRealTimers();
       }
@@ -741,24 +788,68 @@ describe("launch_node", () => {
       // Simulate the child exiting on its own between launch and close.
       child.exitCode = 0;
 
-      expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+      expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
       expect(child.kill).not.toHaveBeenCalled();
     });
   });
 });
 
 describe("close_session", () => {
-  it("returns 'no active session' (not an error) when no session exists", async () => {
-    // Sentinel string — not an error envelope. The agent calling close
-    // when nothing is open is a benign no-op, not a misuse.
-    expect(parseOkEnvelope(await closeSession.handler({}))).toBe("no active session");
+  it("idempotent success (not an error) when no session exists", async () => {
+    // Closing nothing is a benign no-op, not a misuse — structured success,
+    // never a no_session error (design §5).
+    expect(parseOkEnvelope(await closeSession.handler({}))).toEqual({
+      session: null,
+      label: null,
+      status: "no-active-session",
+    });
   });
 
   it("calls the session's close() and resets state when a session is active", async () => {
     const { session } = setupSession();
-    expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+    expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
     // After close, the session's client is null again.
     expect(session.client).toBeNull();
+  });
+
+  it("returns the closed session's id and label", async () => {
+    const rec = registry.reserve("browser", "frontend");
+    registry.activate(rec.id);
+    expect(parseOkEnvelope(await closeSession.handler({ session: rec.id }))).toEqual({
+      session: rec.id,
+      label: "frontend",
+      status: "closed",
+    });
+    expect(getSession()).toBeNull();
+  });
+
+  it("unknown_session for an explicit id that isn't live", async () => {
+    setupSession(); // browser_1 live
+    const err = parseErrorEnvelope(await closeSession.handler({ session: "node_9" }));
+    expect(err?.error).toBe("unknown_session");
+    expect(err?.message).toContain("node_9");
+  });
+});
+
+describe("list_sessions", () => {
+  it("empty list when nothing is live (not a no_session error)", async () => {
+    expect(parseOkEnvelope(await listSessions.handler({}))).toEqual({ sessions: [] });
+  });
+
+  it("reports the live session's id, kind, label, and flags", async () => {
+    const { session } = setupSession(); // one browser session, no label
+    session.url = "http://localhost:5173/";
+    const r = parseOkEnvelope<{ sessions: any[] }>(await listSessions.handler({}));
+    expect(r.sessions).toHaveLength(1);
+    expect(r.sessions[0].session).toMatch(/^browser_\d+$/);
+    const { session: _s, ...rest } = r.sessions[0];
+    expect(rest).toEqual({
+      kind: "browser",
+      label: null,
+      attached: false,
+      paused: false,
+      url: "http://localhost:5173/",
+    });
   });
 });
 
@@ -830,13 +921,14 @@ describe("select_target", () => {
 });
 
 describe("registration metadata", () => {
-  it("registers exactly the seven session tools (launch_node included)", () => {
+  it("registers exactly the eight session tools (list_sessions included)", () => {
     expect(Array.from(tools.keys()).sort()).toEqual([
       "attach_chrome",
       "attach_node",
       "close_session",
       "launch_chrome",
       "launch_node",
+      "list_sessions",
       "list_targets",
       "select_target",
     ]);

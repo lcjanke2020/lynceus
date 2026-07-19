@@ -30,25 +30,30 @@ export interface LaunchArgs {
   // `true` only on a host that has a working sandbox path (AppArmor
   // userns allowance or SUID helper) AND you want to test sandbox-on.
   sandbox?: boolean;
+  // Optional friendly session label (design §3), unique among live sessions.
+  label?: string;
 }
 
 export interface AttachArgs {
   port?: number;
   host?: string;
   targetFilter?: { type?: string; urlIncludes?: string };
+  // Optional friendly session label (design §3), unique among live sessions.
+  label?: string;
 }
 
 const DEFAULT_PORT = 9222;
 
 export async function launchChrome(opts: LaunchArgs = {}): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
 }> {
-  // Capacity check (total, interim posture) — the old `alreadySession()`
-  // guard line now lives inside registry.reserve(). Everything after the
-  // reservation runs under reserve → activate/abort so a failed launch
-  // frees the slot instead of leaving a ghost record.
-  const rec = registry.reserve("browser");
+  // Per-kind capacity + label uniqueness now live inside registry.reserve().
+  // Everything after the reservation runs under reserve → activate/abort so a
+  // failed launch frees the slot instead of leaving a ghost record.
+  const rec = registry.reserve("browser", opts.label);
   const s = rec.state;
   try {
     // chrome-launcher manages --remote-debugging-port itself: it picks an
@@ -119,8 +124,9 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
     const targets = await waitForFirstPage(chrome.port);
     const target = targets[0]!;
     await connectToTarget(s, chrome.port, target.id);
+    s.url = target.url;
     registry.activate(rec.id);
-    return { targetId: target.id, url: target.url };
+    return { session: rec.id, label: rec.label ?? null, targetId: target.id, url: target.url };
   } catch (e) {
     await registry.abort(rec);
     throw e;
@@ -128,10 +134,12 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
 }
 
 export async function attachChrome(opts: AttachArgs = {}): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
 }> {
-  const rec = registry.reserve("browser");
+  const rec = registry.reserve("browser", opts.label);
   const s = rec.state;
   try {
     const port = opts.port ?? DEFAULT_PORT;
@@ -160,9 +168,10 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
     }
     const target = filtered[0]!;
     await connectToTarget(s, port, target.id, opts.host);
+    s.url = target.url;
     log.info("attached to chrome", { port, targetId: target.id, url: target.url });
     registry.activate(rec.id);
-    return { targetId: target.id, url: target.url };
+    return { session: rec.id, label: rec.label ?? null, targetId: target.id, url: target.url };
   } catch (e) {
     await registry.abort(rec);
     throw e;
@@ -359,10 +368,6 @@ async function enableBrowserDomains(
   await swallow(client.Network.enable({}, sessionId));
 }
 
-export async function closeSession(): Promise<void> {
-  await registry.close();
-}
-
 // Switch to a different target on the same browser without tearing down the
 // chrome process. Used by select_target. The registry record stays "active"
 // throughout — the accessors' client-null sentinel is what makes the
@@ -410,5 +415,6 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   }
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
+  s.url = t?.url ?? "";
   return { targetId, url: t?.url ?? "" };
 }

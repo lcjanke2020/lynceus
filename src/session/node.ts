@@ -10,6 +10,8 @@ import { log } from "../util/log.js";
 export interface AttachNodeArgs {
   host?: string;
   port?: number;
+  // Optional friendly session label (design §3), unique among live sessions.
+  label?: string;
 }
 
 export interface LaunchNodeArgs {
@@ -19,6 +21,8 @@ export interface LaunchNodeArgs {
   env?: Record<string, string>;
   inspectMode?: "inspect" | "inspect-brk";
   inspectPort?: number;
+  // Optional friendly session label (design §3), unique among live sessions.
+  label?: string;
 }
 
 const DEFAULT_NODE_INSPECTOR_PORT = 9229;
@@ -46,10 +50,12 @@ const LISTENING_RE = /^Debugger listening on ws:\/\/[^:]+:(\d+)\//m;
 //      runIfWaitingForDebugger V8 never fires Debugger.paused for an
 //      --inspect-brk attach.)
 export async function attachNode(opts: AttachNodeArgs = {}): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
 }> {
-  const rec = registry.reserve("node");
+  const rec = registry.reserve("node", opts.label);
   const s = rec.state;
   try {
     const port = opts.port ?? DEFAULT_NODE_INSPECTOR_PORT;
@@ -57,7 +63,7 @@ export async function attachNode(opts: AttachNodeArgs = {}): Promise<{
 
     const attached = await connectNodeInspector(s, { host, port, attached: true });
     registry.activate(rec.id);
-    return attached;
+    return { session: rec.id, label: rec.label ?? null, ...attached };
   } catch (e) {
     await registry.abort(rec);
     throw e;
@@ -65,6 +71,8 @@ export async function attachNode(opts: AttachNodeArgs = {}): Promise<{
 }
 
 export async function launchNode(opts: LaunchNodeArgs): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
   pid: number | null;
@@ -73,7 +81,7 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
   cwd: string;
   script: string;
 }> {
-  const rec = registry.reserve("node");
+  const rec = registry.reserve("node", opts.label);
   const s = rec.state;
   try {
     const cwd = opts.cwd ? resolve(opts.cwd) : process.cwd();
@@ -164,6 +172,8 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
       });
       registry.activate(rec.id);
       return {
+        session: rec.id,
+        label: rec.label ?? null,
         ...attached,
         pid: child.pid ?? null,
         port: startup.port,
@@ -225,6 +235,7 @@ async function connectNodeInspector(s: Session, opts: {
   s.chromePort = port;
   s.chromeHost = host;
   s.currentTargetId = target.id;
+  s.url = target.url ?? "";
   s.ownedProcess = opts.ownedProcess
     ? { kind: "node", handle: opts.ownedProcess }
     : null;

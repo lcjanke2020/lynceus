@@ -111,7 +111,7 @@ The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `
 
 ## What it gives an agent
 
-Across 52 tools ([full catalog](./src/tools/README.md)):
+Across 53 tools ([full catalog](./src/tools/README.md)):
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.

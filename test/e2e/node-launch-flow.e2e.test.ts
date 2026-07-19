@@ -67,6 +67,6 @@ describe("node launch flow (e2e)", () => {
     expect(bpHit.call_stack[0]!.file).toMatch(/handlers\.ts$/);
     expect(bpHit.call_stack[0]!.line).toBe(2);
 
-    expect(await call<string>(tools, "close_session")).toBe("closed");
+    expect((await call<{ status: string }>(tools, "close_session")).status).toBe("closed");
   });
 });

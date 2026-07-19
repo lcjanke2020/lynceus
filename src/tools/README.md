@@ -2,7 +2,7 @@
 
 **Last updated: 2026-07-08**
 
-All 52 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool). Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
+All 53 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool). Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
 ## The `registerJsonTool` pattern
 
@@ -48,17 +48,18 @@ Everything else (the `Runtime` / `Debugger` surface — breakpoints, execution s
 - **Buffered tools** (`get_console_logs`, `get_network_requests`) paginate via `since` cursor — pass back the previous `cursor` value to get only new entries.
 - **Compact previews.** Use `previewRemoteObject()` and `truncate()` from `src/util/format.ts`. Lists capped at sensible defaults; bodies lazy-loaded via dedicated tools, never inlined in list responses.
 
-## Tool catalog (52 tools)
+## Tool catalog (53 tools)
 
 The **Kind** column reflects which session kind a tool is meaningful for. **Shared** = works on both browser and Node sessions (the Runtime + Debugger surface). **Browser** = only meaningful against a browser session — the 25 tools in `BROWSER_ONLY` (`src/session/capabilities.ts`, including `select_target`) return `error: "unsupported_target"` when called against a Node session, and `launch_chrome` / `attach_chrome` are session-startup tools listed Browser for the same affinity reason. **Node** = only meaningful against a Node session — `attach_node` / `launch_node` are session-startup, and `get_node_output` is in `NODE_ONLY` (returns `unsupported_target` on a browser session).
 
 | File | Tool | Kind | One-line description |
 |---|---|---|---|
-| `session.ts` | `launch_chrome` | Browser | Launch Chrome with `--remote-debugging-port` and attach. |
-| | `attach_chrome` | Browser | Attach to a running Chrome (default port 9222). |
-| | `attach_node` | Node | Attach to a Node.js process started with `--inspect` / `--inspect-brk` (default port 9229, host 127.0.0.1). |
-| | `launch_node` | Node | Launch a Node.js script under `--inspect` / `--inspect-brk`, attach, and own the child process. |
-| | `close_session` | Shared | Close the CDP session; kill the owned process if we launched it ourselves (attach modes leave it running). |
+| `session.ts` | `launch_chrome` | Browser | Launch Chrome with `--remote-debugging-port` and attach. Optional `label`; returns `{ session, label, … }`. |
+| | `attach_chrome` | Browser | Attach to a running Chrome (default port 9222). Optional `label`; returns `{ session, label, … }`. |
+| | `attach_node` | Node | Attach to a Node.js process started with `--inspect` / `--inspect-brk` (default port 9229, host 127.0.0.1). Optional `label`; returns `{ session, label, … }`. |
+| | `launch_node` | Node | Launch a Node.js script under `--inspect` / `--inspect-brk`, attach, and own the child process. Optional `label`; returns `{ session, label, … }`. |
+| | `close_session` | Shared | Close a session (optional `session` id — omit when one is live); kills the owned process if we launched it. Returns `{ session, label, status }`; idempotent `no-active-session` when nothing is live. |
+| | `list_sessions` | Shared | List the live sessions (id, kind, label, attached/paused, url). The recovery tool `ambiguous_session` / `unknown_session` point at. |
 | | `list_targets` | Shared | Pages, workers, iframes on the current browser (Node sessions: single root target). |
 | | `select_target` | Browser | Switch the active page target. |
 | `nav.ts` | `navigate` | Browser | Go to URL; waits for `load` / `domcontentloaded` / `networkidle` / `none`. |

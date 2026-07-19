@@ -33,8 +33,8 @@ describe("lifecycle (e2e)", () => {
 
   it("close_session leaves Chrome alive (attached mode); subsequent attach works", async () => {
     await attachToTestChrome(tools);
-    const r1 = await call<string>(tools, "close_session");
-    expect(r1).toBe("closed");
+    const r1 = await call<{ status: string }>(tools, "close_session");
+    expect(r1.status).toBe("closed");
     // Re-attaching to the same Chrome must succeed — globalSetup-launched
     // chrome is shared across specs.
     const reattach = await attachToTestChrome(tools);
