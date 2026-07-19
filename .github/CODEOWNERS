@@ -1,0 +1,10 @@
+# Default code owners for lynceus.
+#
+# The `basic_rules` ruleset on master requires an approving review from a
+# code owner (Require review from Code Owners), so every pull request to
+# master needs sign-off from one of these accounts before it can merge.
+# Listed owners must be collaborators with write access.
+#
+# A single catch-all rule is the baseline; add per-path rows below it if
+# finer-grained ownership is ever needed (later rules take precedence).
+* @lcjanke2020 @ljanke

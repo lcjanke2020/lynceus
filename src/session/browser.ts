@@ -30,25 +30,30 @@ export interface LaunchArgs {
   // `true` only on a host that has a working sandbox path (AppArmor
   // userns allowance or SUID helper) AND you want to test sandbox-on.
   sandbox?: boolean;
+  // Optional friendly session label (design §3), unique among live sessions.
+  label?: string;
 }
 
 export interface AttachArgs {
   port?: number;
   host?: string;
   targetFilter?: { type?: string; urlIncludes?: string };
+  // Optional friendly session label (design §3), unique among live sessions.
+  label?: string;
 }
 
 const DEFAULT_PORT = 9222;
 
 export async function launchChrome(opts: LaunchArgs = {}): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
 }> {
-  // Capacity check (total, interim posture) — the old `alreadySession()`
-  // guard line now lives inside registry.reserve(). Everything after the
-  // reservation runs under reserve → activate/abort so a failed launch
-  // frees the slot instead of leaving a ghost record.
-  const rec = registry.reserve("browser");
+  // Per-kind capacity + label uniqueness now live inside registry.reserve().
+  // Everything after the reservation runs under reserve → activate/abort so a
+  // failed launch frees the slot instead of leaving a ghost record.
+  const rec = registry.reserve("browser", opts.label);
   const s = rec.state;
   try {
     // chrome-launcher manages --remote-debugging-port itself: it picks an
@@ -119,8 +124,9 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
     const targets = await waitForFirstPage(chrome.port);
     const target = targets[0]!;
     await connectToTarget(s, chrome.port, target.id);
+    s.url = target.url || null;
     registry.activate(rec.id);
-    return { targetId: target.id, url: target.url };
+    return { session: rec.id, label: rec.label ?? null, targetId: target.id, url: target.url };
   } catch (e) {
     await registry.abort(rec);
     throw e;
@@ -128,10 +134,12 @@ export async function launchChrome(opts: LaunchArgs = {}): Promise<{
 }
 
 export async function attachChrome(opts: AttachArgs = {}): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
 }> {
-  const rec = registry.reserve("browser");
+  const rec = registry.reserve("browser", opts.label);
   const s = rec.state;
   try {
     const port = opts.port ?? DEFAULT_PORT;
@@ -160,9 +168,10 @@ export async function attachChrome(opts: AttachArgs = {}): Promise<{
     }
     const target = filtered[0]!;
     await connectToTarget(s, port, target.id, opts.host);
+    s.url = target.url || null;
     log.info("attached to chrome", { port, targetId: target.id, url: target.url });
     registry.activate(rec.id);
-    return { targetId: target.id, url: target.url };
+    return { session: rec.id, label: rec.label ?? null, targetId: target.id, url: target.url };
   } catch (e) {
     await registry.abort(rec);
     throw e;
@@ -203,7 +212,7 @@ async function connectToTarget(s: Session, port: number, targetId: string, host?
     // attach_node's post-init guard.) Registry-world note: this close()
     // releases the socket/process state only — freeing the SLOT is the
     // caller's registry rollback (launch/attach abort(), switchTarget's
-    // failure-path registry.close()).
+    // failure-path closeState()).
     log.warn("connectToTarget init failed; tearing down", { error: String(e) });
     await s.close();
     throw e;
@@ -359,10 +368,6 @@ async function enableBrowserDomains(
   await swallow(client.Network.enable({}, sessionId));
 }
 
-export async function closeSession(): Promise<void> {
-  await registry.close();
-}
-
 // Switch to a different target on the same browser without tearing down the
 // chrome process. Used by select_target. The registry record stays "active"
 // throughout — the accessors' client-null sentinel is what makes the
@@ -396,13 +401,12 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
     // state the accessors read as "no session" while reserve() still counts
     // it (round-1 P1: close_session couldn't reach the record, every
     // launch/attach hit already_session, and only a server restart
-    // recovered). Route the cleanup through the registry so the record is
-    // deleted and the slot freed. Deliberate delta vs the singleton world:
-    // an OWNED Chrome is now killed here rather than orphaned with its
-    // handle lost. (PR 5 scopes this close to the addressed session once
-    // ids thread through switchTarget.)
+    // recovered). closeState(s) tears down EXACTLY this record — not the
+    // id-less close(), which per-kind capacity now lets pick a concurrent
+    // other-kind record (review round 1). Deliberate delta vs the singleton
+    // world: an OWNED Chrome is now killed here rather than orphaned.
     try {
-      await registry.close();
+      await registry.closeState(s);
     } catch {
       /* the reconnect error is the one worth surfacing */
     }
@@ -410,5 +414,6 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   }
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
+  s.url = t?.url || null; // null = unknown (|| so an empty "" also normalizes); string form kept only in the tool return
   return { targetId, url: t?.url ?? "" };
 }
