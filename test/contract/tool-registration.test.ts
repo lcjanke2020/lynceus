@@ -7,7 +7,8 @@
 //   - The structured {error, message} envelope survives the full round trip
 //     through the SDK's content/result framing — not just the inner handler's
 //     direct return.
-//   - The exact total tool count matches the documented surface (52 tools).
+//   - The exact total tool count matches the documented surface
+//     (EXPECTED_TOOL_COUNT, derived from EXPECTED_TOOL_NAMES below).
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,6 +16,38 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer } from "../../src/server.js";
 import { resetSessions } from "../setup.js";
+
+// The documented tool surface. EXPECTED_TOOL_COUNT is DERIVED from this list so
+// a new tool bumps the count and the name-set in one edit — no separate literal
+// to forget (design §12 anti-drift note; the count was a bare `52` before PR 4).
+const EXPECTED_TOOL_NAMES = [
+  // session
+  "launch_chrome", "attach_chrome", "attach_node", "launch_node", "close_session", "list_sessions", "list_targets", "select_target",
+  // nav
+  "navigate", "reload", "get_url",
+  // source
+  "list_scripts", "get_script_source", "get_source", "resolve_source_position",
+  // breakpoints
+  "set_breakpoint", "remove_breakpoint", "list_breakpoints", "set_pause_on_exceptions",
+  // execution
+  "resume", "step_over", "step_into", "step_out", "pause", "wait_for_pause",
+  // inspect
+  "get_call_stack", "get_scope", "evaluate", "get_object_properties",
+  // console
+  "get_console_logs", "clear_console",
+  // network
+  "get_network_requests", "get_request_body", "get_response_body",
+  // dom
+  "query_selector", "get_element_html", "locate", "wait_for", "get_form_state",
+  "click", "type_text", "press_key", "screenshot",
+  // forms
+  "select_option", "check", "uncheck", "fill", "suggest_locator",
+  // storage
+  "export_storage_state", "load_storage_state", "get_cookies", "set_cookies",
+  // node-output
+  "get_node_output",
+];
+const EXPECTED_TOOL_COUNT = EXPECTED_TOOL_NAMES.length;
 
 let client: Client;
 
@@ -32,9 +65,9 @@ afterAll(async () => {
 });
 
 describe("tools/list", () => {
-  it("returns exactly 52 tools (the documented surface)", async () => {
+  it(`returns exactly ${EXPECTED_TOOL_COUNT} tools (the documented surface)`, async () => {
     const r = await client.listTools();
-    expect(r.tools).toHaveLength(52);
+    expect(r.tools).toHaveLength(EXPECTED_TOOL_COUNT);
   });
 
   it("every tool has a non-empty description", async () => {
@@ -46,40 +79,13 @@ describe("tools/list", () => {
   it("includes the documented set of tool names", async () => {
     const r = await client.listTools();
     const names = new Set(r.tools.map((t) => t.name));
-    const expected = [
-      // session
-      "launch_chrome", "attach_chrome", "attach_node", "launch_node", "close_session", "list_targets", "select_target",
-      // nav
-      "navigate", "reload", "get_url",
-      // source
-      "list_scripts", "get_script_source", "get_source", "resolve_source_position",
-      // breakpoints
-      "set_breakpoint", "remove_breakpoint", "list_breakpoints", "set_pause_on_exceptions",
-      // execution
-      "resume", "step_over", "step_into", "step_out", "pause", "wait_for_pause",
-      // inspect
-      "get_call_stack", "get_scope", "evaluate", "get_object_properties",
-      // console
-      "get_console_logs", "clear_console",
-      // network
-      "get_network_requests", "get_request_body", "get_response_body",
-      // dom
-      "query_selector", "get_element_html", "locate", "wait_for", "get_form_state",
-      "click", "type_text", "press_key", "screenshot",
-      // forms
-      "select_option", "check", "uncheck", "fill", "suggest_locator",
-      // storage
-      "export_storage_state", "load_storage_state", "get_cookies", "set_cookies",
-      // node-output
-      "get_node_output",
-    ];
     // Bidirectional check: every expected name is present AND no unexpected
-    // name is registered. The "exactly 52 tools" count check above catches
-    // accidental additions, but a renamed tool could still pass `has(name)`
-    // for one expected entry while a stale entry remains in `expected`.
+    // name is registered. The exact-count check above catches accidental
+    // additions, but a renamed tool could still pass `has(name)` for one
+    // expected entry while a stale entry remains in EXPECTED_TOOL_NAMES.
     // Set equality catches both directions in one assertion.
     // (Opus PR #10 round-2 Low.)
-    expect(names).toEqual(new Set(expected));
+    expect(names).toEqual(new Set(EXPECTED_TOOL_NAMES));
   });
 
   it("inputSchemas are valid JSON Schema (parseable + 'type:object' shape)", async () => {

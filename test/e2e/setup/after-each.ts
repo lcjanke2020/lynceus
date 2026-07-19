@@ -11,16 +11,17 @@
 // we're cleaning up after potentially-broken state.
 
 import { afterEach } from "vitest";
-import { closeSession } from "../../../src/session/browser.js";
+import { registry } from "../../../src/session/state.js";
 
 afterEach(async () => {
   // Unconditional (round-1 review): gating on getSession() would skip a
   // record wedged with a null client — invisible to the accessors but still
   // holding reserve() capacity — and cascade already_session into later
-  // specs. registry.close() resolves any record regardless of the client
-  // sentinel and is a no-op when none exists.
+  // specs. closeAll() resolves every record regardless of the client sentinel
+  // (and closes both sides of a dual-session spec), and is a no-op when none
+  // exist.
   try {
-    await closeSession();
+    await registry.closeAll();
   } catch {
     /* deliberate — cleanup after possibly-broken state */
   }

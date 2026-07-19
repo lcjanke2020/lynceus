@@ -5,7 +5,15 @@ import { PauseTracker } from "./pause.js";
 import { RingBuffer, type ConsoleEntry, type NetworkEntry, type NodeOutputEntry } from "./buffers.js";
 import { ScriptStore } from "../sourcemap/store.js";
 import { log } from "../util/log.js";
-import { alreadySession, noSession, notPaused, unsupportedTarget } from "../util/errors.js";
+import {
+  alreadySession,
+  ambiguousSession,
+  duplicateLabel,
+  noSession,
+  notPaused,
+  unknownSession,
+  unsupportedTarget,
+} from "../util/errors.js";
 import { TOOL_KIND_SUPPORT } from "./capabilities.js";
 
 export interface BreakpointBinding {
@@ -65,6 +73,12 @@ class SessionState {
 
   currentTargetId: string | null = null;
   currentSessionId: string | undefined = undefined; // for flat-session targets
+  // Human-facing URL of the current target, surfaced by list_sessions. Browser
+  // sessions carry the page URL; Node sessions the inspector target URL.
+  // Best-effort: refreshed at launch/attach, select_target, and navigate, but
+  // NOT on client-side (History API / SPA) navigation. null until a target is
+  // connected — never "" (empty means "unknown").
+  url: string | null = null;
 
   readonly pause = new PauseTracker();
   readonly console = new RingBuffer<ConsoleEntry>(1000);
@@ -107,6 +121,7 @@ class SessionState {
     this.attached = false;
     this.currentTargetId = null;
     this.currentSessionId = undefined;
+    this.url = null;
     this.pause.reset();
     this.console.clear();
     this.network.clear();
@@ -284,6 +299,27 @@ export interface SessionRecord {
   closePromise?: Promise<void>;
 }
 
+// A live session as list_sessions and the recovery errors see it. The
+// attached/paused flags and url are read off the underlying state at call
+// time. (design §5.)
+export interface SessionSummary {
+  session: SessionId;
+  kind: SessionKind;
+  label: string | null;
+  attached: boolean;
+  paused: boolean;
+  url: string | null;
+}
+
+// Structured result of the close_session tool. `status: "no-active-session"`
+// with null ids is the idempotent zero-session success (design §5) — closing
+// nothing is an achieved no-op, never an error.
+export interface CloseResult {
+  session: SessionId | null;
+  label: string | null;
+  status: "closed" | "no-active-session";
+}
+
 // Startup is atomic by construction: reserve → initialize → activate, with
 // abort() as the rollback. A half-built session is never observable through
 // the accessors (they resolve ACTIVE records only), and a failed launch never
@@ -292,14 +328,24 @@ class SessionRegistry {
   private readonly records = new Map<SessionId, SessionRecord>();
   private readonly counters: Record<SessionKind, number> = { browser: 0, node: 0 };
 
-  // Mints the id and a fresh SessionState at status "starting". The capacity
-  // check runs HERE, counting reservations, so two concurrent launches can
-  // never both pass the guard. Interim posture: the check is TOTAL (any live
-  // record blocks) to preserve the single-session behavior of the four old
-  // `alreadySession()` guard sites bit-for-bit; the lifecycle-exposure PR
-  // flips it to per-kind and adds label uniqueness (`duplicate_label`).
+  // Mints the id and a fresh SessionState at status "starting". Both guards run
+  // HERE, counting reservations, so two concurrent launches can never both
+  // pass. Per-kind capacity (design §4): v1 caps the registry at one live
+  // session per kind, so a browser and a Node session coexist but a second of
+  // either kind is refused. A same-kind record in ANY not-yet-deleted status
+  // (starting/active/closing) blocks — a session still mid-teardown owns its
+  // process until close() completes and deletes the record. Labels are unique
+  // among live sessions (design §3), checked across kinds; a "closing" record
+  // has already released its label.
   reserve(kind: SessionKind, label?: string): SessionRecord {
-    if (this.records.size > 0) throw alreadySession();
+    const incumbent = [...this.records.values()].find((r) => r.kind === kind);
+    if (incumbent) throw alreadySession(incumbent.id, kind, incumbent.status);
+    if (label !== undefined) {
+      const clash = [...this.records.values()].find(
+        (r) => r.status !== "closing" && r.label === label,
+      );
+      if (clash) throw duplicateLabel(label, clash.id);
+    }
     this.counters[kind] += 1;
     const state = new SessionState();
     state.kind = kind;
@@ -363,34 +409,115 @@ class SessionRegistry {
     }
   }
 
-  // Resolution per design doc §2, ACTIVE records only. With the total
-  // capacity check above, "no id" can only mean the one active record;
-  // the >1 branch is unreachable until per-kind capacity lands, so it is a
-  // loud invariant error rather than a silent wrong pick (`ambiguous_session`
-  // replaces it in the lifecycle-exposure PR).
+  // Resolution per design doc §2, ACTIVE records only. Id given → that record's
+  // state (or null when it isn't active). Id omitted → the sole active record,
+  // or null when zero OR multiple are active. requireSession() turns the
+  // multiple-active null into ambiguous_session; getSession() (a peek) just
+  // sees null.
   get(id?: SessionId): SessionState | null {
     if (id !== undefined) {
       const record = this.records.get(id);
       return record?.status === "active" ? record.state : null;
     }
-    let only: SessionRecord | null = null;
+    let only: SessionState | null = null;
     for (const record of this.records.values()) {
       if (record.status !== "active") continue;
-      if (only) throw new Error("invariant: multiple active sessions cannot exist at total capacity 1");
-      only = record;
+      if (only) return null; // ≥2 active — ambiguous; the caller decides the error
+      only = record.state;
     }
-    return only?.state ?? null;
+    return only;
   }
 
-  // Close one session: the addressed record, or (id omitted) the sole
+  // Active sessions as summaries (design §5) — the data behind list_sessions
+  // and the candidate lists in ambiguous_session / unknown_session. Empty when
+  // no session is live.
+  list(): SessionSummary[] {
+    const out: SessionSummary[] = [];
+    for (const record of this.records.values()) {
+      if (record.status !== "active") continue;
+      out.push({
+        session: record.id,
+        kind: record.kind,
+        label: record.label ?? null,
+        attached: record.state.attached,
+        paused: record.state.pause.isPaused(),
+        url: record.state.url,
+      });
+    }
+    return out;
+  }
+
+  // Close one session: the addressed record, or (id omitted) the sole ACTIVE
   // record. Idempotent and re-entrancy safe: the record flips to "closing"
   // before the first await, and a second close() — or closeAll() — awaits
   // the same in-flight teardown via the record's memoized closePromise
-  // instead of skipping it.
+  // instead of skipping it. The id-less branch resolves the sole active record
+  // ONLY when exactly one is active — with two it no-ops rather than pick one
+  // arbitrarily (there are no id-less production callers now; switchTarget uses
+  // closeState()). Prefer closeState()/an id when a specific session is meant.
   async close(id?: SessionId): Promise<void> {
-    const record = id !== undefined ? this.records.get(id) : [...this.records.values()][0];
+    let record: SessionRecord | undefined;
+    if (id !== undefined) {
+      record = this.records.get(id);
+    } else {
+      const active = [...this.records.values()].filter((r) => r.status === "active");
+      record = active.length === 1 ? active[0] : undefined;
+    }
     if (!record) return;
     await this.closeRecord(record);
+  }
+
+  // Close the record that OWNS a specific SessionState instance — regardless of
+  // insertion order, id, or how many other records exist. switchTarget's
+  // reconnect-failure cleanup uses this: it holds the SessionState `s` but,
+  // until PR 5 threads ids through switchTarget, not the id — and an id-less
+  // close() could free the wrong record now that per-kind capacity makes a
+  // second record reachable. No-op if the state isn't in the registry.
+  async closeState(state: SessionState): Promise<void> {
+    for (const record of this.records.values()) {
+      if (record.state === state) {
+        await this.closeRecord(record);
+        return;
+      }
+    }
+  }
+
+  // Backs the close_session tool (design §2/§5). Resolves the target the same
+  // way the accessors do — explicit unknown id → unknown_session, omitted with
+  // two live → ambiguous_session — with ONE exception: omitting `session` when
+  // nothing is live is an idempotent success, not no_session. Returns the
+  // closed session's identity so the agent sees which one it closed. Unlike the
+  // accessors it ignores the client-liveness sentinel: a broken (active-but-
+  // clientless) session must still be closeable.
+  async closeAddressed(id?: SessionId): Promise<CloseResult> {
+    if (id !== undefined) {
+      const record = this.records.get(id);
+      // A record that is "active" OR already "closing" (an in-flight teardown
+      // from a prior/concurrent close) is a real session — close_session by id
+      // is idempotent: snapshot its identity, await the memoized teardown via
+      // closeRecord(), and report success. Only a genuinely absent record — or
+      // a not-yet-observable "starting" one, whose id the agent can't have seen
+      // — is unknown_session. (Review round 3, Codex + Copilot: a retry during
+      // an owned Node child's SIGTERM grace window otherwise got a false
+      // unknown_session while the original close was still doing the work.)
+      if (!record || record.status === "starting") {
+        throw unknownSession(id, this.list());
+      }
+      const result: CloseResult = { session: record.id, label: record.label ?? null, status: "closed" };
+      await this.closeRecord(record); // re-entrant: awaits the in-flight closePromise when already closing
+      return result;
+    }
+    const active = [...this.records.values()].filter((r) => r.status === "active");
+    if (active.length === 0) {
+      return { session: null, label: null, status: "no-active-session" };
+    }
+    if (active.length > 1) {
+      throw ambiguousSession(this.list());
+    }
+    const only = active[0]!;
+    const result: CloseResult = { session: only.id, label: only.label ?? null, status: "closed" };
+    await this.closeRecord(only);
+    return result;
   }
 
   // Shutdown path (index.ts). Awaits every record — including one whose
@@ -447,8 +574,19 @@ export function getSession(session?: SessionId): SessionState | null {
 
 export function requireSession(session?: SessionId): SessionState {
   const s = getSession(session);
-  if (!s) throw noSession();
-  return s;
+  if (s) return s;
+  // getSession returned null — produce the specific recovery error rather than
+  // a blanket no_session. (design §2 / §10)
+  const live = registry.list();
+  if (session !== undefined) {
+    // An active-but-clientless record (the switchTarget swap window) is in
+    // `live` yet reads as null through getSession; treat that as no_session,
+    // matching the singleton era. A genuinely absent id gets unknown_session.
+    const known = live.some((c) => c.session === session);
+    throw known ? noSession() : unknownSession(session, live);
+  }
+  if (live.length > 1) throw ambiguousSession(live);
+  throw noSession();
 }
 
 export function requirePaused(session?: SessionId): SessionState {

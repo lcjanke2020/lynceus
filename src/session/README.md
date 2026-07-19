@@ -10,7 +10,7 @@ Owns the singleton browser/Node process, the CDP client, pause state, and the bu
 |---|---|---|
 | `state.ts` | `sessionState` (singleton), `SessionState`, `SessionKind`, `OwnedProcess`, `requireSession()`, `requirePaused()`, `requireCapable()`, `registerHandler()`, `getSession()`, `ROOT_SESSION_KEY`, `BreakpointRecord`, `BreakpointBinding` | The singleton holding everything else (CDP client, owned process, breakpoints map, `ScriptStore`, `PauseTracker`, ring buffers, per-session handler refs, `pauseOnExceptions` policy, session `kind`). The `sessionState.client` field is the injection seam L2 contract tests use to swap in `test/fake-cdp.ts`. |
 | `capabilities.ts` | `TOOL_KIND_SUPPORT` | Per-tool kind allowlist consulted by `requireCapable()`. Browser is the default; only tools that reject a kind get an entry. See [`../tools/README.md`](../tools/README.md) §Capability gating for the agent-facing contract. |
-| `browser.ts` | `launchChrome()`, `attachChrome()`, `closeSession()`, `switchTarget()` | Browser lifecycle. `chrome-launcher` for `launch_chrome`; `CDP({port,host})` for `attach_chrome`. Sets up `Target.setAutoAttach({ flatten: true })` so workers + iframes hit the same CRI client tagged with their own `sessionId`. |
+| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()` | Browser lifecycle. `chrome-launcher` for `launch_chrome`; `CDP({port,host})` for `attach_chrome`. Sets up `Target.setAutoAttach({ flatten: true })` so workers + iframes hit the same CRI client tagged with their own `sessionId`. |
 | `node.ts` | `attachNode()`, `launchNode()` | Node Inspector lifecycle. `attach_node` connects to an existing `--inspect` / `--inspect-brk` process; `launch_node` spawns a Node child, parses the inspector port from stderr, attaches, and marks the process as owned for `close_session`. |
 | `pause.ts` | `PauseTracker`, `PauseState` | One pause at a time. `waitForPause(timeout)` blocks until the next `Debugger.paused`; `waitForPauseOrResume(timeout)` is the step-tool variant. **Read the entry-guard comment on `waitForPauseOrResume`** — it is load-bearing for fast steps where CRI delivers the step response and the next pause in the same WebSocket batch. |
 | `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry` | Capped at 1000 entries each, monotonic `seq` for pagination. `RingBuffer.update()` is used by the network buffer when a response arrives for an in-flight request. |
@@ -31,7 +31,7 @@ stateDiagram-v2
     Closed --> Disconnected: SessionState.reset()
 ```
 
-`closeSession()` kills Chrome or Node only if we launched it ourselves (`sessionState.attached === false`); attach-mode sessions leave the user's process alive.
+`close_session` (via `registry.closeAddressed` → `SessionState.close()`) kills Chrome or Node only if we launched it ourselves (`attached === false`); attach-mode sessions leave the user's process alive.
 
 `launch_node` captures child stdout/stderr into a durable pull-based buffer (`sessionState.nodeOutput`) exposed via the `get_node_output` MCP tool. The buffer is deliberately separate from the V8-inspector console (`get_console_logs`), which captures `Runtime.consoleAPICalled` events from inside the debuggee process. `attach_node` sessions leave the buffer empty — lynceus doesn't own the stdio of a pre-existing process.
 

@@ -62,6 +62,6 @@ describe("node output (e2e)", () => {
 
     // close_session against the launched child exercises the SIGTERM→SIGKILL
     // escalation path on the owned process.
-    expect(await call<string>(tools, "close_session")).toBe("closed");
+    expect((await call<{ status: string }>(tools, "close_session")).status).toBe("closed");
   });
 });
