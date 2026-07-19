@@ -26,6 +26,7 @@ export function registerNavTools(server: McpServer) {
       await s.client!.send("Page.navigate", { url: input.url });
       await loadPromise;
       const { frameTree } = await s.client!.send("Page.getFrameTree");
+      s.url = frameTree.frame.url; // keep list_sessions' url current across navigations
       return { url: frameTree.frame.url, wait };
     },
   );

@@ -75,8 +75,9 @@ class SessionState {
   currentSessionId: string | undefined = undefined; // for flat-session targets
   // Human-facing URL of the current target, surfaced by list_sessions. Browser
   // sessions carry the page URL; Node sessions the inspector target URL.
-  // Best-effort: set at launch/attach and select_target, NOT live-updated on
-  // in-page navigation. null until a target is connected.
+  // Best-effort: refreshed at launch/attach, select_target, and navigate, but
+  // NOT on client-side (History API / SPA) navigation. null until a target is
+  // connected — never "" (empty means "unknown").
   url: string | null = null;
 
   readonly pause = new PauseTracker();
@@ -338,7 +339,7 @@ class SessionRegistry {
   // has already released its label.
   reserve(kind: SessionKind, label?: string): SessionRecord {
     const incumbent = [...this.records.values()].find((r) => r.kind === kind);
-    if (incumbent) throw alreadySession(incumbent.id, kind);
+    if (incumbent) throw alreadySession(incumbent.id, kind, incumbent.status);
     if (label !== undefined) {
       const clash = [...this.records.values()].find(
         (r) => r.status !== "closing" && r.label === label,
@@ -446,15 +447,36 @@ class SessionRegistry {
     return out;
   }
 
-  // Close one session: the addressed record, or (id omitted) the sole
+  // Close one session: the addressed record, or (id omitted) the sole ACTIVE
   // record. Idempotent and re-entrancy safe: the record flips to "closing"
   // before the first await, and a second close() — or closeAll() — awaits
   // the same in-flight teardown via the record's memoized closePromise
-  // instead of skipping it.
+  // instead of skipping it. The id-less branch resolves the sole active record
+  // (not first-inserted) so it can't pick a "starting"/"closing" record now
+  // that a second session is reachable — but prefer closeState() when the
+  // caller already holds the SessionState (switchTarget).
   async close(id?: SessionId): Promise<void> {
-    const record = id !== undefined ? this.records.get(id) : [...this.records.values()][0];
+    const record =
+      id !== undefined
+        ? this.records.get(id)
+        : [...this.records.values()].find((r) => r.status === "active");
     if (!record) return;
     await this.closeRecord(record);
+  }
+
+  // Close the record that OWNS a specific SessionState instance — regardless of
+  // insertion order, id, or how many other records exist. switchTarget's
+  // reconnect-failure cleanup uses this: it holds the SessionState `s` but,
+  // until PR 5 threads ids through switchTarget, not the id — and an id-less
+  // close() could free the wrong record now that per-kind capacity makes a
+  // second record reachable. No-op if the state isn't in the registry.
+  async closeState(state: SessionState): Promise<void> {
+    for (const record of this.records.values()) {
+      if (record.state === state) {
+        await this.closeRecord(record);
+        return;
+      }
+    }
   }
 
   // Backs the close_session tool (design §2/§5). Resolves the target the same

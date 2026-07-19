@@ -108,7 +108,9 @@ export async function launchNode(opts: LaunchNodeArgs): Promise<{
     // orphaned it. (Round-2 review — Codex P1. The analogous launch_chrome
     // window sits INSIDE chrome-launcher's launch(), where no handle exists
     // yet to publish; closing that one needs shutdown to await in-flight
-    // startups — recorded for the PR 4 lifecycle-exposure decision.)
+    // startups. PR 4 did NOT take that on — lifecycle exposure is
+    // capacity/labels/tools, not shutdown ordering — so it stays deferred;
+    // revisit with the shutdown-barrier / raced-wait work in LEO-365.)
     s.ownedProcess = { kind: "node", handle: child };
 
     // Capture stdout/stderr into the durable pull-based buffer
@@ -235,7 +237,7 @@ async function connectNodeInspector(s: Session, opts: {
   s.chromePort = port;
   s.chromeHost = host;
   s.currentTargetId = target.id;
-  s.url = target.url ?? "";
+  s.url = target.url ?? null; // null = unknown; the return keeps the "" string form
   s.ownedProcess = opts.ownedProcess
     ? { kind: "node", handle: opts.ownedProcess }
     : null;

@@ -224,4 +224,57 @@ describe("SessionRegistry — per-kind capacity, labels, and §2 resolution", ()
       { session: n.id, kind: "node", label: "backend", attached: true, paused: false, url: "file:///app/index.js" },
     ]);
   });
+
+  // Review round 1 (P2): with per-kind capacity a second record is reachable,
+  // so switchTarget's id-less cleanup could free the wrong session. It now uses
+  // closeState(s), and id-less close() resolves the sole ACTIVE record.
+  it("closeState() closes exactly the record owning the state, not the first-inserted one", async () => {
+    const node = live("node"); // inserted first — the old id-less close() would pick this
+    const browser = live("browser"); // inserted second — the record switchTarget holds
+    await registry.closeState(browser.state);
+    expect(registry.list().map((s) => s.session)).toEqual([node.id]);
+  });
+
+  it("closeState() frees the switchTarget record even while another session is mid-close", async () => {
+    const node = live("node"); // inserted FIRST, about to be mid-teardown
+    const browser = live("browser"); // the record switchTarget holds
+    let releaseNode!: () => void;
+    node.state.close = (async () => {
+      await new Promise<void>((r) => (releaseNode = r));
+    }) as Session["close"];
+    void registry.close(node.id); // node → "closing", record lingers
+    let browserClosed = false;
+    const realClose = browser.state.close.bind(browser.state);
+    browser.state.close = (async () => {
+      browserClosed = true;
+      await realClose();
+    }) as Session["close"];
+    browser.state.client = null; // switchTarget mid-swap
+    await registry.closeState(browser.state);
+    expect(browserClosed).toBe(true); // the browser WAS the one closed
+    expect(registry.list()).toEqual([]); // nothing left wedged active
+    releaseNode();
+  });
+
+  it("id-less close() resolves the sole ACTIVE record, skipping a not-yet-active one", async () => {
+    registry.reserve("node"); // "starting", inserted FIRST, never activated
+    live("browser"); // active, inserted second
+    await registry.close(); // must close the browser, not the starting node
+    expect(getSession()).toBeNull();
+    // the starting node record survives — still blocks a fresh node reserve
+    expect(thrown(() => registry.reserve("node")).code).toBe("already_session");
+  });
+
+  it("already_session says 'shutting down' (retry) for a closing incumbent, not 'close it'", async () => {
+    const node = live("node");
+    let release!: () => void;
+    node.state.close = (async () => {
+      await new Promise<void>((r) => (release = r));
+    }) as Session["close"];
+    void registry.close(node.id); // node → "closing"
+    const err = thrown(() => registry.reserve("node"));
+    expect(err.code).toBe("already_session");
+    expect(err.message).toMatch(/shutting down/i);
+    release();
+  });
 });

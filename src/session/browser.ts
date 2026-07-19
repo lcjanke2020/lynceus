@@ -401,13 +401,12 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
     // state the accessors read as "no session" while reserve() still counts
     // it (round-1 P1: close_session couldn't reach the record, every
     // launch/attach hit already_session, and only a server restart
-    // recovered). Route the cleanup through the registry so the record is
-    // deleted and the slot freed. Deliberate delta vs the singleton world:
-    // an OWNED Chrome is now killed here rather than orphaned with its
-    // handle lost. (PR 5 scopes this close to the addressed session once
-    // ids thread through switchTarget.)
+    // recovered). closeState(s) tears down EXACTLY this record — not the
+    // id-less close(), which per-kind capacity now lets pick a concurrent
+    // other-kind record (review round 1). Deliberate delta vs the singleton
+    // world: an OWNED Chrome is now killed here rather than orphaned.
     try {
-      await registry.close();
+      await registry.closeState(s);
     } catch {
       /* the reconnect error is the one worth surfacing */
     }
@@ -415,6 +414,6 @@ export async function switchTarget(targetId: string): Promise<{ targetId: string
   }
   const list = await CDP.List({ port, host });
   const t = list.find((x) => x.id === targetId);
-  s.url = t?.url ?? "";
+  s.url = t?.url ?? null; // null = unknown; keep the string form only in the tool return
   return { targetId, url: t?.url ?? "" };
 }

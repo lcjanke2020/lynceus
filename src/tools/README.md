@@ -1,6 +1,6 @@
 # src/tools/
 
-**Last updated: 2026-07-08**
+**Last updated: 2026-07-19**
 
 All 53 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool). Every tool wraps `requireSession()` (or `requirePaused()`), makes one or more CDP calls, and returns a structured JSON envelope. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 

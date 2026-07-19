@@ -10,7 +10,7 @@ import { registerJsonTool } from "./_register.js";
 // half of session addressing (design §3) — ids stay the only thing tools
 // accept in `session`, but labels ride along in returns and diagnostics.
 const LABEL_DESC =
-  'Optional friendly label for this session (e.g. "frontend"/"backend"), echoed in list_sessions, pause events, and errors. Must be unique among live sessions.';
+  'Optional friendly label for this session (e.g. "frontend"/"backend"), echoed in list_sessions and errors. Must be unique among live sessions.';
 
 export function registerSessionTools(server: McpServer) {
   registerJsonTool(
@@ -34,7 +34,7 @@ export function registerSessionTools(server: McpServer) {
         .describe(
           "Enable Chromium's sandbox. When omitted, defaults from the CDP_SANDBOX env ('true' or '1' enable it; default false → we add --no-sandbox). On Ubuntu 23.10+ AppArmor restricts the unprivileged user namespace Chromium's sandbox depends on, so unsandboxed launch is the working default for automation. Pass true only on a host with a working sandbox path (AppArmor userns allowance or SUID chrome_sandbox helper).",
         ),
-      label: z.string().optional().describe(LABEL_DESC),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
     async (input: {
       url?: string;
@@ -70,7 +70,7 @@ export function registerSessionTools(server: McpServer) {
           url_includes: z.string().optional(),
         })
         .optional(),
-      label: z.string().optional().describe(LABEL_DESC),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
     async (input: { port?: number; host?: string; target_filter?: { type?: string; url_includes?: string }; label?: string }) => {
       return await attachChrome({
@@ -94,7 +94,7 @@ export function registerSessionTools(server: McpServer) {
     {
       port: z.number().int().positive().optional().describe("Inspector port (default 9229)"),
       host: z.string().optional().describe("Inspector host (default 127.0.0.1)"),
-      label: z.string().optional().describe(LABEL_DESC),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
     async (input: { port?: number; host?: string; label?: string }) => {
       return await attachNode({
@@ -130,7 +130,7 @@ export function registerSessionTools(server: McpServer) {
         .positive()
         .optional()
         .describe("Inspector port to request. Omit to let Node pick an available port."),
-      label: z.string().optional().describe(LABEL_DESC),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
     async (input: {
       script: string;
@@ -171,7 +171,7 @@ export function registerSessionTools(server: McpServer) {
   registerJsonTool(
     server,
     "list_sessions",
-    "List the live debug sessions (browser and Node) with their ids, labels, kind, attached/paused flags, and current url. The recovery tool that ambiguous_session and unknown_session point at. Returns an empty list when nothing is live.",
+    "List the live debug sessions (browser and Node) with their ids, labels, kind, attached/paused flags, and last-known url (best-effort: set at launch/attach/select_target/navigate, not live on in-page SPA navigation; null when unknown). The recovery tool that ambiguous_session and unknown_session point at. Returns an empty list when nothing is live.",
     undefined,
     async () => {
       return { sessions: registry.list() };
