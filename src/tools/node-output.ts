@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSession, requireCapable } from "../session/state.js";
 import { truncate } from "../util/format.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 // Pull-based stdout/stderr reader for lynceus-owned Node children.
 // Deliberately separate from get_console_logs: that tool surfaces
@@ -28,14 +29,15 @@ export function registerNodeOutputTools(server: McpServer) {
       stream: z.enum(STREAMS).optional().describe("Filter to one stream"),
       search: z.string().optional().describe("Substring filter on line text"),
       limit: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
     async (input: {
       since?: number;
       stream?: typeof STREAMS[number];
       search?: string;
       limit?: number;
-    }) => {
-      const s = requireSession();
+    } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_node_output");
       const search = input.search?.toLowerCase();
       const items = s.nodeOutput.query({

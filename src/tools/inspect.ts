@@ -6,6 +6,12 @@ import { mapCdpToOriginal } from "../sourcemap/store.js";
 import { describeRemote, previewRemoteObject } from "../util/format.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+import {
+  childSessionIdSchema,
+  sessionSchema,
+  withChildSessionDisambiguation,
+  type SessionInput,
+} from "./_session_input.js";
 
 // session_id provenance: objectIds, callFrameIds, and scriptIds returned by
 // CDP are scoped per-session (per-target). The inspect tools attach
@@ -17,9 +23,9 @@ export function registerInspectTools(server: McpServer) {
     server,
     "get_call_stack",
     "Get the current call stack with TS-mapped frames. Only valid while paused. Each frame includes the session_id its Runtime/Debugger agent belongs to — pass it through to evaluate/get_object_properties for the right routing.",
-    undefined,
-    async () => {
-      const s = requirePaused();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requirePaused(input.session);
       const state = s.pause.current()!;
       const sid = state.sessionId;
       return state.callFrames.map((cf, i) => {
@@ -54,9 +60,10 @@ export function registerInspectTools(server: McpServer) {
           "Omit for the merged lexical view (inner block/catch/with + function local, innermost wins); set one type to read exactly that scope.",
         ),
       max_props: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { frame_index?: number; scope_type?: string; max_props?: number }) => {
-      const s = requirePaused();
+    async (input: { frame_index?: number; scope_type?: string; max_props?: number } & SessionInput) => {
+      const s = requirePaused(input.session);
       const state = s.pause.current()!;
       const sid = state.sessionId;
       const idx = input.frame_index ?? 0;
@@ -169,14 +176,15 @@ export function registerInspectTools(server: McpServer) {
       frame_index: z.number().int().nonnegative().optional(),
       return_by_value: z.boolean().optional(),
       timeout_ms: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
     async (input: {
       expression: string;
       frame_index?: number;
       return_by_value?: boolean;
       timeout_ms?: number;
-    }) => {
-      const s = requireSession();
+    } & SessionInput) => {
+      const s = requireSession(input.session);
       const paused = s.pause.isPaused();
       if (input.frame_index !== undefined && !paused) {
         throw new ToolError("not_paused", "frame_index requires paused state");
@@ -215,15 +223,18 @@ export function registerInspectTools(server: McpServer) {
   registerJsonTool(
     server,
     "get_object_properties",
-    "Inspect a RemoteObject by ID (from get_scope, evaluate, or a callstack frame). Pass `session_id` from the source response so the call routes to the right Runtime agent — null or omitted means root.",
+    withChildSessionDisambiguation(
+      "Inspect a RemoteObject by ID (from get_scope, evaluate, or a callstack frame). Pass `session_id` from the source response so the call routes to the right Runtime agent — null or omitted means root.",
+    ),
     {
       object_id: z.string(),
-      session_id: z.string().nullable().optional().describe("From get_scope/evaluate/get_call_stack response. null or omitted = root."),
+      session_id: childSessionIdSchema,
       own_only: z.boolean().optional().describe("Default true"),
       max_props: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { object_id: string; session_id?: string | null; own_only?: boolean; max_props?: number }) => {
-      const s = requireSession();
+    async (input: { object_id: string; session_id?: string | null; own_only?: boolean; max_props?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       // Strict provenance: omitted session_id means root. The previous
       // "fall back to the paused session" behavior misrouted any
       // root-minted objectId once a child session was paused — a root

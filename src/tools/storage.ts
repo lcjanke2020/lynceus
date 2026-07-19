@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { requireSession, requireCapable } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 /**
  * Session-portability tools (issue #12 items 4, 5).
@@ -116,9 +117,12 @@ export function registerStorageTools(server: McpServer) {
     server,
     "export_storage_state",
     "Save the browser session (all cookies including HttpOnly, plus the current page origin's localStorage) to a JSON file in the de-facto Playwright storageState shape, so a flow can be resumed in a fresh session or handed to other tooling. The file preserves full cookie values (it exists to resume auth) — treat it as a secret. File write is gated by the same operator rule as screenshot path= / --allow-remote.",
-    { path: z.string().describe("Absolute path to write the storageState JSON to.") },
-    async (input: { path: string }) => {
-      const s = requireSession();
+    {
+      path: z.string().describe("Absolute path to write the storageState JSON to."),
+      session: sessionSchema,
+    },
+    async (input: { path: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "export_storage_state");
       const { cookies } = (await s.client!.send("Network.getAllCookies")) as { cookies: CdpCookie[] };
       const probe = await s.client!.send("Runtime.evaluate", {
@@ -156,9 +160,12 @@ export function registerStorageTools(server: McpServer) {
     server,
     "load_storage_state",
     "Restore a session from a Playwright-shaped storageState JSON file: sets all cookies (no navigation needed), then restores localStorage for the entries whose origin matches the current page. Cookies are added on top of the existing jar (additive, not a clean-context replace), so prefer a fresh session for Playwright-equivalent semantics. Origins that don't match the current page are returned in origins_skipped (restoring them would require navigating there first). File read is gated by the same operator rule as screenshot path= / --allow-remote.",
-    { path: z.string().describe("Absolute path to a storageState JSON file (as written by export_storage_state).") },
-    async (input: { path: string }) => {
-      const s = requireSession();
+    {
+      path: z.string().describe("Absolute path to a storageState JSON file (as written by export_storage_state)."),
+      session: sessionSchema,
+    },
+    async (input: { path: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "load_storage_state");
       let raw: string;
       try {
@@ -209,9 +216,10 @@ export function registerStorageTools(server: McpServer) {
         .array(z.string())
         .optional()
         .describe("Restrict to cookies visible to these URLs; omit for all cookies in the browser."),
+      session: sessionSchema,
     },
-    async (input: { urls?: string[] }) => {
-      const s = requireSession();
+    async (input: { urls?: string[] } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_cookies");
       const res = (
         input.urls && input.urls.length > 0
@@ -226,9 +234,9 @@ export function registerStorageTools(server: McpServer) {
     server,
     "set_cookies",
     "Set one or more cookies in the browser cookie jar via CDP. Each cookie needs a url OR a domain. For restoring a saved session, prefer load_storage_state; this is the lower-level primitive.",
-    { cookies: z.array(cookieParamSchema).describe("Cookies to set.") },
-    async (input: { cookies: Array<z.infer<typeof cookieParamSchema>> }) => {
-      const s = requireSession();
+    { cookies: z.array(cookieParamSchema).describe("Cookies to set."), session: sessionSchema },
+    async (input: { cookies: Array<z.infer<typeof cookieParamSchema>> } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "set_cookies");
       if (input.cookies.length === 0) throw new ToolError("missing_arg", "cookies array is empty");
       const missing = input.cookies.find((c) => !c.url && !c.domain);

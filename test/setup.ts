@@ -12,6 +12,8 @@ export interface SessionFixture {
   fake: FakeCdp;
   /** The registry-minted SessionState instance the test can inspect and mutate. */
   session: Session;
+  /** The actual registry id. Tests must not assume counters restart at browser_1/node_1. */
+  sessionId: string;
 }
 
 export interface SetupOpts {
@@ -46,11 +48,29 @@ export function setupSession(opts: SetupOpts = {}): SessionFixture {
     // (mirrors the old clientless singleton). The configured instance is
     // still returned so the fixture shape stays uniform.
     resetSessions();
-    return { fake, session };
+    return { fake, session, sessionId: rec.id };
   }
   session.client = fake as unknown as CDP.Client;
   registry.activate(rec.id);
-  return { fake, session };
+  return { fake, session, sessionId: rec.id };
+}
+
+/**
+ * Add a second, different-kind session without resetting the first one.
+ * The registry's v1 capacity is one session per kind, so callers normally use
+ * setupSession({kind:"browser"}) followed by setupAdditionalSession({kind:"node"}).
+ */
+export function setupAdditionalSession(opts: Omit<SetupOpts, "noClient"> = {}): SessionFixture {
+  const rec = registry.reserve(opts.kind ?? "browser");
+  const session = rec.state;
+  const fake = makeFakeCdp();
+  session.chromePort = opts.chromePort === null ? null : opts.chromePort ?? 9999;
+  if (opts.paused) {
+    session.pause.onPaused(fake.makePauseState({ sessionId: opts.pausedSessionId }));
+  }
+  session.client = fake as unknown as CDP.Client;
+  registry.activate(rec.id);
+  return { fake, session, sessionId: rec.id };
 }
 
 /** Drop every registry record (test seam — no close() side effects). */

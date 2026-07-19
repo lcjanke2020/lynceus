@@ -3,6 +3,12 @@ import { z } from "zod";
 import { requireSession, requireCapable } from "../session/state.js";
 import { truncate } from "../util/format.js";
 import { registerJsonTool } from "./_register.js";
+import {
+  childSessionIdSchema,
+  sessionSchema,
+  withChildSessionDisambiguation,
+  type SessionInput,
+} from "./_session_input.js";
 
 export function registerNetworkTools(server: McpServer) {
   registerJsonTool(
@@ -16,9 +22,10 @@ export function registerNetworkTools(server: McpServer) {
       url_match: z.string().optional().describe("Substring filter"),
       finished: z.boolean().optional().describe("If true, only return entries whose lifecycle has completed (loaded OR failed — also check the `failure` field before calling get_response_body)"),
       limit: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { since?: number; status?: number; type?: string; url_match?: string; finished?: boolean; limit?: number }) => {
-      const s = requireSession();
+    async (input: { since?: number; status?: number; type?: string; url_match?: string; finished?: boolean; limit?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_network_requests");
       const match = input.url_match;
       const items = s.network.query({
@@ -64,14 +71,17 @@ export function registerNetworkTools(server: McpServer) {
   registerJsonTool(
     server,
     "get_request_body",
-    "Fetch the request body for a request ID. Often empty for GETs. Pass `session_id` from the get_network_requests item to disambiguate when child sessions have colliding request_ids. `null` = root.",
+    withChildSessionDisambiguation(
+      "Fetch the request body for a request ID. Often empty for GETs. Pass `session_id` from the get_network_requests item to disambiguate when child sessions have colliding request_ids. `null` = root.",
+    ),
     {
       request_id: z.string(),
-      session_id: z.string().nullable().optional().describe("From get_network_requests. null or omitted = root."),
+      session_id: childSessionIdSchema,
       max_chars: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { request_id: string; session_id?: string | null; max_chars?: number }) => {
-      const s = requireSession();
+    async (input: { request_id: string; session_id?: string | null; max_chars?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_request_body");
       const max = input.max_chars ?? 4000;
       // Normalize null→undefined for CDP. After normalization, sid is the
@@ -100,14 +110,17 @@ export function registerNetworkTools(server: McpServer) {
   registerJsonTool(
     server,
     "get_response_body",
-    "Fetch the response body for a request ID. Only safe when `finished: true` AND `failure` is absent in get_network_requests — failed requests are also `finished: true` but have no body. Pass `session_id` from the get_network_requests item to disambiguate cross-session request_id collisions. Binary payloads (base64_encoded=true) are returned as a clean base64 string — call Buffer.from(body, 'base64') to get raw bytes. Server does NOT decode binary to UTF-8 (which would corrupt PNGs/fonts/wasm/etc.) and does NOT truncate base64 bodies (truncation appended text characters that were inside the base64 alphabet, silently corrupting the tail bytes).",
+    withChildSessionDisambiguation(
+      "Fetch the response body for a request ID. Only safe when `finished: true` AND `failure` is absent in get_network_requests — failed requests are also `finished: true` but have no body. Pass `session_id` from the get_network_requests item to disambiguate cross-session request_id collisions. Binary payloads (base64_encoded=true) are returned as a clean base64 string — call Buffer.from(body, 'base64') to get raw bytes. Server does NOT decode binary to UTF-8 (which would corrupt PNGs/fonts/wasm/etc.) and does NOT truncate base64 bodies (truncation appended text characters that were inside the base64 alphabet, silently corrupting the tail bytes).",
+    ),
     {
       request_id: z.string(),
-      session_id: z.string().nullable().optional().describe("From get_network_requests. null or omitted = root."),
+      session_id: childSessionIdSchema,
       max_chars: z.number().int().positive().optional().describe("Only applied to TEXT responses; base64 payloads are returned in full"),
+      session: sessionSchema,
     },
-    async (input: { request_id: string; session_id?: string | null; max_chars?: number }) => {
-      const s = requireSession();
+    async (input: { request_id: string; session_id?: string | null; max_chars?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_response_body");
       const max = input.max_chars ?? 4000;
       const sid = input.session_id ?? undefined;

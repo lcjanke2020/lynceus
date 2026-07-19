@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import CDP from "chrome-remote-interface";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import type { Protocol } from "devtools-protocol";
-import { registry, getSession, registerHandler, type Session } from "./state.js";
+import { registry, registerHandler, type Session } from "./state.js";
 import { connectDebugger } from "./debugger.js";
 import { log } from "../util/log.js";
 import { snapUserDataDir } from "../util/browser-resolve.js";
@@ -372,9 +372,8 @@ async function enableBrowserDomains(
 // chrome process. Used by select_target. The registry record stays "active"
 // throughout — the accessors' client-null sentinel is what makes the
 // mid-switch window read as "no session", exactly as it did pre-registry.
-export async function switchTarget(targetId: string): Promise<{ targetId: string; url: string }> {
-  const s = getSession();
-  if (!s || !s.client) throw new Error("No active session");
+export async function switchTarget(s: Session, targetId: string): Promise<{ targetId: string; url: string }> {
+  if (!s.client) throw new Error("No active session");
   const port = s.chromePort!;
   const host = s.chromeHost ?? undefined;
   const attached = s.attached;
