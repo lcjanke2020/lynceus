@@ -12,7 +12,11 @@ export interface SessionFixture {
   fake: FakeCdp;
   /** The registry-minted SessionState instance the test can inspect and mutate. */
   session: Session;
-  /** The actual registry id. Tests must not assume counters restart at browser_1/node_1. */
+  /**
+   * The registry-minted id. Tests must not assume counters restart at browser_1/node_1.
+   * With noClient:true the record is dropped before return, so this id is diagnostic only
+   * and addressed calls using it correctly fail with unknown_session rather than no_session.
+   */
   sessionId: string;
 }
 
