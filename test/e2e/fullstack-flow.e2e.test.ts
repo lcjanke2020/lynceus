@@ -4,7 +4,7 @@
 // session-scoped call is explicitly addressed — raced waits and merged
 // timelines belong to LEO-365 / the next branch PR.
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   attachToTestChrome,
   buildToolMap,
@@ -21,6 +21,7 @@ const tools = buildToolMap();
 const FRONTEND_BREAKPOINT_LINE = 13;
 const BACKEND_BREAKPOINT_LINE = 7;
 const API_LISTENING_RE = /fullstack-api listening on http:\/\/127\.0\.0\.1:(\d+)/;
+const RAW_CHILD_KILL_FALLBACK_MS = 3_000;
 
 interface PauseSummary {
   hit_breakpoint_ids: string[];
@@ -33,6 +34,58 @@ interface BreakpointResult {
   binding_count: number;
   resolved_locations: Array<{ file: string; line: number; column: number }>;
 }
+
+interface SessionList {
+  sessions: Array<{
+    session: string;
+    kind: "browser" | "node";
+    label: string | null;
+    paused: boolean;
+  }>;
+}
+
+interface FullstackCleanup {
+  backendPid: number | null;
+  backendSession: string | null;
+  frontendSession: string | null;
+}
+
+let activeCleanup: FullstackCleanup | null = null;
+
+function forceKill(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    /* already dead */
+  }
+}
+
+afterEach(async () => {
+  const cleanup = activeCleanup;
+  activeCleanup = null;
+  if (!cleanup) return;
+
+  // This API fixture is intentionally long-lived. Attempt normal addressed
+  // cleanup first, but keep a raw-PID timer independent of MCP teardown: a
+  // wedged CRI close must not strand the HTTP/Inspector child. The final kill
+  // is idempotent and covers rejected cleanup after the timer is cleared.
+  const pid = cleanup.backendPid;
+  const rawKillTimer =
+    pid === null
+      ? null
+      : setTimeout(() => forceKill(pid), RAW_CHILD_KILL_FALLBACK_MS);
+  rawKillTimer?.unref();
+  try {
+    await Promise.allSettled(
+      [cleanup.frontendSession, cleanup.backendSession]
+        .filter((session): session is string => session !== null)
+        .map((session) => call(tools, "close_session", { session })),
+    );
+  } finally {
+    if (rawKillTimer) clearTimeout(rawKillTimer);
+    if (pid !== null) forceKill(pid);
+  }
+});
 
 async function waitForApiPort(session: string): Promise<number> {
   return await waitFor(
@@ -56,6 +109,13 @@ async function waitForApiPort(session: string): Promise<number> {
 
 describe("full-stack flow (e2e)", () => {
   it("breakpoints and inspects both sides of one browser → Node request", async () => {
+    const cleanup: FullstackCleanup = {
+      backendPid: null,
+      backendSession: null,
+      frontendSession: null,
+    };
+    activeCleanup = cleanup;
+
     // Backend first: --inspect-brk gives us a deterministic setup window in
     // which its source map is loaded and the route breakpoint can bind before
     // the HTTP server starts accepting requests.
@@ -71,6 +131,8 @@ describe("full-stack flow (e2e)", () => {
     expect(backend.session).toMatch(/^node_\d+$/);
     expect(backend.label).toBe("backend");
     expect(backend.pid).toBeGreaterThan(0);
+    cleanup.backendSession = backend.session;
+    cleanup.backendPid = backend.pid;
 
     const entryPause = await call<PauseSummary>(tools, "wait_for_pause", {
       session: backend.session,
@@ -106,20 +168,14 @@ describe("full-stack flow (e2e)", () => {
     const frontend = await attachToTestChrome(tools, { label: "frontend" });
     expect(frontend.session).toMatch(/^browser_\d+$/);
     expect(frontend.label).toBe("frontend");
+    cleanup.frontendSession = frontend.session;
     await call(tools, "navigate", {
       session: frontend.session,
       url: fullstackAppUrl(apiPort),
       wait: "load",
     });
 
-    const live = await call<{
-      sessions: Array<{
-        session: string;
-        kind: "browser" | "node";
-        label: string | null;
-        paused: boolean;
-      }>;
-    }>(tools, "list_sessions");
+    const live = await call<SessionList>(tools, "list_sessions");
     expect(live.sessions).toHaveLength(2);
     expect(live.sessions).toEqual(
       expect.arrayContaining([
@@ -165,10 +221,21 @@ describe("full-stack flow (e2e)", () => {
       (error: unknown) => ({ error }),
     );
 
-    const frontendPause = await call<PauseSummary>(tools, "wait_for_pause", {
-      session: frontend.session,
-      timeout_ms: 10_000,
+    // A click normally stays pending until the paused handler resumes. Race
+    // only its rejection against the pause so selector/session failures keep
+    // their real diagnostic instead of surfacing as a later pause timeout.
+    const clickFailure = clickResult.then((click) => {
+      if ("error" in click) throw click.error;
+      return new Promise<never>(() => {});
     });
+
+    const frontendPause = await Promise.race([
+      call<PauseSummary>(tools, "wait_for_pause", {
+        session: frontend.session,
+        timeout_ms: 10_000,
+      }),
+      clickFailure,
+    ]);
     expect(frontendPause.hit_breakpoint_ids).toContain(frontendBp.id);
     expect(frontendPause.call_stack[0]).toEqual(
       expect.objectContaining({
@@ -201,13 +268,37 @@ describe("full-stack flow (e2e)", () => {
         line: BACKEND_BREAKPOINT_LINE,
       }),
     );
-    const requestPath = await call<{ value?: string }>(tools, "evaluate", {
+
+    const pausedSessions = await call<SessionList>(tools, "list_sessions");
+    expect(pausedSessions.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          session: backend.session,
+          paused: true,
+        }),
+        expect.objectContaining({
+          session: frontend.session,
+          paused: false,
+        }),
+      ]),
+    );
+
+    const backendScope = await call<{
+      merged_scope_types: string[];
+      items: Array<{ name: string; preview: string }>;
+    }>(tools, "get_scope", {
       session: backend.session,
       frame_index: 0,
-      expression: "requestPath",
-      return_by_value: true,
     });
-    expect(requestPath.value).toBe("/api/x");
+    expect(backendScope.merged_scope_types).toEqual(
+      expect.arrayContaining(["block", "local"]),
+    );
+    expect(backendScope.items.map((item) => item.name)).toEqual(
+      expect.arrayContaining(["req", "res", "requestPath"]),
+    );
+    expect(
+      backendScope.items.find((item) => item.name === "requestPath")?.preview,
+    ).toBe('"/api/x"');
 
     expect(
       await call<string>(tools, "resume", { session: backend.session }),
@@ -262,12 +353,24 @@ describe("full-stack flow (e2e)", () => {
       : response.body;
     expect(JSON.parse(body)).toEqual({ message: "backend-ok", requestPath: "/api/x" });
 
-    expect(
-      await call(tools, "close_session", { session: backend.session }),
-    ).toEqual({ session: backend.session, label: "backend", status: "closed" });
-    expect(
-      await call(tools, "close_session", { session: frontend.session }),
-    ).toEqual({ session: frontend.session, label: "frontend", status: "closed" });
+    const closedBackend = await call(tools, "close_session", {
+      session: backend.session,
+    });
+    cleanup.backendSession = null;
+    expect(closedBackend).toEqual({
+      session: backend.session,
+      label: "backend",
+      status: "closed",
+    });
+    const closedFrontend = await call(tools, "close_session", {
+      session: frontend.session,
+    });
+    cleanup.frontendSession = null;
+    expect(closedFrontend).toEqual({
+      session: frontend.session,
+      label: "frontend",
+      status: "closed",
+    });
     expect(await call(tools, "list_sessions")).toEqual({ sessions: [] });
   });
 });

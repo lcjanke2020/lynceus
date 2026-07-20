@@ -19,12 +19,17 @@ export default defineConfig({
     // is cheaper than configuring Chrome's source-map name resolution
     // for headless mode AND makes failures easier to read.
     minify: false,
+    // Multi-entry builds otherwise inject a shared modulepreload polyfill
+    // into the canonical page. The fixture runs only in modern Chromium /
+    // Chrome, so suppress that extra script and its network request.
+    modulePreload: { polyfill: false },
     // The ordinary counter fixture remains the default page. fullstack.html
     // is a second, isolated vanilla entry used only by the dual-session L3
     // flow, so its API request cannot add network noise to existing specs.
     rollupOptions: {
       input: {
-        main: resolve(fixtureRoot, "index.html"),
+        // Keep the canonical page's emitted asset at assets/index-*.js.
+        index: resolve(fixtureRoot, "index.html"),
         fullstack: resolve(fixtureRoot, "fullstack.html"),
       },
     },

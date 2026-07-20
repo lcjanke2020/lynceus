@@ -14,7 +14,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE). Releases are published to npm by CI via [OIDC trusted publishing](https://docs.npmjs.com/generating-provenance-statements) — no long-lived npm token exists — with a provenance attestation linking the published tarball to the exact commit and workflow run that built it.
 
-**Last updated: 2026-07-14**
+**Last updated: 2026-07-19**
 
 ## Install
 

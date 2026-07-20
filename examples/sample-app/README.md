@@ -1,6 +1,6 @@
 # examples/sample-app/
 
-**Last updated: 2026-07-17**
+**Last updated: 2026-07-19**
 
 The shared web-app fixture used by L3 e2e tests and L4 evals. A small Vite + TypeScript app with intentional bugs the agent is supposed to find.
 

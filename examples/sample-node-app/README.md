@@ -1,10 +1,11 @@
 # sample-node-app
 
-**Last updated: 2026-07-13**
+**Last updated: 2026-07-19**
 
 Multi-entry tsc-compiled Node.js fixture for the Node-Inspector debugging work.
-It is the shared fixture for the Node-Inspector e2e specs
-(`test/e2e/node-*.e2e.test.ts`) and the Node eval scenarios
+It is shared by the Node-Inspector e2e specs
+(`test/e2e/node-*.e2e.test.ts`), the dual-session full-stack spec
+(`test/e2e/fullstack-flow.e2e.test.ts`), and the Node eval scenarios
 (`evals/scenarios/node-*.ts`).
 
 Seven source files under `src/` share one `dist/` build — **six runnable

@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated: 2026-07-06**
+**Last updated: 2026-07-19**
 
 How `lynceus` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
