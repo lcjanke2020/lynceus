@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // Debug-target addressing (browser_1 / node_1) is deliberately distinct
 // from CDP's child-session axis (`session_id`). Keep both schemas and their
-// agent-facing wording in one place so the 47 session-scoped tools and the
+// agent-facing wording in one place so the session-scoped tools and the
 // 11 child-session-aware tools cannot drift independently.
 export const SESSION_DESC =
   'Debug-target session id from launch/attach/list_sessions (for example "browser_1" or "node_1"). Omit to address the only live session; when multiple are live, pass one explicitly.';

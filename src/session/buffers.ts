@@ -57,10 +57,14 @@ export interface NetworkEntry {
 export class RingBuffer<T extends { seq: number }> {
   private items: T[] = [];
   private nextSeq = 1;
-  constructor(private capacity: number) {}
+  constructor(
+    private capacity: number,
+    private readonly allocateSeq?: () => number,
+  ) {}
 
   push(item: Omit<T, "seq">): T {
-    const full = { ...(item as object), seq: this.nextSeq++ } as T;
+    const seq = this.allocateSeq ? this.allocateSeq() : this.nextSeq++;
+    const full = { ...(item as object), seq } as T;
     this.items.push(full);
     if (this.items.length > this.capacity) {
       this.items.splice(0, this.items.length - this.capacity);

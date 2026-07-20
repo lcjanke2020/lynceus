@@ -1,13 +1,24 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Protocol } from "devtools-protocol";
-import { requireSession, requirePaused } from "../session/state.js";
+import {
+  registry,
+  requireSession,
+  requirePaused,
+  type Session,
+  type SessionSummary,
+} from "../session/state.js";
+import {
+  PauseTrackerClosedError,
+  type PauseState,
+  type PauseWaitHandle,
+} from "../session/pause.js";
 import {
   mapCdpToOriginal,
   waitForConsumer,
   MAP_LOAD_WAIT_MS,
 } from "../sourcemap/store.js";
-import { ToolError } from "../util/errors.js";
+import { noSession, ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 import {
   childSessionIdSchema,
@@ -120,14 +131,36 @@ export function registerExecutionTools(server: McpServer) {
   registerJsonTool(
     server,
     "wait_for_pause",
-    "Block until the debugger pauses (or times out). Returns the pause reason and a TS-mapped call stack.",
+    "Block until the debugger pauses (or times out). Pass `session` to wait on one target; omit it to race every live target and return the winner's session + label with the pause summary.",
     {
       timeout_ms: z.number().int().positive().optional().describe("Default 30000"),
-      session: sessionSchema,
+      session: z
+        .string()
+        .optional()
+        .describe(
+          'Debug-target session id from launch/attach/list_sessions (for example "browser_1" or "node_1"). Pass one to wait on that target; omit it to race all live sessions.',
+        ),
     },
     async (input: { timeout_ms?: number } & SessionInput) => {
-      const s = requireSession(input.session);
       const timeoutMs = input.timeout_ms ?? 30000;
+
+      if (input.session === undefined) {
+        const { candidate, state } = await waitForAnyPause(timeoutMs);
+        return {
+          session: candidate.session,
+          label: candidate.label,
+          ...(await summarizePause(
+            candidate.state,
+            state.reason,
+            state.hitBreakpoints,
+            state.data,
+            state.callFrames,
+            state.sessionId,
+          )),
+        };
+      }
+
+      const s = requireSession(input.session);
       let state;
       try {
         state = await s.pause.waitForPause(timeoutMs);
@@ -142,6 +175,93 @@ export function registerExecutionTools(server: McpServer) {
       return await summarizePause(s, state.reason, state.hitBreakpoints, state.data, state.callFrames, state.sessionId);
     },
   );
+}
+
+interface PauseRaceCandidate extends SessionSummary {
+  state: Session;
+}
+
+interface PauseRaceFailure {
+  candidate: PauseRaceCandidate;
+  error: unknown;
+}
+
+function livePauseCandidates(): PauseRaceCandidate[] {
+  const candidates: PauseRaceCandidate[] = [];
+  for (const summary of registry.list()) {
+    const state = registry.get(summary.session);
+    // Match requireSession's client-liveness sentinel. A switch_target socket
+    // swap can leave an active record temporarily clientless; it is not a
+    // usable race participant until the replacement client is installed.
+    if (state?.client) candidates.push({ ...summary, state });
+  }
+  return candidates;
+}
+
+async function waitForAnyPause(
+  timeoutMs: number,
+): Promise<{ candidate: PauseRaceCandidate; state: PauseState }> {
+  const candidates = livePauseCandidates();
+  if (candidates.length === 0) throw noSession();
+
+  const handles: PauseWaitHandle[] = [];
+  const attempts = candidates.map((candidate) => {
+    const handle = candidate.state.pause.waitForPauseCancellable(timeoutMs);
+    handles.push(handle);
+    return handle.promise.then(
+      (state) => ({ candidate, state }),
+      (error) => Promise.reject({ candidate, error } satisfies PauseRaceFailure),
+    );
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    if (!(error instanceof AggregateError)) throw error;
+    const failures = error.errors as PauseRaceFailure[];
+    const surviving = failures.filter(
+      (failure) => !(failure.error instanceof PauseTrackerClosedError),
+    );
+    // Closing one target removes that participant without failing the race.
+    // If every participant closes, there is no target left to wait on.
+    if (surviving.length === 0) throw noSession();
+
+    if (candidates.length === 1) {
+      const only = surviving[0]!;
+      throw enrichPauseTimeout(only.candidate.state, only.error, timeoutMs);
+    }
+
+    const diagnosticBlocks: string[] = [];
+    for (const failure of surviving) {
+      const enriched = enrichPauseTimeout(
+        failure.candidate.state,
+        failure.error,
+        timeoutMs,
+      );
+      if (enriched === failure.error) throw enriched;
+      const detail = enriched.message.split("\n").slice(1).join("\n").trim();
+      if (detail) {
+        const label =
+          failure.candidate.label === null
+            ? ""
+            : `, label ${JSON.stringify(failure.candidate.label)}`;
+        diagnosticBlocks.push(
+          `Session ${failure.candidate.session} (${failure.candidate.kind}${label}):\n${detail}`,
+        );
+      }
+    }
+
+    const message = [
+      `Timed out after ${timeoutMs}ms waiting for pause in any live session.`,
+      ...diagnosticBlocks,
+    ].join("\n");
+    throw new ToolError("pause_timeout", message);
+  } finally {
+    // Winner included: its handle is already settled, so cancel() is a no-op.
+    // Every loser is removed synchronously and its timer is cleared before the
+    // tool begins the (potentially source-map-waiting) pause-summary work.
+    for (const handle of handles) handle.cancel();
+  }
 }
 
 // Turn a bare wait_for_pause timeout into an actionable diagnosis. Reads live

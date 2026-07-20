@@ -60,9 +60,8 @@ export const alreadySession = (
 };
 
 // Omitted `session` with two live sessions (design §2/§10). Lists the
-// candidates and names the recovery move. NOTE: the "any tool but
-// wait_for_pause" carve-out is the §6 end-state — raced wait_for_pause lands in
-// LEO-365; until then wait_for_pause is ambiguous like every other tool.
+// candidates and names the recovery move. wait_for_pause is the deliberate
+// exception: its omitted form races every live session (design §6).
 export const ambiguousSession = (candidates: readonly SessionCandidate[]) =>
   new ToolError(
     "ambiguous_session",

@@ -46,6 +46,8 @@ const EXPECTED_TOOL_NAMES = [
   "export_storage_state", "load_storage_state", "get_cookies", "set_cookies",
   // node-output
   "get_node_output",
+  // timeline
+  "get_timeline",
 ];
 const EXPECTED_TOOL_COUNT = EXPECTED_TOOL_NAMES.length;
 
@@ -127,7 +129,7 @@ describe("tools/list", () => {
   it("every addressed tool exposes the debug-target session selector", async () => {
     const r = await client.listTools();
     const byName = new Map(r.tools.map((tool) => [tool.name, tool]));
-    expect(SESSION_ADDRESSED_TOOL_NAMES).toHaveLength(48); // 47 ordinary tools + close_session
+    expect(SESSION_ADDRESSED_TOOL_NAMES).toHaveLength(49); // 48 ordinary tools + close_session
     for (const name of SESSION_ADDRESSED_TOOL_NAMES) {
       const schema = byName.get(name)?.inputSchema as any;
       expect(schema?.properties?.session, `${name} is missing session`).toBeDefined();
@@ -198,7 +200,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
   // payload through the SDK's content/result framing — not just the inner
   // handler's direct return shape.
   //
-  // Using a representative subset (one per category) rather than all 52 to
+  // Using a representative subset (one per category) rather than all 54 to
   // keep the contract test fast.
   const noSessionCases: Array<{ tool: string; args: Record<string, unknown> }> = [
     { tool: "navigate", args: { url: "http://x" } },
@@ -208,6 +210,7 @@ describe("tools/call — error envelope round-trip via the full SDK transport", 
     { tool: "get_call_stack", args: {} },
     { tool: "get_console_logs", args: {} },
     { tool: "get_network_requests", args: {} },
+    { tool: "get_timeline", args: {} },
     { tool: "query_selector", args: { selector: "#x" } },
     { tool: "get_cookies", args: {} },
   ];
