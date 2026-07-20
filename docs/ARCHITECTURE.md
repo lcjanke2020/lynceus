@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated: 2026-07-19**
+**Last updated: 2026-07-20**
 
 How `lynceus` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
@@ -10,7 +10,7 @@ How `lynceus` is put together. For *why* decisions were made the way they were, 
 
 Three big pieces:
 
-- A **tool layer** (`src/tools/`) — 53 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
+- A **tool layer** (`src/tools/`) — 54 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
 - A **state layer** (`src/session/` + `src/sourcemap/`) — owns the singleton browser/Node process, the CDP client, the pause tracker, ring buffers, the script store / source-map indexes, and the Node child's stdio buffer.
 - A **CDP transport** (`chrome-remote-interface`) — the WebSocket to Chrome (root page + every attached worker/iframe via `flatten:true` auto-attach) or to a Node `--inspect` endpoint (single root target).
 
@@ -20,8 +20,8 @@ Three big pieces:
 flowchart LR
     Agent["AI agent<br/>Claude Code / Copilot CLI"]
     Index["src/index.ts<br/>stdio MCP lifecycle"]
-    Server["src/server.ts<br/>registers 12 tool modules"]
-    Tools["src/tools/<br/>53 tool handlers"]
+    Server["src/server.ts<br/>registers 13 tool modules"]
+    Tools["src/tools/<br/>54 tool handlers"]
     Session["src/session/<br/>state · pause · buffers"]
     Sourcemap["src/sourcemap/<br/>TS↔JS coords"]
     CRI["chrome-remote-interface<br/>(CDP client)"]
@@ -47,7 +47,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph T["Tool layer — src/tools/"]
-        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage · node-output"]
+        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage · node-output · timeline"]
     end
     subgraph S["State layer — src/session/ + src/sourcemap/"]
         SS["sessionState (singleton)<br/>PauseTracker · RingBuffer (console / network / Node stdio)<br/>ScriptStore (sessionId + scriptId)"]
@@ -78,7 +78,7 @@ The session-mode design itself is locked in at [`node-session-design.md`](./node
 | [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `lynceus/contract` (LocatorSpec) | — |
 | [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `node.ts`, `debugger.ts`, `capabilities.ts`, `pause.ts`, `buffers.ts` | Singleton lifecycle, pause state, ring buffers (console / network / Node stdio); browser + Node attach kinds share `connectDebugger` | [README](../src/session/README.md) |
 | [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing; kind-aware source-map fetch (browser via `Network.loadNetworkResource`, Node via `file://` on loopback only) | [README](../src/sourcemap/README.md) |
-| [`src/tools/`](../src/tools/) | 12 tool files + `_register.ts` + `_locator_runtime.ts` | 53 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` | [README](../src/tools/README.md) |
+| [`src/tools/`](../src/tools/) | 13 tool files + `_register.ts` + `_session_input.ts` + `_locator_runtime.ts` | 54 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` / `timeline` | [README](../src/tools/README.md) |
 | [`src/util/`](../src/util/) | `errors.ts`, `format.ts`, `log.ts` | `ToolError`, preview/truncate helpers, structured stderr logging | — |
 
 ## Request flow — `set_breakpoint`
@@ -169,7 +169,7 @@ The full 4-layer strategy lives in [test-eval-plan.md](./test-eval-plan.md) — 
 ```mermaid
 flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
-    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>53 tools · no real browser · npm test"]
+    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>54 tools · no real browser · npm test"]
     L3["L3 — E2E<br/>test/e2e/*.test.ts vs real Chromium + real Node --inspect<br/>20 specs (11 browser + 7 Node + 1 dual-session + 1 harness) · seconds · npm run test:e2e"]
     L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter + Scenario.target seams<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>14 browser + 4 Node scenarios<br/>first observed: $3.97 full browser pass (Opus-4.7-medium) · npm run eval"]
     L1 --> L2 --> L3 --> L4

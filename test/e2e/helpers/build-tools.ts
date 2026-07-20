@@ -20,6 +20,7 @@ import { registerDomTools } from "../../../src/tools/dom.js";
 import { registerFormTools } from "../../../src/tools/forms.js";
 import { registerStorageTools } from "../../../src/tools/storage.js";
 import { registerNodeOutputTools } from "../../../src/tools/node-output.js";
+import { registerTimelineTools } from "../../../src/tools/timeline.js";
 
 export function buildToolMap(): Map<string, CapturedTool> {
   return captureTools((server: McpServer) => {
@@ -35,6 +36,7 @@ export function buildToolMap(): Map<string, CapturedTool> {
     registerFormTools(server);
     registerStorageTools(server);
     registerNodeOutputTools(server);
+    registerTimelineTools(server);
   });
 }
 

@@ -1,8 +1,8 @@
 // L3 dual-session acceptance flow (LEO-116): one browser and one
 // lynceus-owned Node process stay live while a single request crosses from a
 // source-mapped vanilla page into a source-mapped Node HTTP handler. Every
-// session-scoped call is explicitly addressed — raced waits and merged
-// timelines belong to LEO-365 / the next branch PR.
+// session-scoped call stays explicitly addressed so this rehearsal narrates
+// each side; raced waits and merged timelines are separate LEO-365 contracts.
 
 import { afterEach, describe, it, expect } from "vitest";
 import {
@@ -355,6 +355,43 @@ describe("full-stack flow (e2e)", () => {
       ? Buffer.from(response.body, "base64").toString("utf8")
       : response.body;
     expect(JSON.parse(body)).toEqual({ message: "backend-ok", requestPath: "/api/x" });
+
+    const timeline = await call<{
+      cursor: number;
+      items: Array<{
+        seq: number;
+        event_type: "network" | "node_output";
+        session: string;
+        label: string | null;
+        request_id?: string;
+        url?: string;
+        text?: string;
+      }>;
+    }>(tools, "get_timeline", {
+      session: "all",
+      event_types: ["network", "node_output"],
+    });
+    expect(timeline.items.map((item) => item.seq)).toEqual(
+      [...timeline.items.map((item) => item.seq)].sort((a, b) => a - b),
+    );
+    expect(timeline.cursor).toBe(timeline.items.at(-1)?.seq);
+    expect(timeline.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: "network",
+          session: frontend.session,
+          label: "frontend",
+          request_id: apiRequest.request_id,
+          url: expect.stringMatching(/\/api\/x$/),
+        }),
+        expect.objectContaining({
+          event_type: "node_output",
+          session: backend.session,
+          label: "backend",
+          text: expect.stringContaining("fullstack-api listening"),
+        }),
+      ]),
+    );
 
     const closedBackend = await call(tools, "close_session", {
       session: backend.session,

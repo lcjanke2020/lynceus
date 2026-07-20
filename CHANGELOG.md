@@ -7,6 +7,11 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
+- **Raced multi-session waits + merged timeline** (#71) — omitted-session
+  `wait_for_pause` now returns whichever live browser/Node target pauses first, with
+  race-loser cleanup; new `get_timeline(session="all")` interleaves console, browser
+  network request-start, and Node stdout/stderr rows using registry-global sequence
+  numbers and lossless forward pagination while the session/event filters stay fixed.
 - **`cdp-mcp` compatibility wrapper** added to the repo (#53) — `npm install cdp-mcp`
   now installs a thin shim that boots lynceus in-process and re-exports the `contract`
   subpath. Shipped separately to npm as the `cdp-mcp@0.4.0` **wrapper package**

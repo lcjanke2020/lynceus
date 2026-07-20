@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { registry } from "../../src/session/state.js";
 import { registerExecutionTools } from "../../src/tools/execution.js";
+import { RACED_WAIT_SESSION_DESC } from "../../src/tools/_session_input.js";
 import { setupSession, setupAdditionalSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
@@ -252,10 +254,17 @@ describe("wait_for_pause", () => {
   });
 
   it("returns immediately when already paused (with the TS-mapped call stack)", async () => {
-    setupSession({ paused: true });
-    const r = parseOkEnvelope<{ reason: string; call_stack: any[] }>(
+    const browser = setupSession({ paused: true, label: "frontend" });
+    const r = parseOkEnvelope<{
+      session: string;
+      label: string | null;
+      reason: string;
+      call_stack: any[];
+    }>(
       await waitForPause.handler({ timeout_ms: 100 }),
     );
+    expect(r.session).toBe(browser.sessionId);
+    expect(r.label).toBe("frontend");
     expect(r.reason).toBe("breakpoint");
     expect(r.call_stack).toHaveLength(1);
     expect(r.call_stack[0].function_name).toBe("computeStep");
@@ -321,12 +330,113 @@ describe("wait_for_pause", () => {
     expect(r.session_id).toBe("NODE_CHILD");
   });
 
-  it("omitted session stays ambiguous with two live sessions until raced waits land in LEO-365", async () => {
-    setupSession({ paused: true });
-    setupAdditionalSession({ kind: "node", paused: true });
-    expect(
-      parseErrorEnvelope(await waitForPause.handler({ timeout_ms: 100 }))?.error,
-    ).toBe("ambiguous_session");
+  it("omitted session races every live target, returns the winner identity, and cancels losers", async () => {
+    const browser = setupSession({ label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+
+    const pending = waitForPause.handler({ timeout_ms: 1000 });
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    expect((node.session.pause as any).waiters).toHaveLength(1);
+
+    node.session.pause.onPaused(
+      node.fake.makePauseState({ sessionId: "NODE_CHILD" }),
+    );
+    const r = parseOkEnvelope<{
+      session: string;
+      label: string | null;
+      session_id: string | null;
+    }>(await pending);
+
+    expect(r).toMatchObject({
+      session: node.sessionId,
+      label: "backend",
+      session_id: "NODE_CHILD",
+    });
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("raced mode surfaces an already-paused participant immediately", async () => {
+    const browser = setupSession({ paused: true, label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+
+    const r = parseOkEnvelope<{ session: string; label: string | null }>(
+      await waitForPause.handler({ timeout_ms: 100 }),
+    );
+
+    expect(r).toMatchObject({
+      session: browser.sessionId,
+      label: "frontend",
+    });
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("raced mode snapshots participants when the call starts", async () => {
+    const browser = setupSession();
+    const pending = waitForPause.handler({ timeout_ms: 20 });
+    const node = setupAdditionalSession({ kind: "node", paused: true });
+
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+    expect(parseErrorEnvelope(await pending)?.error).toBe("pause_timeout");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("closing one race participant removes it while another target can still win", async () => {
+    const browser = setupSession({ label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+    const pending = waitForPause.handler({ timeout_ms: 1000 });
+
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    (node.session.client as any).close = () => closeGate;
+    const closing = registry.close(node.sessionId);
+
+    // close() is deliberately still blocked on the fake CDP socket, but its
+    // pause waiter must already be gone — teardown latency cannot hold a race
+    // participant open.
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    browser.session.pause.onPaused(browser.fake.makePauseState());
+
+    try {
+      const r = parseOkEnvelope<{ session: string; label: string | null }>(await pending);
+      expect(r).toMatchObject({ session: browser.sessionId, label: "frontend" });
+      expect((browser.session.pause as any).waiters).toHaveLength(0);
+    } finally {
+      releaseClose();
+      await closing;
+    }
+  });
+
+  it("closing every race participant rejects with no_session and leaves no waiters", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    const pending = waitForPause.handler({ timeout_ms: 1000 });
+
+    await Promise.all([
+      registry.close(browser.sessionId),
+      registry.close(node.sessionId),
+    ]);
+
+    expect(parseErrorEnvelope(await pending)?.error).toBe("no_session");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("a raced timeout names the multi-session wait and cancels every waiter", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    const err = parseErrorEnvelope(
+      await waitForPause.handler({ timeout_ms: 20 }),
+    );
+
+    expect(err?.error).toBe("pause_timeout");
+    expect(err?.message).toContain("any live session");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
   });
 });
 
@@ -340,5 +450,15 @@ describe("registration metadata", () => {
       "step_over",
       "wait_for_pause",
     ]);
+  });
+
+  it("uses the centralized raced-session description", () => {
+    const schema = waitForPause.inputSchema as Record<
+      string,
+      { description?: string }
+    >;
+    expect(schema.session?.description).toBe(RACED_WAIT_SESSION_DESC);
+    expect(waitForPause.description).toContain("already-paused participant");
+    expect(waitForPause.description).toContain("when the call starts");
   });
 });
