@@ -13,6 +13,20 @@ describe("RingBuffer", () => {
     expect(after1.map((e) => e.text)).toEqual(["b", "c"]);
   });
 
+  it("can share an external allocator across buffers", () => {
+    let globalSeq = 40;
+    const allocate = () => ++globalSeq;
+    const first = new RingBuffer<{ seq: number; text: string }>(10, allocate);
+    const second = new RingBuffer<{ seq: number; text: string }>(10, allocate);
+
+    first.push({ text: "first-a" });
+    second.push({ text: "second-a" });
+    first.push({ text: "first-b" });
+
+    expect(first.query().map((entry) => entry.seq)).toEqual([41, 43]);
+    expect(second.query().map((entry) => entry.seq)).toEqual([42]);
+  });
+
   it("filters and limits", () => {
     const buf = new RingBuffer<ConsoleEntry>(100);
     for (const text of ["alpha", "bravo", "charlie", "delta"]) {

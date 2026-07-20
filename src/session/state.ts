@@ -81,12 +81,12 @@ class SessionState {
   url: string | null = null;
 
   readonly pause = new PauseTracker();
-  readonly console = new RingBuffer<ConsoleEntry>(1000);
-  readonly network = new RingBuffer<NetworkEntry>(1000);
+  readonly console: RingBuffer<ConsoleEntry>;
+  readonly network: RingBuffer<NetworkEntry>;
   // Buffered stdout/stderr from lynceus-owned Node children.
   // Populated by launch_node; attach_node leaves it empty (we never see the
   // process stdio in attach mode). Exposed via the get_node_output tool.
-  readonly nodeOutput = new RingBuffer<NodeOutputEntry>(1000);
+  readonly nodeOutput: RingBuffer<NodeOutputEntry>;
   // Cross-session guard. Bumped on every `reset()`. Output-capture
   // listeners snapshot this at attach time and silently no-op if it has
   // moved on, so stale 'close' / 'data' events from a dead child can't
@@ -107,6 +107,17 @@ class SessionState {
 
   // Counter for generating user-friendly breakpoint IDs that survive resolve roundtrips.
   private bpCounter = 0;
+
+  constructor(allocateSeq: () => number) {
+    // One registry-global allocator feeds every buffer on every session. The
+    // per-buffer streams therefore stay monotonic but become sparse, while a
+    // single cursor can order console, network, and Node-output events across
+    // the browser/Node boundary (dual-target design §7).
+    this.console = new RingBuffer<ConsoleEntry>(1000, allocateSeq);
+    this.network = new RingBuffer<NetworkEntry>(1000, allocateSeq);
+    this.nodeOutput = new RingBuffer<NodeOutputEntry>(1000, allocateSeq);
+  }
+
   nextBpId(): string {
     this.bpCounter += 1;
     return `bp_${this.bpCounter}`;
@@ -139,6 +150,12 @@ class SessionState {
 
   async close(): Promise<void> {
     log.info("closing session");
+    // Closing makes this target ineligible to win an in-flight raced
+    // wait_for_pause immediately. Reject pause/resume waiters before awaiting
+    // socket close or an owned Node child's SIGTERM grace period; the final
+    // reset() below repeats this idempotently for any waiter registered by a
+    // stale callback during teardown.
+    this.pause.reset();
     try {
       if (this.client) {
         try {
@@ -327,6 +344,12 @@ export interface CloseResult {
 class SessionRegistry {
   private readonly records = new Map<SessionId, SessionRecord>();
   private readonly counters: Record<SessionKind, number> = { browser: 0, node: 0 };
+  private globalSeq = 0;
+
+  nextSeq(): number {
+    this.globalSeq += 1;
+    return this.globalSeq;
+  }
 
   // Mints the id and a fresh SessionState at status "starting". Both guards run
   // HERE, counting reservations, so two concurrent launches can never both
@@ -347,7 +370,7 @@ class SessionRegistry {
       if (clash) throw duplicateLabel(label, clash.id);
     }
     this.counters[kind] += 1;
-    const state = new SessionState();
+    const state = new SessionState(() => this.nextSeq());
     state.kind = kind;
     const record: SessionRecord = {
       id: `${kind}_${this.counters[kind]}`,

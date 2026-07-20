@@ -1,6 +1,6 @@
 # INDEX.md
 
-**Last updated: 2026-07-19**
+**Last updated: 2026-07-20**
 
 Where to find everything in this repo.
 
@@ -47,7 +47,7 @@ Where to find everything in this repo.
 |---|---|
 | [src/session/README.md](./src/session/README.md) | `sessionState` singleton, browser + Node lifecycle, `PauseTracker`, ring buffers, capability gating. |
 | [src/sourcemap/README.md](./src/sourcemap/README.md) | `ScriptStore`, lazy kind-aware source-map loading (browser via `Network.loadNetworkResource`; Node via `file://` read), TS↔JS coordinate translation, path normalization. |
-| [src/tools/README.md](./src/tools/README.md) | `registerJsonTool` pattern, structured error envelope, full 53-tool catalog with browser/Node/shared kind column. |
+| [src/tools/README.md](./src/tools/README.md) | `registerJsonTool` pattern, structured error envelope, full 54-tool catalog with browser/Node/shared kind column. |
 | [evals/README.md](./evals/README.md) | L4 LLM-agent eval harness, multi-vendor `VendorAdapter` seam, scenario shape (browser + Node via `Scenario.target`), oracle/grader, cost + caching. |
 | [examples/sample-app/README.md](./examples/sample-app/README.md) | Shared browser test fixture (Vite + TS), intentional bugs, how to run standalone. |
 | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) | Shared Node Inspector test fixture (multi-entry tsc-compiled ESM): seven source files — six runnable entries (`index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp`, `fullstack-api`) plus the shared helper `handlers.ts` — driving the L3 Node and dual-session e2e specs + 4 L4 Node scenarios. |
@@ -70,7 +70,7 @@ Source tree:
 |---|---|---|
 | `src/session/` | `sessionState` singleton (with `kind: "browser" \| "node"`), `state.ts`, `browser.ts` (`launchChrome` / `attachChrome` / `switchTarget`), `node.ts` (`attachNode` / `launchNode`), shared `debugger.ts` (`connectDebugger`), `capabilities.ts` (`TOOL_KIND_SUPPORT` + `requireCapable()`), `PauseTracker`, `RingBuffer<ConsoleEntry \| NetworkEntry>`, durable `nodeOutput` buffer for `launch_node`-owned stdio. | [README](./src/session/README.md) |
 | `src/sourcemap/` | `ScriptStore` (compound key `sessionId+scriptId`), kind-aware `buildScriptParsedHandler` / source-map loader (browser → `Network.loadNetworkResource` with `fetch()` fallback; Node → `fs.readFile(fileURLToPath(url))` gated to loopback inspector hosts), `mapCdpToOriginal` / `mapOriginalToGenerated`, `normalizeSourcePath` / `pathMatches`. | [README](./src/sourcemap/README.md) |
-| `src/tools/` | 53 MCP tools across 12 files: `session` (incl. `launch_chrome` / `attach_chrome` / `launch_node` / `attach_node`), `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom` (incl. structured `locate` / `wait_for` / `get_form_state` LocatorSpec tools), `forms`, `storage`, `node-output` (Node-only `get_node_output`). Plus `_register.ts` and `_locator_runtime.ts` (helpers). | [README](./src/tools/README.md) |
+| `src/tools/` | 54 MCP tools across 13 files: `session` (incl. `launch_chrome` / `attach_chrome` / `launch_node` / `attach_node`), `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom` (incl. structured `locate` / `wait_for` / `get_form_state` LocatorSpec tools), `forms`, `storage`, `node-output` (Node-only `get_node_output`), and `timeline` (cross-session `get_timeline`). Plus `_register.ts`, `_session_input.ts`, and `_locator_runtime.ts` (helpers). | [README](./src/tools/README.md) |
 | `src/util/` | `errors.ts` (`ToolError`, `noSession()`, `notPaused()`, `alreadySession()`, `ambiguousSession()`, `unknownSession()`, `duplicateLabel()`, `unsupportedTarget()`), `format.ts` (`previewRemoteObject`, `truncate`, `describeRemote`, `toolJson`, `toolText`), `log.ts` (structured stderr logging). | — |
 | `test/` | L2 contract tests (`test/tools/*.test.ts` against `test/fake-cdp.ts`), L3 e2e (`test/e2e/*.test.ts` — 11 browser specs + 7 Node specs + 1 dual-session full-stack spec + the `eval-runner-node` harness spec (20 total), against real Chromium and Node `--inspect`). | [docs/test-eval-plan.md](./docs/test-eval-plan.md) |
 | `evals/` | L4 harness — `evals/cli.ts` + `evals/harness/` (the `VendorAdapter` seam in `vendor.ts` + per-vendor adapters `anthropic`, `openai-adapter`/`openai-responses-adapter`/`openai-compat-adapter`, `vertex-adapter`, `deepseek-adapter`, `moonshot-adapter`, `lm-studio-adapter`, plus `model`/`runner`/`grader`/`trace`/`mcp-client`/`static-server`/`with-retry`/`types`) + scenarios (`evals/scenarios/*.ts` — 14 browser + 4 Node, dispatched by `Scenario.target`) + per-scenario variants (`evals/sample-app-variants/<name>/`). | [README](./evals/README.md) |

@@ -280,7 +280,8 @@ Today's tool takes a single `timeout_ms` input and returns the `summarizePause` 
 (`reason`, `hit_breakpoint_ids`, `session_id`, `call_stack`). It gains:
 
 - **Scoped (explicit `session`):** wait for *that* session's next pause. The demo
-  transcript uses only this form — per-side narration demos better.
+  transcript uses only this form — per-side narration demos better. Its response stays
+  the existing pause-summary shape; the caller already supplied the target identity.
 - **Raced (omitted `session`, ≥1 live):** wait for *any* session's next pause. The
   return is **locked here**: the full pause summary (today's `summarizePause` shape,
   unchanged) with `session` + `label` prepended — an embedded summary, *not* a pointer
@@ -290,6 +291,12 @@ Today's tool takes a single `timeout_ms` input and returns the `summarizePause` 
   poll two scoped waits. Note the return then carries **both axes side by side**: the
   new `session` (`"node_1"`) and the existing CDP-child `session_id` (root/worker
   GUID) — the §2 disambiguation table's worked example.
+- **Participant snapshot + sticky pause state:** raced mode snapshots the usable live
+  sessions when the call starts; a session launched later does not join that call.
+  `PauseTracker` keeps its existing sticky behavior, so a participant that is already
+  paused can win immediately rather than waiting for a new event. If several targets
+  are already paused, raced mode does not promise most-recent-pause priority; pass an
+  explicit `session` when a particular paused target matters.
 - **Race-loser hygiene:** a raced wait registers a waiter on every live session and must
   cancel the losers when one fires — the `PauseTracker` waiter-cleanup audit is called
   out in the implementing PR (§12). A session closing mid-race removes its waiter; if
@@ -354,7 +361,10 @@ get_timeline({
   *latest* N via `slice(-limit)`); copying that here would make `since:0, limit:100`
   over seqs 1…1000 return 901…1000 with cursor 1000, silently skipping 900 rows.
   Forward pagination makes polling lossless within retained history — the retention
-  bound stays the per-buffer 1000-entry ring cap, exactly as today.
+  bound stays the per-buffer 1000-entry ring cap, exactly as today. Losslessness assumes
+  the `session` and `event_types` selection is unchanged between cursor-chained calls;
+  changing either selection can hide older rows below the cursor, so restart at
+  `since: 0` when changing filters.
 - **Ordering:** a **registry-global monotonic `seq`** — `RingBuffer` seq values are
   allocated from `registry.nextSeq()` instead of each buffer's own counter (today:
   per-buffer, starting at 1). Per-buffer sequences stay monotonic (now sparse, not

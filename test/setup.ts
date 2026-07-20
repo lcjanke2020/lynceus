@@ -35,11 +35,13 @@ export interface SetupOpts {
   chromePort?: number | null;
   /** Override the default session kind ("browser"). Use "node" to exercise capability gates. */
   kind?: SessionKind;
+  /** Optional registry label, useful for multi-session response contracts. */
+  label?: string;
 }
 
 export function setupSession(opts: SetupOpts = {}): SessionFixture {
   resetSessions();
-  const rec = registry.reserve(opts.kind ?? "browser");
+  const rec = registry.reserve(opts.kind ?? "browser", opts.label);
   const session = rec.state;
   const fake = makeFakeCdp();
   session.chromePort = opts.chromePort === null ? null : opts.chromePort ?? 9999;
@@ -65,7 +67,7 @@ export function setupSession(opts: SetupOpts = {}): SessionFixture {
  * setupSession({kind:"browser"}) followed by setupAdditionalSession({kind:"node"}).
  */
 export function setupAdditionalSession(opts: Omit<SetupOpts, "noClient"> = {}): SessionFixture {
-  const rec = registry.reserve(opts.kind ?? "browser");
+  const rec = registry.reserve(opts.kind ?? "browser", opts.label);
   const session = rec.state;
   const fake = makeFakeCdp();
   session.chromePort = opts.chromePort === null ? null : opts.chromePort ?? 9999;
