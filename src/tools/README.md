@@ -57,7 +57,7 @@ Everything else (the `Runtime` / `Debugger` surface — breakpoints, execution s
 - **TS coordinates at the boundary.** `file` arguments are TS source paths (fragments OK — `pathMatches` is suffix-tolerant). Lines are 1-based; columns 0-based.
 - **`session_id` round-trips.** Every tool that returns `object_id`, `request_id`, `script_id`, or `call_frame_id` also returns the originating `session_id` (`null` for root). The accepting follow-up tools expect you to pass it back so the call routes to the right CDP agent. **Omitting `session_id` always means "root"** — there is no fall-back-to-active-pause-session behavior. Emit `null` (not `undefined`) for root so JSON preserves the field. Never put a lynceus debug-target id (`browser_N` / `node_N`) here; that belongs in `session`.
 - **Pause-only tools.** `get_call_stack`, `get_scope`, `evaluate` (with `frame_index`), `step_over` / `step_into` / `step_out` all `requirePaused()` and return `error: "not_paused"` if called outside a pause.
-- **Buffered tools.** `get_console_logs`, `get_network_requests`, and `get_node_output` keep their per-session latest-N query semantics. `get_timeline` merges those retained buffers by registry-global `seq` and paginates forward (earliest rows after `since` first), so pass its returned `cursor` back to continue without skipping rows.
+- **Buffered tools.** `get_console_logs`, `get_network_requests`, and `get_node_output` keep their per-session latest-N query semantics. `get_timeline` merges those retained buffers by registry-global `seq` and paginates forward (earliest rows after `since` first), so pass its returned `cursor` back with the same `session` and `event_types` selection to continue without skipping rows.
 - **Compact previews.** Use `previewRemoteObject()` and `truncate()` from `src/util/format.ts`. Lists capped at sensible defaults; bodies lazy-loaded via dedicated tools, never inlined in list responses.
 
 ## Tool catalog (54 tools)
@@ -90,7 +90,7 @@ The **Kind** column reflects which session kind a tool is meaningful for. **Shar
 | | `step_into` | Shared | Step into the next call. |
 | | `step_out` | Shared | Step out of the current function. |
 | | `pause` | Shared | Pause manually; `session_id` arg targets a worker/iframe. |
-| | `wait_for_pause` | Shared | Block until the debugger pauses (or times out). Explicit `session` scopes the wait; omission races all live targets and returns the winner's `session` + `label`. |
+| | `wait_for_pause` | Shared | Block until the debugger pauses (or times out). Explicit `session` scopes the wait; omission snapshots and races the usable targets live at call start, and an already-paused participant can win immediately. The raced response returns the winner's `session` + `label`. |
 | `inspect.ts` | `get_call_stack` | Shared | TS-mapped frames with `session_id` per frame. |
 | | `get_scope` | Shared | Variables at a paused frame. Default (no `scope_type`) returns the merged lexical view (inner block/catch/with + function local, innermost wins), so block-scoped `let`/loop vars are included; pass a `scope_type` to read exactly one scope. |
 | | `evaluate` | Shared | Auto-routes: paused → `Debugger.evaluateOnCallFrame` on the top frame (override with `frame_index`); not paused → `Runtime.evaluate`. `frame_index` while not paused → `not_paused`. |
@@ -101,7 +101,7 @@ The **Kind** column reflects which session kind a tool is meaningful for. **Shar
 | | `get_request_body` | Browser | Lazy body fetch. |
 | | `get_response_body` | Browser | Lazy; safe ONLY when `finished:true` AND `failure` absent. Binary stays base64 (never UTF-8-corrupted, never truncated — truncate text only). |
 | `node-output.ts` | `get_node_output` | Node | Buffered stdout/stderr from a `launch_node`-owned Node child. Pull-based with `since` cursor (mirrors `get_console_logs`). Filter by `stream` (stdout/stderr) and `search`. Separate from `get_console_logs` — that's the V8 inspector's `Runtime.consoleAPICalled` stream; this is the OS-level pipe. Populated only on `launch_node` sessions; `attach_node` leaves it empty. |
-| `timeline.ts` | `get_timeline` | Shared | Merge console, network request-start, and Node-output rows by registry-global `seq`. `session: "all"` spans both targets; forward pagination applies `limit` after the merge. |
+| `timeline.ts` | `get_timeline` | Shared | Merge console, network request-start, and Node-output rows by registry-global `seq`. `session: "all"` spans both targets; forward pagination applies `limit` after the merge and is lossless while the session/event filters stay unchanged. |
 | `dom.ts` | `query_selector` | Browser | `nodeId` + preview. |
 | | `get_element_html` | Browser | Outer or inner HTML. |
 | | `locate` | Browser | Structured LocatorSpec search (CSS, text, role, test-id, label, placeholder, name). |

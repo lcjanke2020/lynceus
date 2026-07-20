@@ -4,8 +4,16 @@ import { z } from "zod";
 // from CDP's child-session axis (`session_id`). Keep both schemas and their
 // agent-facing wording in one place so the session-scoped tools and the
 // 11 child-session-aware tools cannot drift independently.
-export const SESSION_DESC =
-  'Debug-target session id from launch/attach/list_sessions (for example "browser_1" or "node_1"). Omit to address the only live session; when multiple are live, pass one explicitly.';
+export const SESSION_ID_DESC =
+  'Debug-target session id from launch/attach/list_sessions (for example "browser_1" or "node_1").';
+
+export const SESSION_DESC = `${SESSION_ID_DESC} Omit to address the only live session; when multiple are live, pass one explicitly.`;
+
+export const RACED_WAIT_SESSION_DESC =
+  `${SESSION_ID_DESC} Pass one to wait on that target; omit it to race the usable sessions that are live when the call starts. An already-paused participant can win immediately; when several are paused, raced mode does not prioritize the most recent.`;
+
+export const TIMELINE_SESSION_DESC =
+  `${SESSION_ID_DESC} Pass the reserved value "all" to merge every live session. Omit to address the only live session; omission with multiple live sessions is ambiguous.`;
 
 export const sessionSchema = z.string().optional().describe(SESSION_DESC);
 

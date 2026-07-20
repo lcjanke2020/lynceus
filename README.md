@@ -111,13 +111,13 @@ The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `
 
 ## What it gives an agent
 
-Across 53 tools ([full catalog](./src/tools/README.md)):
+Across 54 tools ([full catalog](./src/tools/README.md)):
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.
 - **Stepping** — `step_over`, `step_into`, `step_out`, `resume`, `pause`, plus the authoritative sync point `wait_for_pause`.
 - **Live inspection at a paused frame** — `get_call_stack`, `get_scope`, `evaluate` (frame-aware), `get_object_properties`. All call-stack frames are TS-mapped.
-- **Buffered console + network** — pull-based, paginated by monotonic `seq`. Bodies are lazy-loaded via `get_request_body` / `get_response_body`.
+- **Buffered console + network + merged timeline** — specialized readers stay per-session; `get_timeline(session="all")` interleaves browser and Node events by registry-global `seq`. Bodies are lazy-loaded via `get_request_body` / `get_response_body`.
 - **Light DOM interaction** — `query_selector`, `click`, `type_text`, `press_key`, `screenshot` so the agent can drive a flow to a breakpoint.
 - **Structured DOM querying** — Playwright-inspired `locate` (LocatorSpec: CSS, text, role, test-id, label, placeholder, name), `wait_for` (poll until DOM state), `get_form_state` (read named form fields).
 - **Form driving** — `fill`, `check` / `uncheck`, `select_option`, plus `suggest_locator` to get a robust semantic locator for an element.

@@ -22,6 +22,7 @@ import { noSession, ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 import {
   childSessionIdSchema,
+  RACED_WAIT_SESSION_DESC,
   sessionSchema,
   withChildSessionDisambiguation,
   type SessionInput,
@@ -131,15 +132,13 @@ export function registerExecutionTools(server: McpServer) {
   registerJsonTool(
     server,
     "wait_for_pause",
-    "Block until the debugger pauses (or times out). Pass `session` to wait on one target; omit it to race every live target and return the winner's session + label with the pause summary.",
+    "Block until the debugger pauses (or times out). Pass `session` to wait on one target. Omission snapshots every usable live target when the call starts and races them; an already-paused participant can win immediately, and multiple paused targets have no most-recent priority. Pass `session` when a particular paused target matters. The raced response includes the winner's session + label with the pause summary.",
     {
       timeout_ms: z.number().int().positive().optional().describe("Default 30000"),
       session: z
         .string()
         .optional()
-        .describe(
-          'Debug-target session id from launch/attach/list_sessions (for example "browser_1" or "node_1"). Pass one to wait on that target; omit it to race all live sessions.',
-        ),
+        .describe(RACED_WAIT_SESSION_DESC),
     },
     async (input: { timeout_ms?: number } & SessionInput) => {
       const timeoutMs = input.timeout_ms ?? 30000;

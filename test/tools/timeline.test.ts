@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { registry } from "../../src/session/state.js";
 import { registerTimelineTools } from "../../src/tools/timeline.js";
+import { TIMELINE_SESSION_DESC } from "../../src/tools/_session_input.js";
 import {
   setupAdditionalSession,
   setupSession,
@@ -232,6 +233,48 @@ describe("get_timeline", () => {
     expect(empty).toEqual({ cursor: third.cursor, items: [] });
   });
 
+  it("paginates losslessly across interleaved buffers after per-source pre-limiting", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    for (let i = 0; i < 3; i += 1) {
+      browser.session.console.push({
+        ts: i,
+        level: "log",
+        text: `frontend-${i}`,
+        source: "console-api",
+      });
+      node.session.nodeOutput.push({
+        ts: i,
+        stream: "stdout",
+        text: `backend-${i}`,
+      });
+    }
+
+    let since = 0;
+    const texts: string[] = [];
+    for (let page = 0; page < 3; page += 1) {
+      const result = parseOkEnvelope<{ cursor: number; items: any[] }>(
+        await getTimeline.handler({
+          session: "all",
+          since,
+          limit: 2,
+          event_types: ["console", "node_output"],
+        }),
+      );
+      texts.push(...result.items.map((row) => row.text));
+      since = result.cursor;
+    }
+
+    expect(texts).toEqual([
+      "frontend-0",
+      "backend-0",
+      "frontend-1",
+      "backend-1",
+      "frontend-2",
+      "backend-2",
+    ]);
+  });
+
   it("unknown explicit session returns the recovery envelope", async () => {
     setupSession();
     const error = parseErrorEnvelope(
@@ -271,5 +314,19 @@ describe("get_timeline", () => {
 describe("registration metadata", () => {
   it("registers exactly get_timeline", () => {
     expect(Array.from(tools.keys())).toEqual(["get_timeline"]);
+  });
+
+  it("uses centralized session wording and qualifies cursor losslessness", () => {
+    const schema = getTimeline.inputSchema as Record<
+      string,
+      { description?: string }
+    >;
+    expect(schema.session?.description).toBe(TIMELINE_SESSION_DESC);
+    expect(schema.since?.description).toContain(
+      "same session and event_types selection",
+    );
+    expect(getTimeline.description).toContain(
+      "while the `session` and `event_types` selection stays unchanged",
+    );
   });
 });

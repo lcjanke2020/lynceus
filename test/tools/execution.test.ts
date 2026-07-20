@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { registry } from "../../src/session/state.js";
 import { registerExecutionTools } from "../../src/tools/execution.js";
+import { RACED_WAIT_SESSION_DESC } from "../../src/tools/_session_input.js";
 import { setupSession, setupAdditionalSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
@@ -355,6 +356,32 @@ describe("wait_for_pause", () => {
     expect((node.session.pause as any).waiters).toHaveLength(0);
   });
 
+  it("raced mode surfaces an already-paused participant immediately", async () => {
+    const browser = setupSession({ paused: true, label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+
+    const r = parseOkEnvelope<{ session: string; label: string | null }>(
+      await waitForPause.handler({ timeout_ms: 100 }),
+    );
+
+    expect(r).toMatchObject({
+      session: browser.sessionId,
+      label: "frontend",
+    });
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("raced mode snapshots participants when the call starts", async () => {
+    const browser = setupSession();
+    const pending = waitForPause.handler({ timeout_ms: 20 });
+    const node = setupAdditionalSession({ kind: "node", paused: true });
+
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+    expect(parseErrorEnvelope(await pending)?.error).toBe("pause_timeout");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+  });
+
   it("closing one race participant removes it while another target can still win", async () => {
     const browser = setupSession({ label: "frontend" });
     const node = setupAdditionalSession({ kind: "node", label: "backend" });
@@ -423,5 +450,15 @@ describe("registration metadata", () => {
       "step_over",
       "wait_for_pause",
     ]);
+  });
+
+  it("uses the centralized raced-session description", () => {
+    const schema = waitForPause.inputSchema as Record<
+      string,
+      { description?: string }
+    >;
+    expect(schema.session?.description).toBe(RACED_WAIT_SESSION_DESC);
+    expect(waitForPause.description).toContain("already-paused participant");
+    expect(waitForPause.description).toContain("when the call starts");
   });
 });
