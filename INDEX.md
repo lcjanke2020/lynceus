@@ -1,6 +1,6 @@
 # INDEX.md
 
-**Last updated: 2026-07-14**
+**Last updated: 2026-07-19**
 
 Where to find everything in this repo.
 
@@ -50,7 +50,7 @@ Where to find everything in this repo.
 | [src/tools/README.md](./src/tools/README.md) | `registerJsonTool` pattern, structured error envelope, full 53-tool catalog with browser/Node/shared kind column. |
 | [evals/README.md](./evals/README.md) | L4 LLM-agent eval harness, multi-vendor `VendorAdapter` seam, scenario shape (browser + Node via `Scenario.target`), oracle/grader, cost + caching. |
 | [examples/sample-app/README.md](./examples/sample-app/README.md) | Shared browser test fixture (Vite + TS), intentional bugs, how to run standalone. |
-| [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) | Shared Node Inspector test fixture (multi-entry tsc-compiled ESM): six source files — five runnable entries (`index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp`) plus the shared helper `handlers.ts` — driving the L3 Node e2e specs + 4 L4 Node scenarios. |
+| [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) | Shared Node Inspector test fixture (multi-entry tsc-compiled ESM): seven source files — six runnable entries (`index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp`, `fullstack-api`) plus the shared helper `handlers.ts` — driving the L3 Node and dual-session e2e specs + 4 L4 Node scenarios. |
 | [examples/sample-fullstack-app/README.md](./examples/sample-fullstack-app/README.md) | Human-facing full-stack demo app (LEO-464): dev-build React FE + Express BE with the planted body-parser-ordering cart bug; `DEMO.md` is the rehearsed dual-session interview script. Not a CI fixture. |
 | [wrapper/cdp-mcp/README.md](./wrapper/cdp-mcp/README.md) | Tombstone README for the published `cdp-mcp` npm compatibility wrapper: rename notice + migration paragraph. |
 
@@ -72,10 +72,10 @@ Source tree:
 | `src/sourcemap/` | `ScriptStore` (compound key `sessionId+scriptId`), kind-aware `buildScriptParsedHandler` / source-map loader (browser → `Network.loadNetworkResource` with `fetch()` fallback; Node → `fs.readFile(fileURLToPath(url))` gated to loopback inspector hosts), `mapCdpToOriginal` / `mapOriginalToGenerated`, `normalizeSourcePath` / `pathMatches`. | [README](./src/sourcemap/README.md) |
 | `src/tools/` | 53 MCP tools across 12 files: `session` (incl. `launch_chrome` / `attach_chrome` / `launch_node` / `attach_node`), `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom` (incl. structured `locate` / `wait_for` / `get_form_state` LocatorSpec tools), `forms`, `storage`, `node-output` (Node-only `get_node_output`). Plus `_register.ts` and `_locator_runtime.ts` (helpers). | [README](./src/tools/README.md) |
 | `src/util/` | `errors.ts` (`ToolError`, `noSession()`, `notPaused()`, `alreadySession()`, `ambiguousSession()`, `unknownSession()`, `duplicateLabel()`, `unsupportedTarget()`), `format.ts` (`previewRemoteObject`, `truncate`, `describeRemote`, `toolJson`, `toolText`), `log.ts` (structured stderr logging). | — |
-| `test/` | L2 contract tests (`test/tools/*.test.ts` against `test/fake-cdp.ts`), L3 e2e (`test/e2e/*.test.ts` — 11 browser specs + 7 Node specs + the `eval-runner-node` harness spec (19 total), against real Chromium and Node `--inspect`). | [docs/test-eval-plan.md](./docs/test-eval-plan.md) |
+| `test/` | L2 contract tests (`test/tools/*.test.ts` against `test/fake-cdp.ts`), L3 e2e (`test/e2e/*.test.ts` — 11 browser specs + 7 Node specs + 1 dual-session full-stack spec + the `eval-runner-node` harness spec (20 total), against real Chromium and Node `--inspect`). | [docs/test-eval-plan.md](./docs/test-eval-plan.md) |
 | `evals/` | L4 harness — `evals/cli.ts` + `evals/harness/` (the `VendorAdapter` seam in `vendor.ts` + per-vendor adapters `anthropic`, `openai-adapter`/`openai-responses-adapter`/`openai-compat-adapter`, `vertex-adapter`, `deepseek-adapter`, `moonshot-adapter`, `lm-studio-adapter`, plus `model`/`runner`/`grader`/`trace`/`mcp-client`/`static-server`/`with-retry`/`types`) + scenarios (`evals/scenarios/*.ts` — 14 browser + 4 Node, dispatched by `Scenario.target`) + per-scenario variants (`evals/sample-app-variants/<name>/`). | [README](./evals/README.md) |
 | `examples/sample-app/` | Vite + TS web app — the browser-side breakpoint-debug fixture. | [README](./examples/sample-app/README.md) |
-| `examples/sample-node-app/` | tsc-compiled ESM Node fixture — six source files sharing one `dist/`: five runnable entries (`index.ts`, `compute-step.ts`, `throw.ts`, `stdio-bug.ts`, `conditional-bp.ts`) plus the shared helper `handlers.ts` (imported by `index.ts`). Backs L3 Node e2e + L4 Node scenarios. | [README](./examples/sample-node-app/README.md) |
+| `examples/sample-node-app/` | tsc-compiled ESM Node fixture — seven source files sharing one `dist/`: six runnable entries (`index.ts`, `compute-step.ts`, `throw.ts`, `stdio-bug.ts`, `conditional-bp.ts`, `fullstack-api.ts`) plus the shared helper `handlers.ts` (imported by `index.ts`). Backs L3 Node/dual-session e2e + L4 Node scenarios. | [README](./examples/sample-node-app/README.md) |
 | `examples/sample-fullstack-app/` | Dev-build React FE (Vite, React 18.3.1 exact) + Express BE (tsc + source maps) with the planted cart bug — the dual-session demo app + `DEMO.md` script. Inert: no test/eval/CI wiring. | [README](./examples/sample-fullstack-app/README.md) |
 | `scripts/` | `smoke.mjs`, `check-chromium-skips.mjs`, `build-variants.mjs`. | — |
 | `wrapper/cdp-mcp/` | The published `cdp-mcp` compat wrapper (npm shim over lynceus): `bin.js` boots the lynceus entry in-process, `index.js`/`contract.js` re-export the lynceus subpaths, `smoke-test.mjs` verifies against the *published* lynceus (standalone `npm install`, not part of the vitest suite). | [README](./wrapper/cdp-mcp/README.md) |

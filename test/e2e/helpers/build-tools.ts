@@ -118,15 +118,30 @@ function loadConfig(): E2eConfig {
 /** Attach to the Chrome that globalSetup launched. Specs that need a fresh
  *  session call this at the top of each `it` (or in a beforeEach if every
  *  test in the file needs one). */
-export async function attachToTestChrome(tools: Map<string, CapturedTool>): Promise<{
+export async function attachToTestChrome(
+  tools: Map<string, CapturedTool>,
+  opts: { label?: string } = {},
+): Promise<{
+  session: string;
+  label: string | null;
   targetId: string;
   url: string;
 }> {
   const cfg = loadConfig();
-  return await call(tools, "attach_chrome", { port: cfg.chromePort });
+  return await call(tools, "attach_chrome", {
+    port: cfg.chromePort,
+    ...(opts.label !== undefined ? { label: opts.label } : {}),
+  });
 }
 
 /** Sample-app URL published by globalSetup. */
 export function sampleAppUrl(): string {
   return loadConfig().serverUrl;
+}
+
+/** Dedicated vanilla page used by the browser→Node dual-session L3 flow. */
+export function fullstackAppUrl(apiPort: number): string {
+  const url = new URL("/fullstack.html", loadConfig().serverUrl);
+  url.searchParams.set("api_port", String(apiPort));
+  return url.toString();
 }

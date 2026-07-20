@@ -14,7 +14,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE). Releases are published to npm by CI via [OIDC trusted publishing](https://docs.npmjs.com/generating-provenance-statements) — no long-lived npm token exists — with a provenance attestation linking the published tarball to the exact commit and workflow run that built it.
 
-**Last updated: 2026-07-14**
+**Last updated: 2026-07-19**
 
 ## Install
 
@@ -192,12 +192,12 @@ The test pyramid has four layers (see [docs/test-eval-plan.md](docs/test-eval-pl
 npm test              # L1 unit + L2 tool-contract (fake CDP) + L4 harness-unit tests — seconds, no browser, no LLM
 npm run typecheck     # both tsconfigs — CI gates on this
 npm run smoke         # stdio protocol smoke, no browser — CI gates on this
-npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 19 specs
+npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 20 specs
 npm run eval:quick    # L4: 1 LLM-agent scenario × 1 trial (needs ANTHROPIC_API_KEY; ~$0.50–2 at the default Opus-4.8-medium)
 npm run eval          # L4: all 18 scenarios × 3 trials (cost data in evals/README.md; EVAL_BUDGET_USD caps a run, default $100)
 ```
 
-- **L3 e2e** drives the browser-facing tools against a real Chromium attached to a built `examples/sample-app/`, plus Node Inspector attach/launch flows against `examples/sample-node-app/`. Browser selection (`CDP_TEST_BROWSER`, default `chromium`) and the per-OS resolver matrix are documented in [docs/test-eval-plan.md §Layer 3](docs/test-eval-plan.md); the step-by-step local setup (Playwright Chromium + AppArmor profile for sandbox-**on** runs) is [docs/local-l3-e2e-setup.md](docs/local-l3-e2e-setup.md). Chromium-only failures land with a `// @chromium-skip — <gap-id>` comment plus a row in [docs/known-chromium-gaps.md](docs/known-chromium-gaps.md) — `npm run lint:chromium-skips` enforces this. `launch_chrome` defaults to `--no-sandbox`; see [docs/chromium-sandboxing.md](docs/chromium-sandboxing.md) before changing that.
+- **L3 e2e** drives the browser-facing tools against a real Chromium attached to a built `examples/sample-app/`, Node Inspector attach/launch flows against `examples/sample-node-app/`, and one full-stack acceptance flow that keeps both sessions live across the same request. Browser selection (`CDP_TEST_BROWSER`, default `chromium`) and the per-OS resolver matrix are documented in [docs/test-eval-plan.md §Layer 3](docs/test-eval-plan.md); the step-by-step local setup (Playwright Chromium + AppArmor profile for sandbox-**on** runs) is [docs/local-l3-e2e-setup.md](docs/local-l3-e2e-setup.md). Chromium-only failures land with a `// @chromium-skip — <gap-id>` comment plus a row in [docs/known-chromium-gaps.md](docs/known-chromium-gaps.md) — `npm run lint:chromium-skips` enforces this. `launch_chrome` defaults to `--no-sandbox`; see [docs/chromium-sandboxing.md](docs/chromium-sandboxing.md) before changing that.
 - **L4 agent evals** drive the lynceus tool surface through a real LLM agent — 18 scenarios (14 browser + 4 Node), six vendor adapters selected via `EVAL_PROVIDER` (Anthropic default; OpenAI, Vertex/Gemini, DeepSeek, Moonshot/Kimi, LM Studio), deterministic NDJSON-trace oracles (no LLM judge), per-run cost caps. Always launch through the npm scripts (`npm run eval`, `npm run eval:quick`, `npm run eval:quick:node`) — the `preeval` hook rebuilds `dist/index.js`; calling `tsx evals/cli.ts` directly on a fresh clone fails. Model/reasoning/cost env knobs, the scenario table, caching behavior, and trace format are all in [evals/README.md](evals/README.md).
 
 Contributions: see [CONTRIBUTING.md](./CONTRIBUTING.md); repo map in [INDEX.md](./INDEX.md); security reports via [SECURITY.md](./SECURITY.md).

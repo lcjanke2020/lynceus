@@ -3,9 +3,9 @@
 // Responsibilities:
 //   - Verify the sample-app dist exists (built by `npm run pretest:e2e` or
 //     manually via `npm run sample:build`).
-//   - Verify the sample-node-app dist entry exists (built by the same
-//     `pretest:e2e` chain via `npm run sample-node:build`) — the Node L3
-//     specs need it, so this preflight fails fast if it's missing.
+//   - Verify the ordinary + full-stack browser pages and Node entries exist
+//     (built by the same `pretest:e2e` chain) so both single-target specs and
+//     the dual-session flow fail fast on a stale/incomplete fixture build.
 //   - Start a static server on port 0 serving the sample-app dist.
 //   - Resolve the Chromium binary via test/e2e/setup/browser-path.ts.
 //   - Launch a single headless Chromium via chrome-launcher (which manages
@@ -48,6 +48,14 @@ const SAMPLE_NODE_APP_ENTRY = join(
   "dist",
   "index.js",
 );
+const SAMPLE_FULLSTACK_PAGE = join(SAMPLE_APP_DIST, "fullstack.html");
+const SAMPLE_FULLSTACK_NODE_ENTRY = join(
+  process.cwd(),
+  "examples",
+  "sample-node-app",
+  "dist",
+  "fullstack-api.js",
+);
 const CACHE_DIR = join(process.cwd(), ".vitest-cache");
 export const CONFIG_FILE = join(CACHE_DIR, "e2e-config.json");
 
@@ -71,6 +79,16 @@ export async function setup(): Promise<void> {
   if (!existsSync(SAMPLE_NODE_APP_ENTRY)) {
     throw new Error(
       `e2e globalSetup: ${SAMPLE_NODE_APP_ENTRY} not found. Run 'npm run sample-node:build' first.`,
+    );
+  }
+  if (!existsSync(SAMPLE_FULLSTACK_PAGE)) {
+    throw new Error(
+      `e2e globalSetup: ${SAMPLE_FULLSTACK_PAGE} not found. Run 'npm run sample:build' first.`,
+    );
+  }
+  if (!existsSync(SAMPLE_FULLSTACK_NODE_ENTRY)) {
+    throw new Error(
+      `e2e globalSetup: ${SAMPLE_FULLSTACK_NODE_ENTRY} not found. Run 'npm run sample-node:build' first.`,
     );
   }
   if (!existsSync(CACHE_DIR)) {
