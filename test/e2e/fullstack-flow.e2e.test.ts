@@ -74,7 +74,6 @@ afterEach(async () => {
     pid === null
       ? null
       : setTimeout(() => forceKill(pid), RAW_CHILD_KILL_FALLBACK_MS);
-  rawKillTimer?.unref();
   try {
     await Promise.allSettled(
       [cleanup.frontendSession, cleanup.backendSession]
@@ -128,11 +127,15 @@ describe("full-stack flow (e2e)", () => {
       script: fixtureScript("fullstack-api"),
       label: "backend",
     });
+    // Validate the raw-kill coordinate first, then publish all cleanup data
+    // before contract assertions that could throw. The fallback must already
+    // know about a successfully launched child if metadata drifts.
+    expect(Number.isSafeInteger(backend.pid)).toBe(true);
+    expect(backend.pid).toBeGreaterThan(0);
+    cleanup.backendPid = backend.pid;
+    cleanup.backendSession = backend.session;
     expect(backend.session).toMatch(/^node_\d+$/);
     expect(backend.label).toBe("backend");
-    expect(backend.pid).toBeGreaterThan(0);
-    cleanup.backendSession = backend.session;
-    cleanup.backendPid = backend.pid;
 
     const entryPause = await call<PauseSummary>(tools, "wait_for_pause", {
       session: backend.session,
@@ -357,6 +360,7 @@ describe("full-stack flow (e2e)", () => {
       session: backend.session,
     });
     cleanup.backendSession = null;
+    cleanup.backendPid = null;
     expect(closedBackend).toEqual({
       session: backend.session,
       label: "backend",
