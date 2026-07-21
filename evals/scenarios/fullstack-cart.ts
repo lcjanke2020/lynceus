@@ -48,13 +48,13 @@ function sessionFromLaunch(calls: Pair[], tool: "launch_node" | "launch_chrome")
   return undefined;
 }
 
-function boundBreakpoint(
+function boundBreakpoints(
   calls: Pair[],
   session: string | undefined,
   fileSuffix: string,
-): Pair | undefined {
-  if (session === undefined) return undefined;
-  return calls.find((call) => {
+): Pair[] {
+  if (session === undefined) return [];
+  return calls.filter((call) => {
     if (call.tool !== "set_breakpoint" || call.isError) return false;
     const input = record(call.input);
     const output = record(call.output);
@@ -94,36 +94,41 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
     return sawNode && sawBrowser && nodeSession !== browserSession;
   });
 
-  const frontendBp = boundBreakpoint(
+  const frontendBps = boundBreakpoints(
     calls,
     browserSession,
     "CartButton.tsx",
   );
-  const backendBp = boundBreakpoint(calls, nodeSession, "cart.ts");
-  const backendBpId = record(backendBp?.output).id;
-  const backendBpIndex = backendBp === undefined ? -1 : calls.indexOf(backendBp);
+  const backendBps = boundBreakpoints(calls, nodeSession, "cart.ts");
 
-  const nodePause =
-    backendBpIndex >= 0 &&
-    typeof backendBpId === "string" &&
-    calls.slice(backendBpIndex + 1).some((call) => {
-      if (call.tool !== "wait_for_pause" || call.isError) return false;
-      if (record(call.input).session !== nodeSession) return false;
-      const output = record(call.output);
-      const hitIds = output.hit_breakpoint_ids;
-      const stack = output.call_stack;
-      return (
-        Array.isArray(hitIds) &&
-        hitIds.includes(backendBpId) &&
-        Array.isArray(stack) &&
-        stack.some((frame) =>
-          String(record(frame).file ?? "").endsWith("cart.ts"),
-        )
-      );
-    });
+  // Recovery can legitimately remove an initially bound breakpoint and bind a
+  // better line. Accept a pause for any successfully bound backend breakpoint
+  // rather than pinning the mechanic to the first one.
+  const nodePause = backendBps.some((backendBp) => {
+    const backendBpId = record(backendBp.output).id;
+    const backendBpIndex = calls.indexOf(backendBp);
+    return (
+      typeof backendBpId === "string" &&
+      calls.slice(backendBpIndex + 1).some((call) => {
+        if (call.tool !== "wait_for_pause" || call.isError) return false;
+        if (record(call.input).session !== nodeSession) return false;
+        const output = record(call.output);
+        const hitIds = output.hit_breakpoint_ids;
+        const stack = output.call_stack;
+        return (
+          Array.isArray(hitIds) &&
+          hitIds.includes(backendBpId) &&
+          Array.isArray(stack) &&
+          stack.some((frame) =>
+            String(record(frame).file ?? "").endsWith("cart.ts"),
+          )
+        );
+      })
+    );
+  });
 
   const mechanic: 0 | 1 =
-    concurrentKinds && frontendBp !== undefined && backendBp !== undefined && nodePause
+    concurrentKinds && frontendBps.length > 0 && backendBps.length > 0 && nodePause
       ? 1
       : 0;
 
@@ -150,11 +155,11 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
     why.push(
       "mechanic: list_sessions never showed the launched browser and Node sessions live together",
     );
-  if (!frontendBp)
+  if (frontendBps.length === 0)
     why.push(
       "mechanic: no browser-session breakpoint bound to CartButton.tsx",
     );
-  if (!backendBp)
+  if (backendBps.length === 0)
     why.push("mechanic: no Node-session breakpoint bound to cart.ts");
   if (!nodePause)
     why.push(

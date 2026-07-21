@@ -76,6 +76,45 @@ describe("fullstack-cart oracle", () => {
     expect(out.notes).toMatch(/solved/);
   });
 
+  it("accepts a later backend breakpoint after recovery rebinds the line", () => {
+    const base = successfulTrace();
+    const trace: TraceEntry[] = [
+      ...base.slice(0, -2),
+      ...pair(
+        "remove-initial-node-bp",
+        "remove_breakpoint",
+        { session: "node_1", id: "bp_1" },
+        "removed",
+      ),
+      ...pair(
+        "rebind-node-bp",
+        "set_breakpoint",
+        { session: "node_1", file: "server/src/cart.ts", line: 25 },
+        {
+          id: "bp_2",
+          binding_count: 1,
+          resolved_locations: [{ file: "server/src/cart.ts", line: 25 }],
+        },
+      ),
+      ...pair(
+        "pause-on-rebound-node-bp",
+        "wait_for_pause",
+        { session: "node_1" },
+        {
+          hit_breakpoint_ids: ["bp_2"],
+          call_stack: [{ file: "server/src/cart.ts", line: 25 }],
+        },
+      ),
+    ];
+
+    const out = fullstackCart.oracle(
+      trace,
+      "server/src/index.ts registers express.json() after cartRouter, so req.body is undefined in cart.ts:24.",
+    );
+
+    expect(out.mechanic).toBe(1);
+  });
+
   it("grades the final successful browser and Node sessions after relaunch recovery", () => {
     const trace: TraceEntry[] = [
       ...pair(
