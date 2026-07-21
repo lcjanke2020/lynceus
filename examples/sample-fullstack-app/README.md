@@ -1,6 +1,6 @@
 # examples/sample-fullstack-app/
 
-**Last updated: 2026-07-17**
+**Last updated: 2026-07-20**
 
 The human-facing full-stack demo app (LEO-464): a dev-build React frontend and an
 Express backend that talk to each other, with one deliberate bug planted server-side.
@@ -14,8 +14,11 @@ One small app, four jobs:
    work needs exactly this app.
 4. The subject of the README demo recording (LEO-453).
 
-This is **not** a CI fixture. The dual-session L3 e2e spec uses its own minimal vanilla
-fixture for determinism; nothing in `test/` or `evals/` builds this directory today.
+This is not the L3 CI fixture: the deterministic dual-session e2e spec keeps its own
+minimal vanilla page + Node entry. It **is** now the `fullstack-cart` L4 target. The
+eval runner starts/stops this Vite dev server per trial, while the agent launches the
+built backend under Node Inspector; `npm run sample-fullstack:build` installs the
+lockfile-pinned dependencies and emits `server/dist/` with source maps.
 
 ## Stack and layout
 
@@ -44,6 +47,20 @@ stdout as `sample-fullstack-app api listening on http://127.0.0.1:<port>`),
 `http://127.0.0.1:3001`), `CORS_ORIGIN` (allowed browser origin, replacing the default
 allow-list of both loopback spellings — `http://localhost:5173` and
 `http://127.0.0.1:5173` — so opening the page under either spelling just works).
+
+From the repository root, the eval-oriented commands are:
+
+```sh
+npm run sample-fullstack:build
+EVAL_BUDGET_USD=5 npm run eval:quick:fullstack
+```
+
+The quick command is one paid trial with both correctness and mechanic currently
+xfail-tagged. Its deterministic oracle requires concurrent browser/Node rows from
+`list_sessions`, a bound breakpoint in each target's source coordinates, and a
+Node-scoped pause in `server/src/cart.ts`; see [evals/README.md](../../evals/README.md).
+Port 5173 must be unused before the runner starts Vite, and port 3001 must be free for
+the agent-launched API.
 
 ## The bug — do not fix it
 

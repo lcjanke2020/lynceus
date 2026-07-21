@@ -20,8 +20,9 @@ import type { Vendor } from "./vendor.js";
 /** Discriminated union over the target the scenario drives.
  *
  *  Added when the harness gained a Node-target seam so the same
- *  runner can host both browser scenarios (the original surface) and
- *  Node scenarios (`launch_node`-driven). Approach A (additive
+ *  runner can host browser scenarios (the original surface), Node
+ *  scenarios (`launch_node`-driven), and a dual browser + Node scenario.
+ *  Approach A (additive
  *  optional `Scenario.target?` field) was chosen over Approach B
  *  (`Scenario = BrowserScenario | NodeScenario`) to avoid touching
  *  all existing browser scenarios — they continue to carry
@@ -33,10 +34,16 @@ import type { Vendor } from "./vendor.js";
  *    user message as `Page under test: ${url}`.
  *  - `node`    — drives a built JS entrypoint at `script` via
  *    `launch_node`, skips static-server + Chrome resolution, frames the
- *    first user message as `Node script under test: ${script}`. */
+ *    first user message as `Node script under test: ${script}`.
+ *  - `dual`    — starts the development web server rooted at `webAppDir`,
+ *    gives the agent both `webUrl` and `script`, and expects it to keep one
+ *    browser and one Node debug session live concurrently. `webUrl` is the
+ *    exact page to probe and open, so a path, query, and fragment are valid;
+ *    the runner derives Vite's bind host/port from it. */
 export type ScenarioTarget =
   | { kind: "browser"; variantDistDir: string }
-  | { kind: "node"; script: string };
+  | { kind: "node"; script: string }
+  | { kind: "dual"; webAppDir: string; webUrl: string; script: string };
 
 export interface Scenario {
   /** Identifier — matches the filename under evals/scenarios/. */
@@ -50,7 +57,7 @@ export interface Scenario {
    *  neither `variantDir` nor `target`. */
   variantDir?: string;
   /** Explicit target discriminator — when set, takes precedence over the
-   *  legacy `variantDir` fallback. New Node scenarios set this; existing
+   *  legacy `variantDir` fallback. New Node and dual scenarios set this; existing
    *  browser scenarios leave it unset and rely on `variantDir`. The
    *  runner's `resolveTarget(scenario)` helper resolves the effective
    *  target from these two fields. */
@@ -122,8 +129,8 @@ export interface ScenarioStartEntry {
   /** Public commit SHA the eval was run against, when available. */
   sha?: string;
   /** URL the sample-app variant was served at (for log correlation).
-   *  **Optional** — present only on browser trials; Node trials omit
-   *  it (there is no static server). Legacy (pre-Node-seam) traces
+   *  **Optional** — present on browser and dual trials; Node-only trials omit
+   *  it (there is no web server). Legacy (pre-Node-seam) traces
    *  always carried this field; `normalizeLegacyEntry` in trace.ts
    *  synthesizes a `target` for those by defaulting the entry to
    *  `{ kind: "browser", variantDistDir: "" }`, so downstream consumers

@@ -1,19 +1,20 @@
 # The dual-session cart-bug demo
 
-**Last updated: 2026-07-17** · Target wall time: **≤ 10 minutes** (script budget ~8)
+**Last updated: 2026-07-20** · Target wall time: **≤ 10 minutes** (script budget ~8)
 
 One lynceus server, two debug sessions — a browser and a Node backend — one agent
 breakpointing both sides of the same `fetch`. The story: *"the cart shows 0 items after
 add-to-cart, and the bug is on whichever side you can't grep from the other."*
 
-> **Build requirement:** this script needs the `multi-session-support` demo cut
-> (LEO-116 PRs 2–5: `session` params, `label`s, `list_sessions`). On master or the npm
-> release, session-addressed calls don't exist yet — see **Fallback** at the bottom.
+> **Build requirement:** this script needs the multi-session implementation now on
+> `master` (PRs #63, #67–#72). The published `lynceus@0.4.0` predates session-addressed
+> calls; until the next release, run the server from a current source checkout. See
+> **Fallback** at the bottom when pinned to 0.4.0.
 
 ## One-time setup (before the interview, not during)
 
 ```sh
-# 1. lynceus itself, from the multi-session-support branch
+# 1. lynceus itself, from current master
 cd <repo> && npm install && npm run build
 
 # 2. the demo app
@@ -185,7 +186,7 @@ side by side here — different axes, deliberately different names.
 | 7–8 fix + re-run | 2 min |
 | 9 + narration slack | 2 min |
 
-## Fallback (back pocket, works on master today)
+## Fallback (back pocket, works on lynceus 0.4.0)
 
 If the branch build misbehaves on the day: register **two** stdio lynceus instances in
 the MCP client (`lynceus-fe`, `lynceus-be`), one per target — no session params, same

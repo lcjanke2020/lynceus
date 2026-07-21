@@ -1,53 +1,146 @@
 # src/session/
 
-**Last updated: 2026-05-22**
+**Last updated: 2026-07-20**
 
-Owns the singleton browser/Node process, the CDP client, pause state, and the buffered console + network streams. Every tool reads from this layer.
+Owns the debug-target registry and every target's mutable runtime state. A single
+lynceus process can keep one browser session and one Node Inspector session live at
+the same time; each record has its own CDP client, pause tracker, breakpoints, source
+maps, console/network buffers, and (for launched Node children) stdout/stderr buffer.
 
 ## Files
 
-| File | Exports | Role |
+| File | Main exports | Role |
 |---|---|---|
-| `state.ts` | `sessionState` (singleton), `SessionState`, `SessionKind`, `OwnedProcess`, `requireSession()`, `requirePaused()`, `requireCapable()`, `registerHandler()`, `getSession()`, `ROOT_SESSION_KEY`, `BreakpointRecord`, `BreakpointBinding` | The singleton holding everything else (CDP client, owned process, breakpoints map, `ScriptStore`, `PauseTracker`, ring buffers, per-session handler refs, `pauseOnExceptions` policy, session `kind`). The `sessionState.client` field is the injection seam L2 contract tests use to swap in `test/fake-cdp.ts`. |
-| `capabilities.ts` | `TOOL_KIND_SUPPORT` | Per-tool kind allowlist consulted by `requireCapable()`. Browser is the default; only tools that reject a kind get an entry. See [`../tools/README.md`](../tools/README.md) §Capability gating for the agent-facing contract. |
-| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()` | Browser lifecycle. `chrome-launcher` for `launch_chrome`; `CDP({port,host})` for `attach_chrome`. Sets up `Target.setAutoAttach({ flatten: true })` so workers + iframes hit the same CRI client tagged with their own `sessionId`. |
-| `node.ts` | `attachNode()`, `launchNode()` | Node Inspector lifecycle. `attach_node` connects to an existing `--inspect` / `--inspect-brk` process; `launch_node` spawns a Node child, parses the inspector port from stderr, attaches, and marks the process as owned for `close_session`. |
-| `pause.ts` | `PauseTracker`, `PauseState` | One pause at a time. `waitForPause(timeout)` blocks until the next `Debugger.paused`; `waitForPauseOrResume(timeout)` is the step-tool variant. **Read the entry-guard comment on `waitForPauseOrResume`** — it is load-bearing for fast steps where CRI delivers the step response and the next pause in the same WebSocket batch. |
-| `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry` | Capped at 1000 entries each, monotonic `seq` for pagination. `RingBuffer.update()` is used by the network buffer when a response arrives for an in-flight request. |
+| `state.ts` | `registry`, `Session`, `SessionKind`, `SessionRecord`, `requireSession()`, `requirePaused()`, `requireCapable()`, `registerHandler()`, `ROOT_SESSION_KEY` | `SessionRegistry` plus the per-target `SessionState`. The registry mints `browser_N` / `node_N`, enforces capacity and unique labels, resolves addresses, owns startup rollback and close fan-out, and allocates cross-session event sequence numbers. |
+| `capabilities.ts` | `TOOL_KIND_SUPPORT` | Per-tool kind allowlist consulted by `requireCapable()`. Shared Runtime/Debugger tools work on both kinds; browser-only and Node-only tools fail with `unsupported_target`. |
+| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()` | Browser lifecycle. `Target.setAutoAttach({ flatten: true })` brings workers and iframes onto the same CRI client with their own CDP `sessionId`. |
+| `node.ts` | `attachNode()`, `launchNode()` | Node Inspector lifecycle. Launch mode owns the child, discovers its port from stderr, and captures stdio; attach mode leaves the external process alone. |
+| `debugger.ts` | `connectDebugger()` | Shared Runtime + Debugger wiring, pause events, console buffering, and source-map discovery for either target kind. |
+| `pause.ts` | `PauseTracker`, `PauseState`, `PauseWaitHandle` | One pause state per debug target. Supports scoped waits, cancellable registry races, resume synchronization, and fast-step pause detection. |
+| `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry`, `NodeOutputEntry` | Three capped per-target buffers. All receive sequence numbers from one registry-global allocator so `get_timeline(session="all")` can merge them. |
 
-## Session lifecycle
+## Registry model
+
+The registry holds at most one record of each kind in v1: one browser plus one Node
+session may coexist; a second browser or second Node session returns
+`already_session`. IDs are monotonic for the process lifetime and never recycled.
+Labels are optional, unique among live sessions, and descriptive only—tools accept the
+ID returned by launch/attach or `list_sessions`, not a label.
+
+Startup is transactional:
+
+```mermaid
+flowchart LR
+    Call["launch / attach"] --> Reserve["reserve(kind, label)<br/>status: starting"]
+    Reserve --> Init["spawn or connect<br/>wire SessionState"]
+    Init -->|success| Active["activate(id)<br/>status: active"]
+    Init -->|failure| Abort["abort(record)<br/>close partial state + delete"]
+    Active --> Close["closeAddressed / closeAll<br/>status: closing"]
+    Close --> Delete["SessionState.close + delete record"]
+```
+
+Reservations count against capacity. That prevents two concurrent launches from both
+passing the guard, and it keeps a half-built target invisible to ordinary accessors.
+`abort(record)` takes the record—not only its ID—so rollback can re-close state mutated
+after a shutdown race removed the map entry.
+
+Address resolution is intentionally convenient in the one-target case and strict in
+the two-target case:
+
+- `requireSession("browser_1")` resolves that active record or throws
+  `unknown_session` with the current candidates.
+- `requireSession()` resolves the sole active record, throws `no_session` for zero,
+  and throws `ambiguous_session` for two.
+- `requirePaused(session?)` applies the same resolution and then checks that target's
+  `PauseTracker`.
+- `list_sessions` returns the active records with `{ session, kind, label, attached,
+  paused, url }`.
+- `close_session({session})` closes one record. Omission closes the sole record but is
+  ambiguous when both are live. Process shutdown calls `registry.closeAll()`.
+
+## The two session axes
+
+These names look similar but route at different layers:
+
+| Input | Selects | Examples | Omitted value |
+|---|---|---|---|
+| `session` | A registry debug target | `browser_1`, `node_1` | Sole live target; ambiguous when two are live |
+| `session_id` | A flat CDP child inside the chosen browser target | worker / iframe / OOPIF ID | Root CDP session (`null` and omission both mean root) |
+
+Every CDP-minted `object_id`, `script_id`, `request_id`, and `call_frame_id` is scoped
+to its Debugger/Runtime/Network agent. Round-trip both coordinates when a follow-up
+needs them: `session` chooses the browser or Node record; `session_id` chooses the CDP
+root/child within that record. Passing `browser_1` or `node_1` as `session_id` is a
+validation error with a corrective message.
+
+## Per-target lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Disconnected
-    Disconnected --> Launching: launch_chrome
-    Disconnected --> Attaching: attach_chrome
-    Launching --> Running: launched + CRI connected
-    Attaching --> Running: CRI connected
+    [*] --> Starting: registry.reserve
+    Starting --> Running: launch/attach + registry.activate
+    Starting --> Closed: registry.abort
     Running --> Paused: Debugger.paused
     Paused --> Running: resume / step_*
     Running --> Closed: close_session
     Paused --> Closed: close_session
-    Closed --> Disconnected: SessionState.reset()
+    Closed --> [*]: state reset + record deleted
 ```
 
-`close_session` (via `registry.closeAddressed` → `SessionState.close()`) kills Chrome or Node only if we launched it ourselves (`attached === false`); attach-mode sessions leave the user's process alive.
+`SessionState.close()` kills an owned Chrome/Node process only for launch mode
+(`attached === false`). Attach mode closes the CDP socket and leaves the user's process
+running. Launched Node children get an awaited SIGTERM grace period followed by a
+SIGKILL fallback; close is memoized at the registry record so re-entrant teardown waits
+on the same operation.
 
-`launch_node` captures child stdout/stderr into a durable pull-based buffer (`sessionState.nodeOutput`) exposed via the `get_node_output` MCP tool. The buffer is deliberately separate from the V8-inspector console (`get_console_logs`), which captures `Runtime.consoleAPICalled` events from inside the debuggee process. `attach_node` sessions leave the buffer empty — lynceus doesn't own the stdio of a pre-existing process.
+`launch_node` captures raw child stdout/stderr in `state.nodeOutput`. That is separate
+from `state.console`, which records `Runtime.consoleAPICalled`; `attach_node` cannot see
+the external process's stdio and therefore leaves the Node-output buffer empty.
+
+## Pauses and merged event order
+
+Each target owns one `PauseTracker`:
+
+- `wait_for_pause({session})` waits only on that target.
+- Omitting `session` with two live targets races a cancellable waiter on the active
+  participants snapshotted when the call starts. The first pause wins and losing
+  waiters are removed immediately. An already-paused target may win at once.
+- Closing a record resets its tracker before slow process teardown, rejecting its
+  in-flight waiters promptly.
+- Step tools use `waitForPauseOrResume()`. Its entry guard is load-bearing because CRI
+  can emit the next `Debugger.paused` synchronously before the step call registers its
+  waiter.
+
+Console, browser-network request-start, and Node-output buffers stay per target, but
+their `seq` values come from `registry.nextSeq()`. Specialized readers remain scoped;
+`get_timeline(session="all")` projects retained rows from every live target into that
+single total order. A timeline cursor is valid only while the same session/event-type
+selection is retained.
 
 ## Public surface tools rely on
 
-- `requireSession(): SessionState` — throws `noSession()` if no client. Use in every tool.
-- `requirePaused(): SessionState` — also throws `notPaused()`. Use for `get_scope`, `get_call_stack`, `evaluate` (with `frame_index`), and the step tools.
-- `requireCapable(s, "<tool_name>"): void` — throws `unsupportedTarget()` when the active session's `kind` isn't in `TOOL_KIND_SUPPORT[<tool_name>]`. Call after `requireSession()` in every browser-only tool. Permissive when the tool isn't listed.
-- `sessionState.client!.send(method, params, sessionId?)` — direct CDP call. **Always** pass through the `sessionId` that came from the source (script, frame, request) — see the provenance gotcha below.
-- `sessionState.pause.current()` / `.isPaused()` — current pause state.
-- `sessionState.scripts` (`ScriptStore`) — see [../sourcemap/README.md](../sourcemap/README.md).
-- `sessionState.console.query({since, filter, limit})` and `sessionState.network.query(...)` — paginated reads; the `cursor` returned to callers is the max `seq` seen.
+- Resolve once at the handler boundary: `const s = requireSession(input.session)`.
+  Pass `s` into helpers rather than resolving again without an address.
+- Use `requirePaused(input.session)` for pause-only tools and
+  `requireCapable(s, toolName)` for kind-gated tools.
+- Send CDP calls through `s.client!.send(method, params, sessionId?)`; preserve the
+  originating CDP child `sessionId` where applicable.
+- Read mutable state from that resolved record: `s.pause`, `s.scripts`,
+  `s.breakpoints`, `s.console`, `s.network`, and `s.nodeOutput`.
+- L2 tests create/activate registry records and inject `test/fake-cdp.ts` into the
+  record's `client`; there is no process-global session-state injection slot.
 
 ## Gotchas
 
-- **`session_id` provenance.** `objectId`, `callFrameId`, `requestId`, and `scriptId` are all **per-Debugger/Runtime/Network agent** — i.e., per flat session. Two iframes can both emit `requestId="123"`. Every tool that returns one of these IDs also returns the originating `session_id` (`null` for root). Round-trip it on follow-ups or the call hits the wrong session. There is no "fall back to active pause session" behavior — omitting `session_id` always means root.
-- **Pause race on fast steps.** See `pause.ts` `waitForPauseOrResume` comment — CRI emits events synchronously, so for a fast step the next `Debugger.paused` arrives before the step caller registers its waiter. The entry guard handles this; do not "simplify" it.
-- **Auto-attach replay.** Newly-attached child sessions (worker, OOPIF) inherit `pauseOnExceptions` via the `set_pause_on_exceptions` replay path. Don't add per-session state without considering the replay surface.
-- More depth → [../../docs/test-eval-plan.md](../../docs/test-eval-plan.md) §Critical gotchas (pause races, auto-attach replay, root↔child collision routing).
+- **Do not resolve twice.** With two targets live, a helper that drops the already
+  resolved `Session` and calls `requireSession()` again turns a valid addressed call
+  into `ambiguous_session`—or, worse, acts on the wrong sole target after a close race.
+- **Breakpoint IDs are per target.** `browser_1` and `node_1` can both mint `bp_1`.
+  Round-trip the originating `session` on remove/wait logic.
+- **Flat-session provenance is independent.** Omitted `session_id` always means root;
+  it never falls back to the currently paused worker/iframe.
+- **Auto-attach replay.** New browser child sessions inherit
+  `pauseOnExceptions`; any new per-CDP-session policy needs the same replay audit.
+- More depth: [dual-target-debugging.md](../../docs/dual-target-debugging.md) for the
+  multi-session contract and [test-eval-plan.md](../../docs/test-eval-plan.md)
+  §Critical gotchas for pause/source-map races.
