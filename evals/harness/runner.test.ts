@@ -21,6 +21,7 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveTarget,
+  parseDualWebUrl,
   buildScenarioStartEntry,
   BROWSER_ONLY_TOOLS,
   NODE_SYSTEM_PROMPT,
@@ -116,6 +117,29 @@ describe("resolveTarget (additive target discriminator)", () => {
   it("throws when neither variantDir nor target is set", () => {
     const s = scenario({ variantDir: undefined, target: undefined });
     expect(() => resolveTarget(s)).toThrow(/has neither 'target' nor 'variantDir'/);
+  });
+});
+
+describe("parseDualWebUrl", () => {
+  it("accepts an exact page URL with path, query, and fragment", () => {
+    const webUrl = parseDualWebUrl(
+      "http://127.0.0.1:5173/app?mode=smoke#cart",
+    );
+
+    expect(webUrl.hostname).toBe("127.0.0.1");
+    expect(webUrl.port).toBe("5173");
+    expect(webUrl.pathname).toBe("/app");
+    expect(webUrl.search).toBe("?mode=smoke");
+    expect(webUrl.hash).toBe("#cart");
+  });
+
+  it("rejects non-http URLs and URLs without a non-default explicit port", () => {
+    expect(() => parseDualWebUrl("https://127.0.0.1:5173/app")).toThrow(
+      /must be an http URL with an explicit port/,
+    );
+    expect(() => parseDualWebUrl("http://127.0.0.1/app")).toThrow(
+      /must be an http URL with an explicit port/,
+    );
   });
 });
 

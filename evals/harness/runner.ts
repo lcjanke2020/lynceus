@@ -139,6 +139,30 @@ export function resolveTarget(scenario: Scenario): ScenarioTarget {
   );
 }
 
+/** Parse the exact page URL used by a dual target.
+ *
+ * `webUrl` is intentionally a page URL, not merely an origin: a scenario may
+ * use a path, query, or fragment to select the state the browser should open.
+ * The managed-server readiness check probes that page (a non-OK page is not a
+ * ready fixture), while Vite's bind coordinates come from hostname + port.
+ */
+export function parseDualWebUrl(value: string): URL {
+  let webUrl: URL;
+  try {
+    webUrl = new URL(value);
+  } catch {
+    throw new Error(
+      `runner: dual target webUrl '${value}' must be an http URL with an explicit port.`,
+    );
+  }
+  if (webUrl.protocol !== "http:" || webUrl.port === "") {
+    throw new Error(
+      `runner: dual target webUrl '${value}' must be an http URL with an explicit port.`,
+    );
+  }
+  return webUrl;
+}
+
 /** Browser-only tool surface — derived once at module load from
  *  `TOOL_KIND_SUPPORT` (src/session/capabilities.ts), so the
  *  `NODE_SYSTEM_PROMPT` blocklist stays in sync with the runtime
@@ -352,12 +376,7 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
             `runner: dual target script '${target.script}' does not exist. Run 'npm run sample-fullstack:build' first.`,
           );
         }
-        const webUrl = new URL(target.webUrl);
-        if (webUrl.protocol !== "http:" || webUrl.port === "") {
-          throw new Error(
-            `runner: dual target webUrl '${target.webUrl}' must be an http URL with an explicit port.`,
-          );
-        }
+        const webUrl = parseDualWebUrl(target.webUrl);
         server = await startDevServer({
           cwd: target.webAppDir,
           url: target.webUrl,

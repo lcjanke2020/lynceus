@@ -56,6 +56,32 @@ describe("startDevServer", () => {
     ).rejects.toThrow();
   });
 
+  it("probes the exact page URL, including its path and query", async () => {
+    const port = await freePort();
+    const url = `http://127.0.0.1:${port}/app?mode=smoke#cart`;
+    const program = [
+      'const http = require("node:http");',
+      'const server = http.createServer((req, res) => {',
+      'res.statusCode = req.url === "/app?mode=smoke" ? 200 : 404;',
+      'res.end(req.url);',
+      '});',
+      `server.listen(${port}, "127.0.0.1");`,
+      'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+    ].join("");
+
+    const server = await startDevServer({
+      cwd: process.cwd(),
+      url,
+      command: process.execPath,
+      args: ["-e", program],
+      startupTimeoutMs: 5_000,
+    });
+    running.push(server);
+
+    expect(server.url).toBe(url);
+    expect(await (await fetch(url)).text()).toBe("/app?mode=smoke");
+  });
+
   it("reports early child exit with captured diagnostics", async () => {
     const port = await freePort();
     await expect(

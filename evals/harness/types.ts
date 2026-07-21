@@ -37,7 +37,9 @@ import type { Vendor } from "./vendor.js";
  *    first user message as `Node script under test: ${script}`.
  *  - `dual`    — starts the development web server rooted at `webAppDir`,
  *    gives the agent both `webUrl` and `script`, and expects it to keep one
- *    browser and one Node debug session live concurrently. */
+ *    browser and one Node debug session live concurrently. `webUrl` is the
+ *    exact page to probe and open, so a path, query, and fragment are valid;
+ *    the runner derives Vite's bind host/port from it. */
 export type ScenarioTarget =
   | { kind: "browser"; variantDistDir: string }
   | { kind: "node"; script: string }

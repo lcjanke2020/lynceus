@@ -36,9 +36,16 @@ function record(value: unknown): Record<string, unknown> {
 function sessionFromLaunch(calls: Pair[], tool: "launch_node" | "launch_chrome"):
   | string
   | undefined {
-  const launch = calls.find((call) => call.tool === tool && !call.isError);
-  const session = record(launch?.output).session;
-  return typeof session === "string" ? session : undefined;
+  // Agents commonly recover from a bad launch by closing that target and
+  // launching it again. Grade the final successful attempt rather than
+  // pinning every later oracle check to an abandoned first-session id.
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index];
+    if (call === undefined || call.tool !== tool || call.isError) continue;
+    const session = record(call.output).session;
+    if (typeof session === "string") return session;
+  }
+  return undefined;
 }
 
 function boundBreakpoint(

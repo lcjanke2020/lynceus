@@ -76,6 +76,45 @@ describe("fullstack-cart oracle", () => {
     expect(out.notes).toMatch(/solved/);
   });
 
+  it("grades the final successful browser and Node sessions after relaunch recovery", () => {
+    const trace: TraceEntry[] = [
+      ...pair(
+        "stale-node-launch",
+        "launch_node",
+        { script: "server/dist/index.js", label: "backend-stale" },
+        { session: "node_stale", label: "backend-stale" },
+      ),
+      ...pair(
+        "stale-browser-launch",
+        "launch_chrome",
+        { url: "http://127.0.0.1:5173", label: "frontend-stale" },
+        { session: "browser_stale", label: "frontend-stale" },
+      ),
+      ...pair(
+        "stale-node-close",
+        "close_session",
+        { session: "node_stale" },
+        { closed: true },
+      ),
+      ...pair(
+        "stale-browser-close",
+        "close_session",
+        { session: "browser_stale" },
+        { closed: true },
+      ),
+      ...successfulTrace(),
+    ];
+
+    const out = fullstackCart.oracle(
+      trace,
+      "server/src/index.ts registers express.json() after cartRouter, so req.body is undefined in cart.ts:24.",
+    );
+
+    expect(out.correctness).toBe(1);
+    expect(out.mechanic).toBe(1);
+    expect(out.notes).toMatch(/solved/);
+  });
+
   it("accepts a precise unparsed req.body diagnosis", () => {
     const out = fullstackCart.oracle(
       successfulTrace(),
