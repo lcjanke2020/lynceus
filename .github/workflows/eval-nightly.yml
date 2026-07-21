@@ -1,4 +1,4 @@
-# On-demand L4 eval — the full scenario suite (browser + Node) × 3 trials
+# On-demand L4 eval — the full scenario suite (browser + Node + dual) × 3 trials
 # against the live Anthropic API. Distinct from .github/workflows/ci.yml so
 # the API-key secret is scoped to this workflow only, fork PRs don't trigger
 # it, and a slow / expensive eval can't block ordinary unit + e2e CI.
@@ -84,11 +84,12 @@ jobs:
           BIN=$(node -e "const {readdirSync}=require('fs');const {join}=require('path');const root=process.env.HOME+'/.cache/ms-playwright';const dirs=readdirSync(root).filter(d=>/^chromium-\d+$/.test(d)).sort().reverse();for(const d of dirs){const c=[join(root,d,'chrome-linux','chrome'),join(root,d,'chrome-linux64','chrome'),join(root,d,'chrome-linux-arm64','chrome')];for(const p of c){try{require('fs').accessSync(p);console.log(p);process.exit(0)}catch{}}};process.exit(1)")
           echo "CDP_TEST_BROWSER_PATH=$BIN" >> $GITHUB_ENV
 
-      - name: Build sample fixtures (browser + Node)
+      - name: Build sample fixtures (browser + Node + dual)
         if: steps.secret_check.outputs.skip != 'true'
         run: |
           npm run sample:build        # browser: examples/sample-app + variants
           npm run sample-node:build   # Node: examples/sample-node-app/dist (also run by preeval, kept explicit)
+          npm run sample-fullstack:build # dual: Vite dependencies + backend source maps (also run by preeval)
 
       - name: Run eval
         if: steps.secret_check.outputs.skip != 'true'

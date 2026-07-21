@@ -1,4 +1,4 @@
-// Unit tests for the runner's Node-target seam.
+// Unit tests for the runner's browser / Node / dual target seam.
 //
 // All synthetic — no real MCP spawn, no real LLM, no real Node child.
 // The runner's `runTrial` itself is end-to-end-tested in
@@ -13,7 +13,7 @@
 //   - `NODE_SYSTEM_PROMPT` actually lists the blocked browser-only tools
 //     (so the agent doesn't waste first-turn planning on probes that
 //     return `unsupported_target`).
-//   - `buildScenarioStartEntry` includes `variantUrl` only on browser
+//   - `buildScenarioStartEntry` includes `variantUrl` on browser-bearing
 //     trials and `target` on every entry — the conditional-shape
 //     branching is otherwise hard to test without spinning up the
 //     trial machinery.
@@ -24,6 +24,7 @@ import {
   buildScenarioStartEntry,
   BROWSER_ONLY_TOOLS,
   NODE_SYSTEM_PROMPT,
+  DUAL_SYSTEM_PROMPT,
 } from "./runner.js";
 import type {
   OracleResult,
@@ -88,6 +89,17 @@ describe("resolveTarget (additive target discriminator)", () => {
       kind: "node",
       script: "examples/sample-node-app/dist/index.js",
     });
+  });
+
+  it("returns an explicit dual target with both launch coordinates", () => {
+    const target = {
+      kind: "dual" as const,
+      webAppDir: "examples/sample-fullstack-app",
+      webUrl: "http://127.0.0.1:5173",
+      script: "examples/sample-fullstack-app/server/dist/index.js",
+    };
+    const s = scenario({ variantDir: undefined, target });
+    expect(resolveTarget(s)).toEqual(target);
   });
 
   it("prefers explicit target over legacy variantDir when both are set", () => {
@@ -211,6 +223,26 @@ describe("NODE_SYSTEM_PROMPT", () => {
   });
 });
 
+describe("DUAL_SYSTEM_PROMPT", () => {
+  it("requires both labeled session kinds and explicit session addressing", () => {
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/launch_node/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/launch_chrome/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/list_sessions/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/kind="node"/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/kind="browser"/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/pass the returned session ids/i);
+  });
+
+  it("requires a breakpoint in each coordinate space and a Node-side inspection", () => {
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/breakpoint in the request-handler path/i);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/breakpoint in the frontend/i);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/setTimeout/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/serial tool dispatch/i);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/wait_for_pause\(\{ session: backendSession \}\)/);
+    expect(DUAL_SYSTEM_PROMPT).toMatch(/get_call_stack \/ get_scope \/ evaluate/);
+  });
+});
+
 describe("buildScenarioStartEntry (trace-shape factor-out)", () => {
   it("includes variantUrl on browser trials", () => {
     const entry: ScenarioStartEntry = buildScenarioStartEntry({
@@ -248,6 +280,25 @@ describe("buildScenarioStartEntry (trace-shape factor-out)", () => {
     expect(entry.variantUrl).toBeUndefined();
     expect(entry.target).toEqual({ kind: "node", script: "/dist/index.js" });
     expect(entry.reasoning).toEqual({ level: "medium", budgetTokens: 4096 });
+  });
+
+  it("includes the development URL and dual target on dual trials", () => {
+    const target = {
+      kind: "dual" as const,
+      webAppDir: "examples/sample-fullstack-app",
+      webUrl: "http://127.0.0.1:5173",
+      script: "examples/sample-fullstack-app/server/dist/index.js",
+    };
+    const entry = buildScenarioStartEntry({
+      scenario: scenario({ name: "fullstack-cart", variantDir: undefined, target }),
+      trial: 1,
+      adapter: stubAdapter(),
+      target,
+      reasoning: { level: "medium", budgetTokens: 8192 },
+      variantUrl: target.webUrl,
+    });
+    expect(entry.variantUrl).toBe(target.webUrl);
+    expect(entry.target).toEqual(target);
   });
 
   it("includes resolvedEffort when provided (adaptive thinking)", () => {

@@ -1,5 +1,6 @@
 // L4 trial runner — orchestrates one (scenario, trial) end-to-end:
-//   1. Start a static server for the scenario's sample-app variant.
+//   1. Start the scenario's web fixture when its target includes a browser
+//      (a static server for browser-only variants; Vite for the dual target).
 //   2. Spawn dist/index.js (the lynceus server) as an MCP subprocess.
 //   3. Run the Anthropic tool-use loop with the lynceus tool list:
 //        - send messages → assistant response → invoke tool_uses → repeat
@@ -18,7 +19,7 @@
 // Cache control: the system prompt block AND the tool list's last entry
 // are marked `cache_control: { type: "ephemeral" }` so the static prefix
 // hits cache on every trial after the first. Measured size on lynceus's
-// current tool surface (45 tools, terse descriptions): the system block
+// current tool surface (54 tools, terse descriptions): the system block
 // is ~280 tokens and the tools array is ~5K tokens. Anthropic's cache
 // breakpoint minimum is ~1024 tokens, so the system-block marker is
 // effectively a no-op for short scenario `systemPromptOverride` values
@@ -31,7 +32,7 @@
 // either — they're per-trial by definition.
 
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   effectiveTokenCap,
   makeAnthropicAdapter,
@@ -54,6 +55,7 @@ import {
   tierToEffort,
 } from "./model.js";
 import { startStaticServer } from "./static-server.js";
+import { startDevServer } from "./dev-server.js";
 import {
   resolveBrowser,
   isChromeLauncherDefault,
@@ -96,7 +98,8 @@ export interface RunTrialOpts {
   budget: BudgetTracker;
   /** Target discriminator — browser scenarios pass
    *  `{ kind: "browser", variantDistDir }`; Node scenarios pass
-   *  `{ kind: "node", script }`. Replaced the earlier
+   *  `{ kind: "node", script }`; dual scenarios pass both a web fixture
+   *  and a Node script. Replaced the earlier
    *  `variantDistDir: string` field once the harness gained a Node-target
    *  seam. cli.ts derives this via `resolveTarget(scenario)`. */
   target: ScenarioTarget;
@@ -223,9 +226,42 @@ Common mistakes to avoid:
 - Forgetting that launch_node starts the child paused at entry — wait_for_pause first, then resume.
 - Setting a breakpoint on a non-executable line (comments, blank lines, type declarations).`;
 
+/** System prompt for the first browser + Node concurrent-session scenario.
+ *  It keeps the same SDET / dual-axis framing as the single-target prompts,
+ *  but makes session addressing and the request handoff the test plan. */
+export const DUAL_SYSTEM_PROMPT = `You are a Software Development Engineer in Test (SDET) doing manual exploratory testing of a Chrome DevTools Protocol (CDP) MCP server. The server exposes one TypeScript-aware debugger surface for concurrent browser and Node.js Inspector sessions. Your job is to verify both sessions work independently while following one request across the frontend/backend boundary.
+
+For each scenario you receive, you have TWO goals — both are scored:
+
+  1. Test plan execution (PRIMARY). Exercise the two-session debugger workflow below. Reading source without proving both coordinate spaces and the runtime handoff does not test the feature.
+
+  2. Bug identification (SECONDARY). Diagnose the concrete full-stack bug and name its file:line and cause.
+
+Test plan, in order:
+  1. launch_node({ script, label: "backend" }) for the supplied backend entry. It returns a Node debug-target session id and starts paused at entry.
+  2. wait_for_pause({ session: backendSession }) to drain the entry pause, set a TypeScript breakpoint in the request-handler path, then resume({ session: backendSession }). Use get_node_output if needed to confirm the API is listening.
+  3. launch_chrome({ url, headless: true, label: "frontend" }) for the supplied page.
+  4. list_sessions and verify one live session has kind="node" and one has kind="browser". Labels are descriptive only: pass the returned session ids in every session-scoped follow-up.
+  5. Set a TypeScript/TSX breakpoint in the frontend add-to-cart request path. The eval harness dispatches tool calls serially, while a direct click can remain pending at a breakpoint. Avoid that deadlock: use frontend-scoped evaluate to schedule the DOM click with setTimeout(..., 0), let evaluate return, then call wait_for_pause({ session: frontendSession }). Inspect the pause and resume the frontend so the request can reach the backend.
+  6. wait_for_pause({ session: backendSession }) and verify the backend breakpoint fired. Inspect the handler with get_call_stack / get_scope / evaluate to establish why the JSON request does not update the cart.
+  7. Resume any paused target and close BOTH sessions explicitly.
+
+get_source / get_script_source may help choose executable lines, but they do not substitute for the two successful breakpoint bindings, the concurrent-session observation, or the Node-side pause.
+
+When done, write one short final answer naming the buggy file:line and root cause.
+
+Common mistakes to avoid:
+- Omitting session once both targets are live; that returns ambiguous_session by design.
+- Confusing debug-target session (browser_1/node_1) with CDP child session_id provenance.
+- Treating labels as accepted addresses; tools accept the returned session ids.
+- Forgetting the Node entry pause: drain it, install the backend breakpoint, then resume.
+- Calling click directly on the breakpointing button; under serial tool dispatch it can stay pending. Schedule element.click() from setTimeout via evaluate, then wait on the frontend session.
+- Leaving the frontend paused while waiting for the backend — resume it so the fetch can depart.
+- Setting a breakpoint on a comment, blank line, or type declaration.`;
+
 /** Assemble the `scenario_start` trace entry from the inputs the runner
  *  already has. Factored out of `runTrial` so the target-discriminator
- *  branching (Node entries omit `variantUrl`; browser entries include it)
+ *  branching (Node entries omit `variantUrl`; browser and dual entries include it)
  *  is unit-testable without spinning up the trial machinery. */
 export function buildScenarioStartEntry(args: {
   scenario: Scenario;
@@ -288,77 +324,145 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
   const startMs = Date.now();
 
   // Branch on the target kind: browser trials spin up a port-0 static
-  // server + resolve a Chrome binary; Node trials skip both (the agent
-  // calls `launch_node` directly with the script path).
+  // server; dual trials start their development server; both resolve a
+  // Chrome binary. Node-only trials skip all browser setup.
   let server: { url: string; close(): Promise<void> } | null = null;
   let variantUrl: string | undefined;
   let extraEnv: Record<string, string> = {};
-  if (target.kind === "browser") {
-    server = await startStaticServer(target.variantDistDir);
-    variantUrl = server.url;
+  let mcp: Awaited<ReturnType<typeof spawnMcpServer>>;
+  try {
+    if (target.kind !== "node") {
+      if (target.kind === "browser") {
+        server = await startStaticServer(target.variantDistDir);
+      } else {
+        const viteCli = resolve(
+          target.webAppDir,
+          "node_modules",
+          "vite",
+          "bin",
+          "vite.js",
+        );
+        if (!existsSync(viteCli)) {
+          throw new Error(
+            `runner: dual target Vite CLI '${viteCli}' does not exist. Run 'npm run sample-fullstack:build' first.`,
+          );
+        }
+        if (!existsSync(target.script)) {
+          throw new Error(
+            `runner: dual target script '${target.script}' does not exist. Run 'npm run sample-fullstack:build' first.`,
+          );
+        }
+        const webUrl = new URL(target.webUrl);
+        if (webUrl.protocol !== "http:" || webUrl.port === "") {
+          throw new Error(
+            `runner: dual target webUrl '${target.webUrl}' must be an http URL with an explicit port.`,
+          );
+        }
+        server = await startDevServer({
+          cwd: target.webAppDir,
+          url: target.webUrl,
+          command: process.execPath,
+          args: [
+            viteCli,
+            "--host",
+            webUrl.hostname,
+            "--port",
+            webUrl.port,
+            "--strictPort",
+          ],
+        });
+      }
+      variantUrl = server.url;
 
-    // Resolve the Chrome/Chromium binary the spawned MCP server should drive.
-    // Shared with L3 (test/e2e/setup/global.ts) — both layers go through one
-    // resolution path so they can't test against different protocol revisions
-    // (docs/test-eval-plan.md §L3, plan rev 3 Cursor open-Q-2 resolution).
-    // The path is plumbed to the subprocess via CHROME_PATH; chrome-launcher
-    // honors it natively, so production launchChrome (src/session/browser.ts)
-    // doesn't need to read CDP_TEST_BROWSER_PATH itself. If the resolver
-    // returns the chrome-launcher-default marker (only when CDP_TEST_BROWSER=
-    // chrome and no override is set), omit CHROME_PATH so chrome-launcher
-    // runs its own detection — same policy as L3.
-    const browser = resolveBrowser();
-    extraEnv = isChromeLauncherDefault(browser)
-      ? {}
-      : { CHROME_PATH: browser.binaryPath };
-    // Sandbox posture: plumb the resolved decision to the server via
-    // CDP_SANDBOX, which launch_chrome uses as its launch default. The model
-    // controls launch_chrome's `sandbox` arg and normally omits it, so setting
-    // the server default is how a whole suite runs sandbox-on/off without
-    // prompt-injecting every scenario. Default is now auto-detect (sandbox-on
-    // when the host supports it) — see evals/harness/sandbox.ts and
-    // docs/chromium-sandboxing.md. Browser-only: a Node trial never launches
-    // Chromium, so this stays inside the browser branch (Node targets must not
-    // inherit CDP_SANDBOX). The decision is normally resolved once per run in
-    // cli.ts and threaded in; direct callers (tests) let us detect it here.
-    const sandboxDecision =
-      opts.sandboxDecision ?? decideEvalSandbox(browser.binaryPath);
-    extraEnv.CDP_SANDBOX = sandboxDecision.enabled ? "true" : "false";
-    if (!opts.sandboxDecision) {
-      // Only log here when we computed the decision ourselves; when cli.ts
-      // supplied it, the run header already reported the posture once.
-      process.stderr.write(formatSandboxHeader(sandboxDecision) + "\n");
-    }
-    process.stderr.write(
-      `[eval] resolved browser: ${browser.binaryPath} (source=${browser.source})\n`,
-    );
-  } else {
-    // Node trial — double-guard the script path (cli.ts also checks).
-    // A stale dist/ between cli.ts startup and the runner is a real
-    // concurrent-build hazard.
-    if (!existsSync(target.script)) {
-      throw new Error(
-        `runner: Node target.script '${target.script}' does not exist. Run 'npm run sample-node:build' (or the scenario's prebuild) first.`,
+      // Resolve the Chrome/Chromium binary the spawned MCP server should drive.
+      // Shared with L3 (test/e2e/setup/global.ts) — both layers go through one
+      // resolution path so they can't test against different protocol revisions
+      // (docs/test-eval-plan.md §L3, plan rev 3 Cursor open-Q-2 resolution).
+      // The path is plumbed to the subprocess via CHROME_PATH; chrome-launcher
+      // honors it natively, so production launchChrome (src/session/browser.ts)
+      // doesn't need to read CDP_TEST_BROWSER_PATH itself. If the resolver
+      // returns the chrome-launcher-default marker (only when CDP_TEST_BROWSER=
+      // chrome and no override is set), omit CHROME_PATH so chrome-launcher
+      // runs its own detection — same policy as L3.
+      const browser = resolveBrowser();
+      extraEnv = isChromeLauncherDefault(browser)
+        ? {}
+        : { CHROME_PATH: browser.binaryPath };
+      // Sandbox posture: plumb the resolved decision to the server via
+      // CDP_SANDBOX, which launch_chrome uses as its launch default. The model
+      // controls launch_chrome's `sandbox` arg and normally omits it, so setting
+      // the server default is how a whole suite runs sandbox-on/off without
+      // prompt-injecting every scenario. Default is now auto-detect (sandbox-on
+      // when the host supports it) — see evals/harness/sandbox.ts and
+      // docs/chromium-sandboxing.md. Node-only trials never launch Chromium, so
+      // they must not inherit CDP_SANDBOX. The decision is normally resolved
+      // once per run in cli.ts and threaded in; direct callers (tests) detect it
+      // here.
+      const sandboxDecision =
+        opts.sandboxDecision ?? decideEvalSandbox(browser.binaryPath);
+      extraEnv.CDP_SANDBOX = sandboxDecision.enabled ? "true" : "false";
+      if (!opts.sandboxDecision) {
+        // Only log here when we computed the decision ourselves; when cli.ts
+        // supplied it, the run header already reported the posture once.
+        process.stderr.write(formatSandboxHeader(sandboxDecision) + "\n");
+      }
+      process.stderr.write(
+        `[eval] resolved browser: ${browser.binaryPath} (source=${browser.source})\n`,
+      );
+      if (target.kind === "dual") {
+        process.stderr.write(
+          `[eval] dual trial — dev server ready at ${target.webUrl}; backend script=${target.script}\n`,
+        );
+      }
+    } else {
+      // Node trial — double-guard the script path (cli.ts also checks).
+      // A stale dist/ between cli.ts startup and the runner is a real
+      // concurrent-build hazard.
+      if (!existsSync(target.script)) {
+        throw new Error(
+          `runner: Node target.script '${target.script}' does not exist. Run 'npm run sample-node:build' (or the scenario's prebuild) first.`,
+        );
+      }
+      process.stderr.write(
+        `[eval] node trial — no browser resolution (script=${target.script})\n`,
       );
     }
-    process.stderr.write(
-      `[eval] node trial — no browser resolution (script=${target.script})\n`,
-    );
-  }
 
-  const mcp = await spawnMcpServer({
-    ...(opts.serverPath ? { serverPath: opts.serverPath } : {}),
-    env: extraEnv,
-  });
+    mcp = await spawnMcpServer({
+      ...(opts.serverPath ? { serverPath: opts.serverPath } : {}),
+      env: extraEnv,
+    });
+  } catch (error) {
+    if (server !== null) {
+      try {
+        await server.close();
+      } catch {
+        /* ignore cleanup errors in favor of the setup failure */
+      }
+    }
+    if (adapter.endScenario) {
+      try {
+        await adapter.endScenario();
+      } catch {
+        /* nothing was run; preserve the setup failure */
+      }
+    }
+    await writer.close();
+    throw error;
+  }
 
   // System prompt = the static prefix (or scenario's override). Marked
   // cache_control so the full system + tools span hits cache on every
   // trial after the first. The per-trial variant URL goes into the
   // first user message below, NOT into the system block — see header
-  // note for the cache-key rationale. Node trials use the Node-specific
-  // prompt by default.
+  // note for the cache-key rationale. Node and dual trials use their
+  // target-specific prompts by default.
   const defaultPrefix =
-    target.kind === "node" ? NODE_SYSTEM_PROMPT : SYSTEM_PROMPT_PREFIX;
+    target.kind === "node"
+      ? NODE_SYSTEM_PROMPT
+      : target.kind === "dual"
+        ? DUAL_SYSTEM_PROMPT
+        : SYSTEM_PROMPT_PREFIX;
   const systemPrefix = scenario.systemPromptOverride ?? defaultPrefix;
   const system: TextBlock[] = [
     {
@@ -397,13 +501,15 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
   // re-review on PR #15). Correlation between transcript and trace is
   // already preserved via the scenario_start NDJSON entry.
   //
-  // Branch on target.kind: browser trials announce `Page under test:
-  // ${url}`; Node trials announce `Node script under test: ${script}`
-  // so the agent can pass the path straight to `launch_node({ script })`.
+  // Branch on target.kind: browser and Node trials announce one target;
+  // dual trials announce both coordinates so the agent can pass them
+  // straight to launch_chrome / launch_node.
   const targetLine =
     target.kind === "browser"
       ? `Page under test: ${variantUrl}`
-      : `Node script under test: ${target.script}`;
+      : target.kind === "node"
+        ? `Node script under test: ${target.script}`
+        : `Frontend page under test: ${variantUrl}\nBackend Node script under test: ${target.script}`;
   const messages: MessageParam[] = [
     {
       role: "user",
@@ -684,8 +790,8 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
     } catch {
       /* ignore */
     }
-    // Static server is only present on browser trials — Node trials
-    // never started one. Guard so we don't fault-on-null on Node.
+    // Browser static servers and dual development servers share this
+    // managed close surface. Node-only trials never started one.
     if (server !== null) {
       try {
         await server.close();

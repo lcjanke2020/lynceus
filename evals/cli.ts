@@ -305,7 +305,7 @@ async function main(): Promise<void> {
   // an all-Node run would needlessly require Chromium to be installed.
   let sandboxDecision: SandboxDecision | undefined;
   const anyBrowser = args.scenarios.some(
-    (n) => resolveTarget(lookupScenario(n)).kind === "browser",
+    (n) => resolveTarget(lookupScenario(n)).kind !== "node",
   );
   if (anyBrowser) {
     sandboxDecision = decideEvalSandbox(resolveBrowser().binaryPath);
@@ -369,10 +369,23 @@ async function main(): Promise<void> {
           `Scenario '${name}' references variantDir '${target.variantDistDir}' which does not exist. Run 'npm run sample:build' (canonical) or build the scenario's variant first.`,
         );
       }
-    } else {
+    } else if (target.kind === "node") {
       if (!existsSync(target.script)) {
         throw new Error(
           `Scenario '${name}' references Node target.script '${target.script}' which does not exist. Run 'npm run sample-node:build' (or the scenario's prebuild) to produce the dist/ entry first.`,
+        );
+      }
+    } else {
+      const viteCli = join(
+        target.webAppDir,
+        "node_modules",
+        "vite",
+        "bin",
+        "vite.js",
+      );
+      if (!existsSync(viteCli) || !existsSync(target.script)) {
+        throw new Error(
+          `Scenario '${name}' references dual target webAppDir '${target.webAppDir}' and script '${target.script}', but its Vite CLI or built backend entry is missing. Run 'npm run sample-fullstack:build' first.`,
         );
       }
     }

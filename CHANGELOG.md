@@ -7,11 +7,30 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
-- **Raced multi-session waits + merged timeline** (#71) — omitted-session
-  `wait_for_pause` now returns whichever live browser/Node target pauses first, with
-  race-loser cleanup; new `get_timeline(session="all")` interleaves console, browser
-  network request-start, and Node stdout/stderr rows using registry-global sequence
-  numbers and lossless forward pagination while the session/event filters stay fixed.
+- **Concurrent browser + Node debugging** (LEO-115 / LEO-116 / LEO-365; #62–#72 +
+  follow-up) — replaced the process-global singleton slot with a transactional
+  `SessionRegistry`. One browser and one Node target can now stay live together;
+  launch/attach returns monotonic `browser_N` / `node_N` IDs and optional labels,
+  `list_sessions` exposes both lanes, `close_session(session?)` tears down one record,
+  and process shutdown awaits `closeAll()` including in-flight Node-child cleanup.
+- **Explicit session routing across the 54-tool surface** — ordinary session-scoped
+  tools accept `session`; omission remains backward-compatible with one live target and
+  returns `ambiguous_session` with two. The separate CDP-child `session_id` axis is now
+  nullable/optional and documented consistently on all 11 tools that round-trip
+  worker/iframe/OOPIF-minted IDs, including a corrective error when a debug-target ID
+  is passed in the wrong field.
+- **Raced waits + merged cross-session timeline** (#71) — omitted-session
+  `wait_for_pause` returns whichever live target pauses first, with cancellable loser
+  waiters and prompt close rejection. `get_timeline(session="all")` interleaves console,
+  browser-network request-start, and Node stdout/stderr rows using registry-global
+  sequence numbers and lossless forward pagination while filters stay fixed.
+- **Full-stack acceptance and agent eval coverage** — a real-browser/real-Inspector L3
+  flow follows one request through concurrently live sessions; the new xfailed
+  `fullstack-cart` L4 scenario adds the first `Scenario.target.kind="dual"`, a managed
+  Vite fixture lifecycle, and a deterministic oracle for concurrent kinds, per-session
+  TS/TSX breakpoint bindings, the Node handler pause, and the body-parser-ordering
+  diagnosis. README, architecture, session, eval, demo, index, and design docs now tell
+  the same multi-session story.
 - **`cdp-mcp` compatibility wrapper** added to the repo (#53) — `npm install cdp-mcp`
   now installs a thin shim that boots lynceus in-process and re-exports the `contract`
   subpath. Shipped separately to npm as the `cdp-mcp@0.4.0` **wrapper package**
