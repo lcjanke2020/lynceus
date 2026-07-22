@@ -2,13 +2,18 @@
 
 ## Context
 
-`lynceus` is an MCP server (Node 20+, TS, vitest) wrapping Chrome DevTools Protocol and exposing **36 tools** across **9 module groups** (`session`, `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom` — one per file in `src/tools/`) to LLM agents as a TypeScript-aware frontend debugger. After two reviewer-iteration rounds (Codex + ultrareview), the *implementation* is solid, but the **test surface is shallow**:
+This document began as the implementation plan for the original browser-only test
+pyramid. The detailed inventories below preserve that rationale and the review record;
+where a paragraph says “add” or describes the old singleton, read it as historical
+unless a current-state note supersedes it.
 
-- 5 vitest files (~373 LOC) cover only pure data structures: source-map decoding/normalization/translation (`src/sourcemap/{loader,normalize,store}.test.ts`), `RingBuffer` (`src/session/buffers.test.ts`), `PauseTracker` (`src/session/pause.test.ts`).
-- `scripts/smoke.mjs` only verifies the MCP `initialize` + `tools/list` handshake — never touches CDP.
-- **Zero coverage on the 36 tool implementations themselves** — every CRI wire contract, every error-code path, every multi-session route is untested.
-- `examples/sample-app/` exists with one intentional bug (`computeStep()` returns 2; `handlers.ts:12`) but is **manual-only** — no automated browser test, no agent eval.
-- **No CI** (no `.github/workflows/`).
+Current state (2026-07-20): lynceus exposes **54 tools across 13 categories** to
+browser and Node targets, with one browser + one Node session able to coexist. L1/L2
+cover pure logic and every tool contract against the typed fake CDP; L3 has 20 real
+Chromium/Inspector specs including a dual-session request flow and the Node eval-runner
+seam; L4 has 19 agent scenarios (14 browser + 4 Node + 1 dual) behind six vendor
+adapters. CI gates unit/type/build/smoke, the Linux/Windows unit matrix, Linux browser
+E2E, and the quick eval.
 
 This plan closes those gaps with a four-layer pyramid plus an LLM-agent eval suite, all gated in CI. Day-1 primary environment is **Linux ARM64 + Chromium**; Linux x86_64 covers both Chromium and Chrome; Windows is a deliberate follow-on once a self-hosted nightly runner is provisioned.
 
@@ -31,9 +36,15 @@ Estimated **~250–350 LOC**, all <100ms.
 
 ### Layer 2 — Tool contract tests with a fake CRI
 
-This is the **highest-leverage gap** — every one of the 36 tools is currently dark.
+This was the highest-leverage gap; all 54 registered tools now have contract coverage.
 
-**Injection seam (verified).** `sessionState.client` is a public `CDP.Client | null` field on a singleton (`src/session/state.ts:31, 102`). `getSession()` only checks `client` truthiness (`state.ts:104`). Tests just assign `sessionState.client = fake` and the rest of `sessionState` (`pause`, `console`, `network`, `scripts`, `breakpoints`) works as normal. The single static-import surface is `CDP.List` (used by `attachChrome` in `src/session/browser.ts:61`) — stub via `vi.mock("chrome-remote-interface")`. No production code change required for the seam itself.
+**Injection seam (current).** `test/setup.ts` calls `registry.reserve(kind, label)`,
+injects the fake `CDP.Client` into that record's state, then calls
+`registry.activate(id)`. `setupAdditionalSession()` adds the other kind without
+resetting the first; `autoReset()` / `resetSessions()` drop all records after tests.
+This exercises the production minting and addressing path while keeping process launch
+mocked. The static lifecycle imports (`CDP.List`, `chrome-launcher`) remain module-mocked
+in `test/tools/session.test.ts`.
 
 **Fake CRI (`test/fake-cdp.ts`, new).** A builder producing a `Client`-shaped object. Public surface, fully typed, before any per-tool tests are written:
 
@@ -46,12 +57,19 @@ This is the **highest-leverage gap** — every one of the 36 tools is currently 
 7. **`fake.fireNetworkLifecycle(reqId, opts)` macro** — chains `Network.requestWillBeSent` → `Network.responseReceived` → `Network.loadingFinished` (or `loadingFailed`) in the right order with the right field shapes for the `RingBuffer.update` flow at `browser.ts:252–301`. Takes `{url, type?, status?, mimeType?, durationMs?, failed?, sessionId?}`. Without this macro, every network-tool test re-encodes the lifecycle and tests will diverge on field names.
 8. **`fake.makePauseState(opts)` factory** — returns a `PauseState` shape compatible with `pause.onPaused(...)` for tests that need to start in a paused state without driving the full attach + scriptParsed + setBreakpoint + emit("Debugger.paused") chain. Default: single TS-mapped frame at `handlers.ts:7`, one local scope, one `count` variable.
 
-The fake is **typed against `CDP.Client`** (subset that production actually consumes — about 12 domain shorthand methods + `send`/`on`/`removeListener`/`close`); strict-null-checks on, no `any`. Tests assigning `sessionState.client = fake` get type errors if production starts using new methods, surfacing fake-fidelity gaps automatically.
+The fake is **typed against `CDP.Client`** (the subset production consumes, plus
+`send`/`on`/`removeListener`/`close`); strict-null-checks stay on. Assigning it to a
+registry record's `session.client` surfaces fake-fidelity gaps when production begins
+using a new method.
 
 **Per-tool test pattern.** For each tool in `src/tools/*.ts`, three classes of test:
 
 1. *Happy path.* Prime fake state (e.g. for `get_call_stack`, call `pause.onPaused(...)` with a synthetic `PauseState`), invoke the tool's handler, assert JSON shape and that `fake.send` was called with the right method + `sessionId`.
-2. *Each documented error code.* `no_session` (don't set `sessionState.client`), `not_paused` (`pause.reset()`), `no_mapping` (empty `ScriptStore`; since GH #37 the message distinguishes unknown file — echoing the mapped source paths — from a mapped file whose line has no generated code, from an explicit column nothing maps at/after, and from maps not (fully) loaded yet), `not_found` (DOM tools when `DOM.querySelector` returns `nodeId: 0`), `bad_frame` / `no_scope` (single-frame pause), `missing_arg` (`get_element_html` with neither arg), `already_session` (set `client` then call `launchChrome`).
+2. *Each documented error code.* `no_session` (no active registry record),
+   `ambiguous_session` / `unknown_session` (two targets or stale ID), `not_paused`,
+   `no_mapping`, `not_found`, `bad_frame` / `no_scope`, `missing_arg`,
+   `already_session` (reserve/launch a second target of the same kind), and
+   `unsupported_target` for kind-gated tools.
 3. *Session routing.* For every tool taking `session_id` (`get_object_properties`, `get_script_source`, `get_request_body`, `get_response_body`, `pause`), assert `fake.send` saw `sessionId === undefined` for omitted/null and `sessionId === "SW1"` for a string. This is the regression most likely to recur — half the comments in `src/tools/inspect.ts` and `src/tools/network.ts` are about it.
 
 **Handler access — `captureTools()` for per-tool L2 tests; `InMemoryTransport` reserved for the contract test.** The implementation chose a **third option** beyond the two originally documented (InMemoryTransport vs `getRegisteredHandlers()` debug helper): `test/handler-registry.ts` exports a `captureTools(register)` helper that builds a fake `McpServer` recording each `(name, schema, handler)` registration into a `Map`. Per-tool tests invoke `tools.get(name)!.handler(input)` directly. This avoids both leaking a `getRegisteredHandlers()` debug export into `src/server.ts` AND reaching into `McpServer._registeredTools` (a private field, brittle across SDK minor versions). The `captureTools` approach is what each `test/tools/*.test.ts` actually uses.
@@ -112,7 +130,12 @@ Both jobs gate the PR. The x86_64 `chrome` cell catches Chrome-stable-only regre
 - *Sample-app spinup.* New script `npm run sample:build`. The repo is **not** an npm workspace today (no `workspaces` field in root `package.json`) and Vite is only a dep in `examples/sample-app/package.json`, so the script must explicitly install + build there: `npm ci --prefix examples/sample-app && npm run --prefix examples/sample-app build`. CI's reusable composite action does the same, with `examples/sample-app/node_modules` and `examples/sample-app/dist` both cached on `package-lock.json` hash. (Optional follow-up: convert to npm workspaces; out of scope for this plan to keep the diff small.) Built output is served via a tiny static server (`sirv`/`serve-handler`) bound to `port: 0` in vitest `globalSetup`. **Do not use `vite dev`** — HMR re-parses scripts (randomizing `scriptId`s) and `nav.ts:135`'s `networkidle` filter still hangs on `vite`'s long-poll WebSocket if the static-server fallback isn't honored.
 - *Chrome port.* Already `--remote-debugging-port=0` (`src/session/browser.ts:34`).
 - *Process leaks.* `globalTeardown` SIGKILLs any tracked `chrome.pid` from a tempfile — wraps `chrome.kill()` flakiness on worker crash.
-- *Per-session isolation, not per-spec rebuild.* `pool: "forks", singleFork: true` makes specs sequential in one fork. Each spec ends with `close_session`, which calls `sessionState.reset()` (`state.ts:59–74`), which `clear()`s the `ScriptStore`. The only intra-session contamination risk is the HMR upsert leak called out in *Critical gotchas → HMR source-map cache leak*, fixed by the `ScriptStore.clear()` doc-comment hardening in `src/sourcemap/store.ts`. So no per-spec rebuild is required — specs share the static server and one launched browser; isolation comes from `close_session` between specs. (Earlier rev of this plan called for `dist-e2e/<test-id>/` per-spec; that was solving a problem that doesn't exist after the doc-comment fix lands.) **Wire the close as a shared `afterEach` in `test/e2e/setup/global.ts`** (`afterEach(async () => { try { await closeSession(); } catch {} })`) so a thrown assertion mid-spec doesn't leak open-session/breakpoint/paused-execution state to the next spec — relying on per-spec `close_session` discipline is fragile because vitest's `singleFork: true` keeps the same fork running after a thrown assertion. The same pattern as the existing `test/setup.ts` for L2 contract tests.
+- *Per-session isolation, not per-spec rebuild.* `pool: "forks", singleFork: true`
+  keeps specs sequential. Shared `test/e2e/setup/after-each.ts` calls
+  `registry.closeAll()` after every spec, so both records, their maps, breakpoints,
+  pauses, buffers, and owned processes are released even after a thrown assertion.
+  The static browser server remains shared; the full-stack spec additionally keeps an
+  independent raw-PID fallback for its launched API child.
 - *Flake budget.* L3 specs use vitest's `test.retry(1)` by default. Per-spec escalation to `retry: 2` requires an inline comment citing a tracked flake in `docs/known-chromium-gaps.md`. **Do not silently raise to `retry: 3`** — that hides real regressions. ARM64 + snap-Chromium is newer infrastructure; the budget exists to absorb genuine flake without becoming a regression-blindfold.
 
 **Spec inventory (~10).** All under `test/e2e/`:
@@ -183,9 +206,9 @@ If the budget feels too rich during initial calibration, drop to 2 trials per sc
 
 **L4 parallelism: serial (single process), pinned.** The cache-hit assumption (90%) only holds if trials run *serially* — the Anthropic prompt cache is per-API-key but per-request-prefix, so multiple parallel runners building the same prefix on cold caches each pay full input price the first time. If `evals/harness/runner.ts` parallelizes scenarios across processes, cache hits collapse and the input cost is wrong by 5–10×. **Decision: scenarios run serially. Parallelism is an explicit budget tradeoff, not a default.**
 
-**Model deprecation playbook.** When `claude-opus-4-7` (the harness pin) is deprecated:
+**Model deprecation playbook.** When the current harness pin (`claude-opus-4-8` as of 2026-07-20) is deprecated:
 1. Promote the deprecated model to a "last-known-baseline" comparison job — keep it running on its existing thresholds, but `continue-on-error: true`.
-2. Re-baseline all 8 scenarios against the candidate next-gen model: run each scenario 5× (not 3×) to get a tighter estimate, record per-scenario pass-rate.
+2. Re-baseline every currently registered scenario against the candidate next-gen model: run each scenario 5× (not 3×) to get a tighter estimate, record per-scenario pass-rate. (The original suite had 8 scenarios; the current suite has 19.)
 3. Update median-gate thresholds in `evals/harness/model.ts` (typically next-gen models tighten gates, but adversarial-out-of-order may regress on more agreeable models — judge per-scenario, not en bloc).
 4. Promote the new model to gating; drop the comparison job after 30 days of stability.
 This avoids the 4 AM "nightly is 410'ing" page when Anthropic deprecates a model.
@@ -261,7 +284,7 @@ Day 1: Windows runner mirrors `unit` only (typecheck + L1/L2). The Windows e2e n
 - `docs/known-chromium-gaps.md` — populate at creation time with the two known-risky CDP methods the plan itself flags (`Network.loadNetworkResource`, `Page.captureScreenshot` flag set), plus a "no entries below this line means no skips were needed" footer so the file isn't ambiguously empty for the next contributor.
 
 **Critical paths to keep open while implementing:**
-- `src/session/state.ts` (the seam — `client` field at line 31)
+- `src/session/state.ts` (the current ownership seam — `SessionRegistry` addressing around independent browser and Node `SessionState` values)
 - `src/session/browser.ts` (event/session contract the fake must match — esp. lines 101–130)
 - `src/tools/_register.ts` (uniform error envelope at lines 21–35)
 - `src/sourcemap/store.ts` (multi-session compound-key invariants)
@@ -279,7 +302,7 @@ Day 1: Windows runner mirrors `unit` only (typecheck + L1/L2). The Windows e2e n
 
 ### Post-implementation (one-time gate, only when test infra first lands)
 
-5. **`npm run eval`** — full 8-scenario × 3-trial run completes within budget; aggregate report shows ≥6/8 scenarios passing median.
+5. **`npm run eval`** — the original full 8-scenario × 3-trial suite completes within budget; aggregate report shows ≥6/8 scenarios passing median. For the current 19-scenario suite, use the per-scenario thresholds and cost guidance in `evals/README.md`.
 6. **CI dry-run** — open a draft PR with a no-op change; `unit`, `e2e-linux-arm64`, `e2e-linux-x64` (chromium + chrome), `eval-quick` all complete green within ~10 min total. Manually trigger `eval-full` via `workflow_dispatch` to confirm the full path runs end-to-end.
 7. **Regression-fail check** — temporarily revert one of the multi-session compound-key fixes (the worker-collision regression noted in `store.test.ts`); confirm `worker-bug.ts` eval AND `worker.e2e.test.ts` AND L2 session-routing tests **all** fail. Restore the fix. *Do this once when the suite first lands; not on every PR.*
 8. **Cost-baseline check** — after the first nightly eval run, inspect the Anthropic dashboard; confirm cached-input rate is high (system prompt + tool list should hit the cache on every trial after the first), and that nightly cost lands within the empirical band (~$5–10 on Sonnet 4.6 baseline; first observed ~$4 on Opus-4.7-medium default — one data point, not yet a steady-state band; see *L4 → Cost gating* note above for why the pre-impl ~$45 estimate is superseded). If significantly higher than the observation, the most likely causes in priority order: (a) parallel scenario execution collapsed cache hits, (b) cache_control placement wrong on the harness's API requests, (c) thinking-effort tier silently bumped above medium.

@@ -6,10 +6,11 @@
 > removes the invariant so one agent can hold both kinds of session open at once and
 > trace a bug end-to-end across the stack.
 >
-> **Status: design locked ahead of implementation.** The engineering lands on the
-> `multi-session-support` feature branch: the core registry refactor + session
-> addressing (LEO-116), then raced waits + merged timelines + the full-stack eval
-> scenario (LEO-365). §12 maps the PR slicing.
+> **Status: implemented.** PRs #63 and #67–#72 landed the lifecycle threading,
+> registry, session addressing, dual-session L3 flow, raced waits, and merged timeline
+> on `master`. PR 8 adds the `fullstack-cart` L4 scenario and closes the documentation
+> sweep described here. §12 maps the slices; earlier “baseline” passages are retained
+> as design rationale for the migration away from the singleton slot.
 
 ## 1. Goal + non-goals
 
@@ -62,7 +63,7 @@ Every session-scoped tool gains an **optional `session: string`** input:
 Rejected alternatives (from the ticket, confirmed here):
 
 - *Per-kind tool namespaces* (`browser_set_breakpoint` / `node_set_breakpoint`) — doubles
-  a 52-tool catalog, and the split is wrong: most tools are kind-agnostic.
+  the tool catalog (54 today), and the split is wrong: most tools are kind-agnostic.
 - *A `select_session` mode switch* — stateful; an interleaved transcript (the whole point
   of dual-session debugging) would thrash the selector, and a forgotten switch targets
   the wrong side silently. The `session` parameter keeps every call self-describing.
@@ -472,12 +473,11 @@ get_response_body    { session: "browser_1", request_id: "88.42", session_id: nu
 
 Note what the transcript *doesn't* need: no raced waits, no merged timelines, no
 `select_session` bookkeeping — with labels in the returns, per-side narration is
-self-documenting. (Payloads for the *new* surface — lifecycle returns, pause summaries
-with `session`/`label` — are illustrative until their contract tests land; responses
-shown for *existing* tools (`get_network_requests`, `get_response_body`) are today's
-real envelopes and are not up for reinterpretation.)
+self-documenting. The lifecycle, pause-summary, network, and response-body shapes shown
+above are now covered by contract/e2e tests; the transcript remains illustrative only
+in the sense that IDs and ports vary per run.
 
-### As an L4 eval scenario (sketch — implemented in LEO-365 on the LEO-464 app)
+### As an L4 eval scenario (implemented in LEO-365 on the LEO-464 app)
 
 - **Scenario id:** `fullstack-cart` — the first `target: "dual"` scenario (the
   `Scenario.target` discriminator grows a third value alongside `browser` / `node`).
@@ -491,12 +491,14 @@ real envelopes and are not up for reinterpretation.)
   cause. Checks 1–3 are structural (tool-call envelopes), check 4 is the usual
   answer-grader — same oracle architecture as today's scenarios, no new grading
   machinery.
-- **xfail posture:** starts xfail like other new scenarios until a baseline run
-  establishes it's stably passable.
+- **xfail posture:** correctness and mechanic start xfailed until a multi-trial
+  baseline establishes stable behavior. One quick-trial XPASS is evidence, not enough
+  to remove the tags.
 
 ## 12. Implementation mapping (confirms the LEO-116 / LEO-365 boundary)
 
-On the `multi-session-support` branch, squash-merged PRs:
+PRs 1–7 were developed on `multi-session-support` and integrated to `master` by #72;
+PR 8 starts from that integrated head:
 
 | Branch PR | Ticket | Contents (from this design) |
 |---|---|---|
@@ -507,26 +509,23 @@ On the `multi-session-support` branch, squash-merged PRs:
 | 5 | LEO-116 | `session` param across ~45 tools; scoped `wait_for_pause`; `session_id` amendments on all 11 accepting tools — one shared description + schema unification to `.nullable().optional()` + disambiguation table (§2); L2 `session_id:"browser_1"` failure-mode test |
 | 6 | LEO-116 | L3 full-stack fixture + `fullstack-flow.e2e.test.ts` (the §11 flow, vanilla-page variant) |
 | 7 | LEO-365 | Raced `wait_for_pause` + waiter-cleanup audit (§6); `get_timeline` (53→54, pin bump) + global-seq allocation (§7); L2 contract coverage for the discriminated rows |
-| 8 | LEO-365 | L4 cart scenario on the LEO-464 app + docs sweep (README killer flow, ARCHITECTURE lanes, session README) |
+| 8 | LEO-365 | `fullstack-cart` dual-target L4 scenario on the LEO-464 app + docs sweep (README killer flow, ARCHITECTURE lanes, session README, eval docs, changelog) |
 
 Boundary confirmed as ticketed, with one adjustment recorded: the **full-stack L3
 fixture sits with LEO-116** (it is the acceptance test of the core refactor and the
 demo rehearsal), not LEO-365; LEO-365 keeps raced mode, merged timelines, and the L4
 scenario.
 
-Known review risks, owned by the PRs above: the pinned 52-tool set-equality + exact
-error strings (every tool-adding PR bumps the pin in-commit); PR 3's test migration must
-be assertion-content-neutral (contract tests byte-identical; src cutover and test
-migration reviewed as separate commits); two-target CI e2e uses port-0 + close-all-in
-after-each + finally-kill for the api-server child.
+The review risks were resolved in implementation: the contract pin now covers 54 tools;
+PR 3 kept contract assertions neutral during the cutover; the two-target L3 fixture uses
+port 0 plus independent close/PID fallback; and the dual L4 runner owns a strict-port
+Vite child with occupied-URL detection and process-group cleanup.
 
-## 13. Open questions (non-blocking, owned by implementing PRs)
+## 13. Implementation resolutions
 
-- **Global-seq allocation vs existing L2 assertions** (§7): the global allocation
-  itself is locked (`get_timeline`'s ordering depends on it); what's open is only the
-  size of the test diff — any contract test pinning *contiguous* per-buffer seq values
-  gets relaxed to monotonicity in the LEO-365 PR. The cursor contract survives either
-  way.
+- **Global-seq allocation vs existing L2 assertions** (§7): per-buffer values are
+  monotonic but may be sparse; tests assert ordering, not contiguity. The timeline
+  cursor is registry-global and remains lossless while filters stay fixed.
 - **`ambiguous_session` for `evaluate` during dual pause**: when both sessions are
   paused, an omitted-`session` `evaluate` is ambiguous like any other tool — no
   "most-recently-paused" magic. Confirmed here; called out because it is the one place

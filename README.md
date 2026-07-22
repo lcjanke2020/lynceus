@@ -14,7 +14,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE). Releases are published to npm by CI via [OIDC trusted publishing](https://docs.npmjs.com/generating-provenance-statements) — no long-lived npm token exists — with a provenance attestation linking the published tarball to the exact commit and workflow run that built it.
 
-**Last updated: 2026-07-19**
+**Last updated: 2026-07-20**
 
 ## Install
 
@@ -99,7 +99,35 @@ The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `
 
 > Launch `examples/sample-node-app/dist/index.js` under `--inspect-brk`. Set a breakpoint at `src/handlers.ts:2`. Resume and tell me what `name` is on the first hit.
 
-`close_session` terminates the child because lynceus launched it (`sessionState.attached === false`); `attach_node` sessions leave the user's Node process alive.
+`close_session` terminates the child because lynceus launched it (`state.attached === false`); `attach_node` sessions leave the user's Node process alive.
+
+### Full stack: one request, two debug sessions
+
+This is the multi-session killer flow: one lynceus process keeps a browser and a Node
+backend live together, with TypeScript breakpoints on both sides of the same `fetch`.
+Prepare the planted cart-bug fixture and leave only its frontend dev server running:
+
+```sh
+npm run sample-fullstack:build
+npm run --prefix examples/sample-fullstack-app dev   # http://127.0.0.1:5173
+```
+
+Then ask the agent:
+
+> The cart badge stays at 0 after Add to cart. Launch
+> `examples/sample-fullstack-app/server/dist/index.js` as a Node session labeled
+> `backend`, and launch Chrome at `http://127.0.0.1:5173` as `frontend`. Keep both
+> sessions live, set a TS/TSX breakpoint in each side of the add-to-cart path, follow
+> one request into the backend, and tell me the root cause.
+
+The expected spine is `launch_node` → drain its entry pause → backend breakpoint →
+`resume` → `launch_chrome` → `list_sessions` → frontend breakpoint/pause → resume the
+frontend → backend pause → inspect `req.body`. `list_sessions` should show `node_1` and
+`browser_1` concurrently. Every follow-up passes the originating `session`; the two
+targets can both return `bp_1` because breakpoint IDs are target-local. The reveal is
+middleware ordering in `server/src/index.ts`: `express.json()` is registered after the
+cart router, so the handler sees an unparsed body. The precise, timed narration lives
+in [examples/sample-fullstack-app/DEMO.md](examples/sample-fullstack-app/DEMO.md).
 
 ### Inspector port security
 
@@ -114,6 +142,7 @@ The agent should chain: `attach_node` → entry pause → `set_breakpoint` → `
 Across 54 tools ([full catalog](./src/tools/README.md)):
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
+- **Concurrent frontend + backend sessions** — one browser and one Node target may be live together. Launch/attach returns monotonic `browser_N` / `node_N` IDs, `list_sessions` exposes both lanes, and ordinary tools accept `session` for explicit routing. Omission stays convenient with one live target and returns `ambiguous_session` with two.
 - **Breakpoints in TS source** — `set_breakpoint(file="src/foo.ts", line=42, condition?, log_message?)`. The server matches source maps and binds in every script that maps back to that file.
 - **Stepping** — `step_over`, `step_into`, `step_out`, `resume`, `pause`, plus the authoritative sync point `wait_for_pause`.
 - **Live inspection at a paused frame** — `get_call_stack`, `get_scope`, `evaluate` (frame-aware), `get_object_properties`. All call-stack frames are TS-mapped.
@@ -141,7 +170,9 @@ Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true }
 ## Tool conventions for agents
 
 - **File coords are TS, 1-based lines, 0-based columns** unless the tool name ends in `_js` or takes a `script_id`.
+- **`session` and `session_id` are different axes.** `session` selects a debug target (`browser_1` / `node_1`); `session_id` round-trips a CDP child (worker/iframe/OOPIF) inside that target, with `null` meaning root. Omit `session` only when one target is live.
 - **Pause-only tools** (`get_call_stack`, `get_scope`, `evaluate` with `frame_index`): return `error: "not_paused"` if called outside a pause.
+- **Unscoped `wait_for_pause` races live targets.** With both kinds live, omission means “first participant to pause”; pass `session` for a scoped wait. `get_timeline(session="all")` is the corresponding merged event read.
 - **Buffered tools** (`get_console_logs`, `get_network_requests`): return a `cursor` (max `seq` seen). Pass it back as `since` to paginate.
 - **Errors** come back as `isError: true` with a structured `{ error, message }` JSON payload.
 - **Compact returns**: previews trimmed to ~200 chars, lists capped at sensible defaults — bodies lazy-loaded via dedicated tools.
@@ -170,11 +201,11 @@ lynceus --port 9719               # SSE MCP transport on 127.0.0.1:9719
 lynceus --host 0.0.0.0 --port 9719 --allow-remote
 ```
 
-You can run `lynceus` as a persistent local service — [macOS launchd](docs/launchd-service.md) or [Linux systemd](docs/systemd-service.md) user service. Service mode keeps the process and current browser/CDP session alive across MCP client restarts or reconnects. It does **not** persist state across service-process restarts.
+You can run `lynceus` as a persistent local service — [macOS launchd](docs/launchd-service.md) or [Linux systemd](docs/systemd-service.md) user service. Service mode keeps the process and its current browser/Node sessions alive across MCP client restarts or reconnects. It does **not** persist state across service-process restarts.
 
 SSE caveats:
 
-- **Single-client only.** Every `/sse` connection gets its own `McpServer`, but every tool funnels through one process-global `sessionState` — two concurrent clients race on the same browser (shared pause state, breakpoints, console/network buffers; `launch_chrome` from client B tears down client A's session). If a new client should start fresh, call `close_session` first.
+- **Single-tenant registry.** Every `/sse` connection gets its own `McpServer`, but all connections share the process-global `SessionRegistry`. The registry safely separates its browser and Node records; it does **not** isolate clients. One client can list, pause, resume, inspect, or close sessions launched by another, and same-kind launch capacity is shared. Do not expose one service instance to mutually untrusted clients; call `list_sessions` and close explicitly when a reconnect should start fresh.
 - **Non-loopback bind requires opt-in.** `--allow-remote` (or `LYNCEUS_ALLOW_REMOTE=1`, or the deprecated `CDP_MCP_ALLOW_REMOTE=1`) is required to bind to anything other than loopback. MCP tools include `evaluate` (in-page code exec), a `screenshot path=` filesystem write, `export_storage_state` (writes full cookie values — including HttpOnly auth secrets — to a server-side file) and `load_storage_state` (reads an arbitrary server-side file); the gate makes remote exposure a deliberate operator decision rather than a default.
 - **Host / Origin headers are validated on loopback binds** to block DNS-rebinding against `127.0.0.1` / `localhost` / `[::1]`. On non-loopback binds the operator has already accepted exposure via `--allow-remote`, and the server can't statically enumerate every hostname/IP a LAN/VPN/DNS client might reach it by — those checks are skipped. If you need per-`Host` policy on a LAN/WAN deployment, front the server with a reverse proxy that enforces it.
 
@@ -194,11 +225,12 @@ npm run typecheck     # both tsconfigs — CI gates on this
 npm run smoke         # stdio protocol smoke, no browser — CI gates on this
 npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 20 specs
 npm run eval:quick    # L4: 1 LLM-agent scenario × 1 trial (needs ANTHROPIC_API_KEY; ~$0.50–2 at the default Opus-4.8-medium)
-npm run eval          # L4: all 18 scenarios × 3 trials (cost data in evals/README.md; EVAL_BUDGET_USD caps a run, default $100)
+npm run eval:quick:fullstack  # L4: fullstack-cart dual-target scenario × 1 trial
+npm run eval          # L4: all 19 scenarios × 3 trials (cost data in evals/README.md; EVAL_BUDGET_USD caps a run, default $100)
 ```
 
 - **L3 e2e** drives the browser-facing tools against a real Chromium attached to a built `examples/sample-app/`, Node Inspector attach/launch flows against `examples/sample-node-app/`, and one full-stack acceptance flow that keeps both sessions live across the same request. Browser selection (`CDP_TEST_BROWSER`, default `chromium`) and the per-OS resolver matrix are documented in [docs/test-eval-plan.md §Layer 3](docs/test-eval-plan.md); the step-by-step local setup (Playwright Chromium + AppArmor profile for sandbox-**on** runs) is [docs/local-l3-e2e-setup.md](docs/local-l3-e2e-setup.md). Chromium-only failures land with a `// @chromium-skip — <gap-id>` comment plus a row in [docs/known-chromium-gaps.md](docs/known-chromium-gaps.md) — `npm run lint:chromium-skips` enforces this. `launch_chrome` defaults to `--no-sandbox`; see [docs/chromium-sandboxing.md](docs/chromium-sandboxing.md) before changing that.
-- **L4 agent evals** drive the lynceus tool surface through a real LLM agent — 18 scenarios (14 browser + 4 Node), six vendor adapters selected via `EVAL_PROVIDER` (Anthropic default; OpenAI, Vertex/Gemini, DeepSeek, Moonshot/Kimi, LM Studio), deterministic NDJSON-trace oracles (no LLM judge), per-run cost caps. Always launch through the npm scripts (`npm run eval`, `npm run eval:quick`, `npm run eval:quick:node`) — the `preeval` hook rebuilds `dist/index.js`; calling `tsx evals/cli.ts` directly on a fresh clone fails. Model/reasoning/cost env knobs, the scenario table, caching behavior, and trace format are all in [evals/README.md](evals/README.md).
+- **L4 agent evals** drive the lynceus tool surface through a real LLM agent — 19 scenarios (14 browser + 4 Node + `fullstack-cart`, the first dual target), six vendor adapters selected via `EVAL_PROVIDER` (Anthropic default; OpenAI, Vertex/Gemini, DeepSeek, Moonshot/Kimi, LM Studio), deterministic NDJSON-trace oracles (no LLM judge), per-run cost caps. Always launch through the npm scripts (`npm run eval`, `npm run eval:quick`, `npm run eval:quick:node`, `npm run eval:quick:fullstack`) so their pre-hooks rebuild the server and script-specific fixtures; the static browser variants still need the one-time `npm run sample:build` documented in [evals/README.md](evals/README.md). Calling `tsx evals/cli.ts` directly skips all pre-hooks. Model/reasoning/cost env knobs, scenario table, caching behavior, and trace format live there too.
 
 Contributions: see [CONTRIBUTING.md](./CONTRIBUTING.md); repo map in [INDEX.md](./INDEX.md); security reports via [SECURITY.md](./SECURITY.md).
 
