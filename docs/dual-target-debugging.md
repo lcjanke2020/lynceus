@@ -393,7 +393,7 @@ get_timeline({
 
 ## 8. Capability gating in dual-session mode
 
-No mechanism change. `TOOL_KIND_SUPPORT` (25 browser-only entries, 1 node-only:
+No mechanism change. `TOOL_KIND_SUPPORT` (27 browser-only entries, 1 node-only:
 `get_node_output`) + `requireCapable(s, tool)` already express per-*instance* gating;
 the registry makes the instance vary per call. The `unsupported_target` message grows a
 clause: today's `Tool click requires a browser session (current session is node)`

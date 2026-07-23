@@ -223,7 +223,7 @@ The test pyramid has four layers (see [docs/test-eval-plan.md](docs/test-eval-pl
 npm test              # L1 unit + L2 tool-contract (fake CDP) + L4 harness-unit tests — seconds, no browser, no LLM
 npm run typecheck     # both tsconfigs — CI gates on this
 npm run smoke         # stdio protocol smoke, no browser — CI gates on this
-npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 20 specs
+npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 21 specs
 npm run eval:quick    # L4: 1 LLM-agent scenario × 1 trial (needs ANTHROPIC_API_KEY; ~$0.50–2 at the default Opus-4.8-medium)
 npm run eval:quick:fullstack  # L4: fullstack-cart dual-target scenario × 1 trial
 npm run eval          # L4: all 19 scenarios × 3 trials (cost data in evals/README.md; EVAL_BUDGET_USD caps a run, default $100)

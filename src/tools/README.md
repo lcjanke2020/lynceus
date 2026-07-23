@@ -1,6 +1,6 @@
 # src/tools/
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-23**
 
 All 56 MCP tools live here, one file per category (`react.ts` owns the opt-in React DevTools bridge; `node-output.ts` is the Node-only stdio buffer tool; `timeline.ts` merges all buffered event kinds). Every ordinary session-scoped tool accepts optional `session`; most resolve it through `requireSession(input.session)` (or `requirePaused(input.session)`), while `wait_for_pause` races all live targets when it is omitted and `get_timeline` additionally accepts the reserved value `"all"`. Among the lifecycle tools, `list_sessions` is unscoped and `close_session` addresses registry records directly. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 

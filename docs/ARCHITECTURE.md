@@ -203,7 +203,7 @@ The full 4-layer strategy lives in [test-eval-plan.md](./test-eval-plan.md). The
 flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
     L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>56 tools · no real browser · npm test"]
-    L3["L3 — E2E<br/>test/e2e/*.test.ts vs real Chromium + real Node --inspect<br/>20 specs (11 browser + 7 Node + 1 dual-session + 1 harness) · seconds · npm run test:e2e"]
+    L3["L3 — E2E<br/>test/e2e/*.test.ts vs real Chromium + real Node --inspect<br/>21 specs (12 browser + 7 Node + 1 dual-session + 1 harness) · seconds · npm run test:e2e"]
     L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter + Scenario.target seams<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>14 browser + 4 Node + 1 dual scenario<br/>deterministic trace oracles · npm run eval"]
     L1 --> L2 --> L3 --> L4
 ```
