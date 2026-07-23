@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sessionState, ROOT_SESSION_KEY } from "../../src/session/state.js";
+import { ROOT_SESSION_KEY } from "../../src/session/state.js";
 import { noMappingError, registerBreakpointTools } from "../../src/tools/breakpoints.js";
 import { setupSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
@@ -59,8 +59,8 @@ describe("set_breakpoint", () => {
   });
 
   it("no_mapping on a MAPPED file with an unmapped line suggests the nearest mapped lines, not paths (GH #37)", async () => {
-    setupSession();
-    sessionState.scripts.upsert({
+    const { session } = setupSession();
+    session.scripts.upsert({
       scriptId: "s1", url: "http://x/app.js",
       startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
       executionContextId: 1, hash: "h-s1",
@@ -68,7 +68,7 @@ describe("set_breakpoint", () => {
     const gen = new SourceMapGenerator({ file: "http://x/app.js" });
     gen.addMapping({ generated: { line: 5, column: 0 }, original: { line: 14, column: 0 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 6, column: 0 }, original: { line: 16, column: 0 }, source: "src/foo.ts" });
-    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    session.scripts.attachMap("s1", undefined, gen.toString());
     const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 15 }));
     expect(err?.error).toBe("no_mapping");
     expect(err?.message).toContain("line 15 has no executable code");
@@ -89,8 +89,8 @@ describe("set_breakpoint", () => {
   });
 
   it("no_mapping on a MAPPED line with an unmappable explicit column blames the column, not the line (PR #59 round 1)", async () => {
-    setupSession();
-    sessionState.scripts.upsert({
+    const { session } = setupSession();
+    session.scripts.upsert({
       scriptId: "s1", url: "http://x/app.js",
       startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
       executionContextId: 1, hash: "h-s1",
@@ -102,7 +102,7 @@ describe("set_breakpoint", () => {
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 12, column: 2 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 1, column: 30 }, original: { line: 12, column: 9 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 2, column: 0 }, original: { line: 6, column: 0 }, source: "src/foo.ts" });
-    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    session.scripts.attachMap("s1", undefined, gen.toString());
     const err = parseErrorEnvelope(await setBp.handler({ file: "src/foo.ts", line: 12, column: 20 }));
     expect(err?.error).toBe("no_mapping");
     expect(err?.message).toContain("nothing maps at or after column 20");
@@ -112,12 +112,12 @@ describe("set_breakpoint", () => {
   });
 
   it("no_mapping while other maps are still loading says the picture may be incomplete (PR #59 round 1)", async () => {
-    setupSession();
+    const { session } = setupSession();
     seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/loaded.ts" });
     // A second script whose map never resolves: sourceMapURL set, no
     // attachMap, no loadError → hasPendingMaps() stays true through the
     // bounded wait, so the unknown-file verdict must be hedged.
-    sessionState.scripts.upsert({
+    session.scripts.upsert({
       scriptId: "s2", url: "http://x/pending.js", sourceMapURL: "pending.js.map",
       startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
       executionContextId: 1, hash: "h-s2",
@@ -132,9 +132,9 @@ describe("set_breakpoint", () => {
     // Unreachable deterministically through the handler — it needs the map to
     // attach between mapOriginalToGenerated giving up and the classifier
     // running — so pin the exported classifier directly.
-    setupSession();
+    const { session } = setupSession();
     seedMappedScript({ scriptId: "s1", url: "http://x/app.js", source: "src/foo.ts", tsLine: 7, jsLine: 1 });
-    const err = noMappingError(sessionState.scripts, "src/foo.ts", 7, 0);
+    const err = noMappingError(session.scripts, "src/foo.ts", 7, 0);
     expect(err.code).toBe("no_mapping");
     expect(err.message).toContain("finished loading mid-call");
     expect(err.message).toContain("Retry set_breakpoint");
@@ -179,8 +179,8 @@ describe("set_breakpoint", () => {
     // Map original 14 -> gen line 5, original 15 -> gen line 6. The agent asks
     // for line 14, but CDP binds at a location that maps back to line 15 — the
     // fingerprint of a JS line number used as a TS line.
-    const { fake } = setupSession();
-    sessionState.scripts.upsert({
+    const { fake, session } = setupSession();
+    session.scripts.upsert({
       scriptId: "s1", url: "http://x/app.js",
       startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
       executionContextId: 1, hash: "h-s1",
@@ -188,7 +188,7 @@ describe("set_breakpoint", () => {
     const gen = new SourceMapGenerator({ file: "http://x/app.js" });
     gen.addMapping({ generated: { line: 5, column: 0 }, original: { line: 14, column: 0 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 6, column: 0 }, original: { line: 15, column: 0 }, source: "src/foo.ts" });
-    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    session.scripts.attachMap("s1", undefined, gen.toString());
     // Ignore the requested lineNumber; bind where CDP "slid" it (gen line 6 =
     // 0-based 5), which maps back to original line 15.
     fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
@@ -395,8 +395,8 @@ describe("set_breakpoint", () => {
     // collapse to the SAME generated position after minification. Binding by
     // `url` then makes the second call collide. set_breakpoint must recognize
     // the shared compiled location and return the existing breakpoint.
-    const { fake } = setupSession();
-    sessionState.scripts.upsert({
+    const { fake, session } = setupSession();
+    session.scripts.upsert({
       scriptId: "s1",
       url: "http://x/app.js",
       startLine: 0,
@@ -409,7 +409,7 @@ describe("set_breakpoint", () => {
     const gen = new SourceMapGenerator({ file: "http://x/app.js" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
-    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    session.scripts.attachMap("s1", undefined, gen.toString());
     fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
       breakpointId: `cdp:${params.url}:${params.lineNumber}`,
       locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
@@ -429,7 +429,7 @@ describe("set_breakpoint", () => {
     // expanded the recompute beyond bp_1's actual bindings → a silent false
     // "already-set" for a line where no CDP breakpoint exists (worse than #24's
     // loud error). Here util.ts:8 binds only in the *later* chunk2.
-    const { fake } = setupSession();
+    const { fake, session } = setupSession();
     seedMappedScript({ scriptId: "c1", url: "http://x/chunk1.js", source: "src/util.ts", tsLine: 7, jsLine: 1 });
     fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
       breakpointId: `cdp:${params.url}:${params.lineNumber}`,
@@ -440,7 +440,7 @@ describe("set_breakpoint", () => {
     // chunk2 dynamically imported later; its map collapses util.ts lines 7 AND
     // 8 onto the same compiled position (gen 1,0) — the exact minify-collapse
     // shape the guard targets, but in a *different* script than bp_1 bound.
-    sessionState.scripts.upsert({
+    session.scripts.upsert({
       scriptId: "c2",
       url: "http://x/chunk2.js",
       startLine: 0,
@@ -453,7 +453,7 @@ describe("set_breakpoint", () => {
     const gen = new SourceMapGenerator({ file: "http://x/chunk2.js" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/util.ts" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/util.ts" });
-    sessionState.scripts.attachMap("c2", undefined, gen.toString());
+    session.scripts.attachMap("c2", undefined, gen.toString());
     fake.clearSentCalls();
     const second = parseOkEnvelope<{ id: string; status: string }>(await setBp.handler({ file: "src/util.ts", line: 8 }));
     // util.ts:8's only candidate is chunk2:(0,0), where nothing is bound yet —
@@ -467,8 +467,8 @@ describe("set_breakpoint", () => {
     // foo.ts:8 maps to TWO compiled positions; only one is already bound (by
     // foo.ts:7). The .some() short-circuit used to return already-set and drop
     // the uncovered (2,0) binding silently. It must surface a conflict instead.
-    const { fake } = setupSession();
-    sessionState.scripts.upsert({
+    const { fake, session } = setupSession();
+    session.scripts.upsert({
       scriptId: "s1",
       url: "http://x/app.js",
       startLine: 0,
@@ -482,7 +482,7 @@ describe("set_breakpoint", () => {
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 2, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
-    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    session.scripts.attachMap("s1", undefined, gen.toString());
     fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
       breakpointId: `cdp:${params.url}:${params.lineNumber}`,
       locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
@@ -496,8 +496,8 @@ describe("set_breakpoint", () => {
     // Same shared compiled location as above, but the second call carries a
     // different condition: it can't silently reuse the existing binding, so it
     // must surface a recoverable breakpoint_conflict (not internal_error).
-    const { fake } = setupSession();
-    sessionState.scripts.upsert({
+    const { fake, session } = setupSession();
+    session.scripts.upsert({
       scriptId: "s1",
       url: "http://x/app.js",
       startLine: 0,
@@ -510,7 +510,7 @@ describe("set_breakpoint", () => {
     const gen = new SourceMapGenerator({ file: "http://x/app.js" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 7, column: 0 }, source: "src/foo.ts" });
     gen.addMapping({ generated: { line: 1, column: 0 }, original: { line: 8, column: 0 }, source: "src/foo.ts" });
-    sessionState.scripts.attachMap("s1", undefined, gen.toString());
+    session.scripts.attachMap("s1", undefined, gen.toString());
     fake.respond("Debugger.setBreakpointByUrl", (params: any) => ({
       breakpointId: `cdp:${params.url}:${params.lineNumber}`,
       locations: [{ scriptId: "s1", lineNumber: params.lineNumber, columnNumber: 0 }],
@@ -593,18 +593,18 @@ describe("set_pause_on_exceptions", () => {
     expect(parseErrorEnvelope(await setExc.handler({ state: "all" }))?.error).toBe("no_session");
   });
 
-  it("persists state on sessionState.pauseOnExceptions for child-attach replay", async () => {
-    setupSession();
-    sessionState.sessionHandlers.set(ROOT_SESSION_KEY, []);
+  it("persists state on session.pauseOnExceptions for child-attach replay", async () => {
+    const { session } = setupSession();
+    session.sessionHandlers.set(ROOT_SESSION_KEY, []);
     await setExc.handler({ state: "uncaught" });
-    expect(sessionState.pauseOnExceptions).toBe("uncaught");
+    expect(session.pauseOnExceptions).toBe("uncaught");
   });
 
   it("applies to every currently-attached session (root + children)", async () => {
-    const { fake } = setupSession();
-    sessionState.sessionHandlers.set(ROOT_SESSION_KEY, []);
-    sessionState.sessionHandlers.set("SW1", []);
-    sessionState.sessionHandlers.set("IF1", []);
+    const { fake, session } = setupSession();
+    session.sessionHandlers.set(ROOT_SESSION_KEY, []);
+    session.sessionHandlers.set("SW1", []);
+    session.sessionHandlers.set("IF1", []);
     fake.clearSentCalls();
     const r = parseOkEnvelope<{ sessions_applied: number; failures: any[] }>(
       await setExc.handler({ state: "all" }),
@@ -621,9 +621,9 @@ describe("set_pause_on_exceptions", () => {
   });
 
   it("partial failure: reports per-session error in failures[] without aborting the rest", async () => {
-    const { fake } = setupSession();
-    sessionState.sessionHandlers.set(ROOT_SESSION_KEY, []);
-    sessionState.sessionHandlers.set("SW1", []);
+    const { fake, session } = setupSession();
+    session.sessionHandlers.set(ROOT_SESSION_KEY, []);
+    session.sessionHandlers.set("SW1", []);
     fake.respond("Debugger.setPauseOnExceptions", (_p: any, sid?: string) => {
       if (sid === "SW1") throw new Error("worker terminated");
       return undefined;

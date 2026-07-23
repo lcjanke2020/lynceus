@@ -43,7 +43,7 @@ describe("node breakpoint flow (e2e)", () => {
   afterEach(() => {
     // The session is closed by the shared afterEach in setup/after-each.ts
     // (kind-agnostic via SessionState.close()), but the spawned Node child
-    // is NOT in sessionState.ownedProcess (attach mode — attach_node sets
+    // is NOT in the session's ownedProcess (attach mode — attach_node sets
     // attached=true, ownedProcess=null). We have to kill it ourselves.
     target?.kill();
     target = null;

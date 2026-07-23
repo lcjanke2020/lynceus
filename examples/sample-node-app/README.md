@@ -1,14 +1,16 @@
 # sample-node-app
 
-**Last updated: 2026-07-13**
+**Last updated: 2026-07-19**
 
 Multi-entry tsc-compiled Node.js fixture for the Node-Inspector debugging work.
-It is the shared fixture for the Node-Inspector e2e specs
-(`test/e2e/node-*.e2e.test.ts`) and the Node eval scenarios
+It is shared by the Node-Inspector e2e specs
+(`test/e2e/node-*.e2e.test.ts`), the dual-session full-stack spec
+(`test/e2e/fullstack-flow.e2e.test.ts`), and the Node eval scenarios
 (`evals/scenarios/node-*.ts`).
 
-Six source files under `src/` share one `dist/` build — **five runnable
-entries** (one per scenario, plus the original `index.ts`) plus the shared
+Seven source files under `src/` share one `dist/` build — **six runnable
+entries** (one per Node scenario, the original `index.ts`, and the full-stack
+API fixture) plus the shared
 helper `handlers.ts` (imported by `index.ts`, not a node entry itself).
 No per-scenario variants tree: the browser side uses
 `evals/sample-app-variants/` because its forks tweak the *static asset*
@@ -26,10 +28,11 @@ drives.
 | `throw.ts` | Entry | Uncaught `TypeError` (null `.foo`) thrown inside `main() → processItem()`. | `node-uncaught-throw` L4 + `node-exceptions.e2e.test.ts`. |
 | `stdio-bug.ts` | Entry | Bug observable only via OS-level stdout/stderr (not via V8's `Runtime.consoleAPICalled` — i.e. forces use of `get_node_output`). | `node-stdio-bug` L4 + `node-output.e2e.test.ts` + `node-console.e2e.test.ts`. |
 | `conditional-bp.ts` | Entry | Iteration loop that only exhibits the bug on a specific iteration — set a conditional breakpoint or burn iterations. | `node-conditional-bp` L4 + `node-conditional-bp.e2e.test.ts`. |
+| `fullstack-api.ts` | Entry | Port-0 built-in HTTP server; `GET /api/x` returns a small CORS-enabled JSON response and exposes a TS breakpoint in the request handler. | Browser+Node `fullstack-flow.e2e.test.ts` (LEO-116 acceptance). |
 
 This fixture relies on the disk-backed-tsc-output contract (in-memory loaders
-like `tsx`/`ts-node`/`bun` are out of scope for v1). The shape — six source
-files, five runnable entries plus the shared helper `handlers.ts` — keeps each
+like `tsx`/`ts-node`/`bun` are out of scope for v1). The shape — seven source
+files, six runnable entries plus the shared helper `handlers.ts` — keeps each
 runnable entry isolating a single debugging scenario.
 
 ## Build
@@ -54,7 +57,9 @@ by the root `.gitignore`'s `dist/` rule).
 node --enable-source-maps examples/sample-node-app/dist/index.js
 ```
 
-Prints `hello, world`. The other four entries (`compute-step`, `throw`,
+Prints `hello, world`. The four scenario entries (`compute-step`, `throw`,
 `stdio-bug`, `conditional-bp`) intentionally misbehave — invoke them
 through lynceus directly, or via the matching eval scenarios / e2e specs.
-`handlers.ts` is a helper imported by `index.ts`, not a runnable entry.
+`fullstack-api` instead stays alive on an OS-selected port and prints its
+listening URL for the L3 harness. `handlers.ts` is a helper imported by
+`index.ts`, not a runnable entry.

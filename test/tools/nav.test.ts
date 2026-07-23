@@ -17,7 +17,7 @@ describe("navigate", () => {
   });
 
   it("wait=none: returns immediately after Page.navigate without waiting for any event", async () => {
-    const { fake } = setupSession();
+    const { fake, session } = setupSession();
     fake.respond("Page.getFrameTree", () => ({ frameTree: { frame: { id: "F1", url: "http://x/landed" } } }));
     fake.clearSentCalls();
     const r = parseOkEnvelope<{ url: string; wait: string }>(
@@ -26,6 +26,8 @@ describe("navigate", () => {
     expect(r.url).toBe("http://x/landed");
     expect(r.wait).toBe("none");
     expect(fake.sentCalls.find((c) => c.method === "Page.navigate")?.params.url).toBe("http://x");
+    // navigate refreshes session.url so list_sessions stays current (review round 1).
+    expect(session.url).toBe("http://x/landed");
   });
 
   it("wait=load: resolves when Page.loadEventFired arrives on the root session", async () => {

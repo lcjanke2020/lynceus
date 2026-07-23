@@ -16,6 +16,18 @@ type Waiter = {
   timer: NodeJS.Timeout | null;
 };
 
+export interface PauseWaitHandle {
+  promise: Promise<PauseState>;
+  cancel: () => void;
+}
+
+export class PauseTrackerClosedError extends Error {
+  constructor() {
+    super("Session closed");
+    this.name = "PauseTrackerClosedError";
+  }
+}
+
 type ResumeWaiter = {
   resolve: () => void;
   reject: (err: Error) => void;
@@ -110,19 +122,55 @@ export class PauseTracker {
 
   // Resolves on the next pause, or immediately if already paused.
   waitForPause(timeoutMs: number): Promise<PauseState> {
-    if (this.state) return Promise.resolve(this.state);
-    return new Promise<PauseState>((resolve, reject) => {
-      const w: Waiter = {
-        resolve,
-        reject,
+    return this.waitForPauseCancellable(timeoutMs).promise;
+  }
+
+  // The raced wait_for_pause path registers one waiter per live debug target.
+  // Once one target wins, every losing waiter must be removed immediately —
+  // leaving them armed until timeout would retain promises/timers and let a
+  // later, unrelated pause resolve stale work. Scoped callers keep using the
+  // Promise-only waitForPause() facade above; the cancellation handle is an
+  // explicit opt-in for the registry-level race.
+  waitForPauseCancellable(timeoutMs: number): PauseWaitHandle {
+    if (this.state) {
+      return { promise: Promise.resolve(this.state), cancel: () => {} };
+    }
+
+    let waiter!: Waiter;
+    let settled = false;
+    let rejectPromise!: (err: Error) => void;
+    const promise = new Promise<PauseState>((resolve, reject) => {
+      rejectPromise = reject;
+      waiter = {
+        resolve: (state) => {
+          if (settled) return;
+          settled = true;
+          resolve(state);
+        },
+        reject: (err) => {
+          if (settled) return;
+          settled = true;
+          reject(err);
+        },
         timer: setTimeout(() => {
-          const i = this.waiters.indexOf(w);
+          const i = this.waiters.indexOf(waiter);
           if (i >= 0) this.waiters.splice(i, 1);
-          reject(new Error(`Timed out after ${timeoutMs}ms waiting for pause`));
+          waiter.reject(new Error(`Timed out after ${timeoutMs}ms waiting for pause`));
         }, timeoutMs),
       };
-      this.waiters.push(w);
+      this.waiters.push(waiter);
     });
+
+    const cancel = () => {
+      if (settled) return;
+      const i = this.waiters.indexOf(waiter);
+      if (i >= 0) this.waiters.splice(i, 1);
+      if (waiter.timer) clearTimeout(waiter.timer);
+      settled = true;
+      rejectPromise(new Error("Pause wait cancelled"));
+    };
+
+    return { promise, cancel };
   }
 
   // Used by step commands: resolve when either paused-again or resumed.
@@ -172,12 +220,12 @@ export class PauseTracker {
     this.state = null;
     for (const w of this.waiters) {
       if (w.timer) clearTimeout(w.timer);
-      w.reject(new Error("Session closed"));
+      w.reject(new PauseTrackerClosedError());
     }
     this.waiters = [];
     for (const w of this.resumeWaiters) {
       clearTimeout(w.timer);
-      w.reject(new Error("Session closed"));
+      w.reject(new PauseTrackerClosedError());
     }
     this.resumeWaiters = [];
   }

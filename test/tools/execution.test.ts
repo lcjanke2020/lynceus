@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { sessionState } from "../../src/session/state.js";
+import { registry } from "../../src/session/state.js";
 import { registerExecutionTools } from "../../src/tools/execution.js";
-import { setupSession, autoReset } from "../setup.js";
+import { RACED_WAIT_SESSION_DESC } from "../../src/tools/_session_input.js";
+import { setupSession, setupAdditionalSession, autoReset } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
 autoReset();
@@ -26,13 +27,13 @@ describe("resume", () => {
   });
 
   it("issues Debugger.resume against the paused session's id", async () => {
-    const { fake } = setupSession({ paused: true, pausedSessionId: "SW1" });
+    const { fake, session } = setupSession({ paused: true, pausedSessionId: "SW1" });
     fake.clearSentCalls();
     // Fire onResumed inside the send hook so the waitForResumed promise
     // resolves — required since `resume` now blocks on the
     // Debugger.resumed event before returning.
     fake.onSend("Debugger.resume", () => {
-      sessionState.pause.onResumed();
+      session.pause.onResumed();
     });
     expect(parseOkEnvelope(await resume.handler({}))).toBe("resumed");
     const call = fake.sentCalls.find((c) => c.method === "Debugger.resume");
@@ -47,23 +48,23 @@ describe("resume", () => {
     // because waitForResumed installs the listener BEFORE send, the
     // synchronous onResumed call drains the resume waiter and the promise
     // resolves on this microtask.
-    const { fake } = setupSession({ paused: true });
+    const { fake, session } = setupSession({ paused: true });
     let resumedFired = false;
     fake.onSend("Debugger.resume", () => {
-      sessionState.pause.onResumed();
+      session.pause.onResumed();
       resumedFired = true;
     });
     expect(parseOkEnvelope(await resume.handler({}))).toBe("resumed");
     expect(resumedFired).toBe(true);
     // Post-condition: state cleared, so a follow-up wait_for_pause would
     // block for the NEXT pause rather than return the stale entry pause.
-    expect(sessionState.pause.isPaused()).toBe(false);
+    expect(session.pause.isPaused()).toBe(false);
   });
 
   it("resume/resumed race 1: resumed event arrives async after Debugger.resume send returns", async () => {
     // The other ordering: send returns first, the resumed event lands a
     // tick later. resume must wait for it before returning.
-    const { fake } = setupSession({ paused: true });
+    const { fake, session } = setupSession({ paused: true });
     let resumedFiredAt = 0;
     let resumeReturnedAt = 0;
     fake.onSend("Debugger.resume", () => {
@@ -71,7 +72,7 @@ describe("resume", () => {
       // the send promise resolves, so resume's await on the resumed
       // promise actually has to suspend.
       setImmediate(() => {
-        sessionState.pause.onResumed();
+        session.pause.onResumed();
         resumedFiredAt = performance.now();
       });
     });
@@ -80,18 +81,18 @@ describe("resume", () => {
     expect(parseOkEnvelope(r)).toBe("resumed");
     // resume cannot have returned before the resumed event fired.
     expect(resumeReturnedAt).toBeGreaterThanOrEqual(resumedFiredAt);
-    expect(sessionState.pause.isPaused()).toBe(false);
+    expect(session.pause.isPaused()).toBe(false);
   });
 
   it("resume/resumed race 1: PauseTracker.waitForResumed rejects on timeout (no resumed event)", async () => {
     // Bypasses the resume tool (which hard-codes 2s) and tests the
     // primitive directly so the timeout fires in <100ms.
-    setupSession({ paused: true });
-    await expect(sessionState.pause.waitForResumed(30).promise).rejects.toThrow(
+    const { session } = setupSession({ paused: true });
+    await expect(session.pause.waitForResumed(30).promise).rejects.toThrow(
       /Timed out.*Debugger\.resumed/,
     );
     // State unchanged because no resumed event landed.
-    expect(sessionState.pause.isPaused()).toBe(true);
+    expect(session.pause.isPaused()).toBe(true);
   });
 
   it("resume failure path: Debugger.resume throws — tool surfaces error, no dangling waiter", async () => {
@@ -100,7 +101,7 @@ describe("resume", () => {
     // the resume tool's finally — otherwise it sits in resumeWaiters
     // until its 2s timer fires and rejects with no awaiter, producing an
     // unhandled rejection long after the tool already returned.
-    const { fake } = setupSession({ paused: true });
+    const { fake, session } = setupSession({ paused: true });
     fake.respond("Debugger.resume", () => {
       throw new Error("boom — stale session / target detached");
     });
@@ -111,7 +112,7 @@ describe("resume", () => {
     // state because the contract IS that no waiter is left behind —
     // there's no public observable for "resumeWaiters is empty" short of
     // waiting 2s for the would-be timer to either fire or not.
-    expect((sessionState.pause as any).resumeWaiters).toHaveLength(0);
+    expect((session.pause as any).resumeWaiters).toHaveLength(0);
   });
 });
 
@@ -132,16 +133,16 @@ describe("step_over / step_into / step_out", () => {
     // reproduces that exactly: emit Debugger.paused synchronously inside
     // the stepOver responder. The waitForPauseOrResume call must still
     // resolve with the new pause state, not return null after timeout.
-    const { fake } = setupSession({ paused: true });
+    const { fake, session } = setupSession({ paused: true });
     // Wire a Debugger.paused subscriber so connectDebugger's production
-    // gate is mirrored — sessionState.pause.onPaused is called by the
+    // gate is mirrored — session.pause.onPaused is called by the
     // production handler, but here we drive it directly via the hook.
     fake.onSend("Debugger.stepOver", () => {
       // Production's onResumed has already been called by stepThen before
       // stepOver fires. We need to push the new pause state via the
       // PauseTracker directly because we're bypassing connectDebugger's
       // Debugger.paused handler.
-      sessionState.pause.onPaused(fake.makePauseState({ reason: "step", sessionId: undefined }));
+      session.pause.onPaused(fake.makePauseState({ reason: "step", sessionId: undefined }));
     });
     const r = parseOkEnvelope<{ paused: boolean; reason: string }>(
       await stepOver.handler({ timeout_ms: 50 }),
@@ -179,6 +180,26 @@ describe("step_over / step_into / step_out", () => {
     const call = fake.sentCalls.find((c) => c.method === "Debugger.stepOver");
     expect(call?.sessionId).toBe("SW1");
   });
+
+  it("explicit session selects the paused debugger when browser and Node are both live", async () => {
+    const browser = setupSession({ paused: true });
+    const node = setupAdditionalSession({ kind: "node", paused: true });
+    browser.fake.clearSentCalls();
+    node.fake.clearSentCalls();
+
+    await stepOver.handler({ session: node.sessionId, timeout_ms: 20 });
+
+    expect(node.fake.sentCalls.some((c) => c.method === "Debugger.stepOver")).toBe(true);
+    expect(browser.fake.sentCalls.some((c) => c.method === "Debugger.stepOver")).toBe(false);
+  });
+
+  it("omitted session is ambiguous when browser and Node are both live", async () => {
+    setupSession({ paused: true });
+    setupAdditionalSession({ kind: "node", paused: true });
+    expect(parseErrorEnvelope(await stepOver.handler({ timeout_ms: 20 }))?.error).toBe(
+      "ambiguous_session",
+    );
+  });
 });
 
 describe("pause", () => {
@@ -210,6 +231,20 @@ describe("pause", () => {
     ).toEqual({ paused_session: null });
     expect(fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBeUndefined();
   });
+
+  it("composes debug-target session with child-CDP session_id", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    browser.fake.clearSentCalls();
+    node.fake.clearSentCalls();
+
+    await pause.handler({ session: node.sessionId, session_id: "CHILD_1" });
+
+    expect(node.fake.sentCalls.find((c) => c.method === "Debugger.pause")?.sessionId).toBe(
+      "CHILD_1",
+    );
+    expect(browser.fake.sentCalls.some((c) => c.method === "Debugger.pause")).toBe(false);
+  });
 });
 
 describe("wait_for_pause", () => {
@@ -219,10 +254,17 @@ describe("wait_for_pause", () => {
   });
 
   it("returns immediately when already paused (with the TS-mapped call stack)", async () => {
-    setupSession({ paused: true });
-    const r = parseOkEnvelope<{ reason: string; call_stack: any[] }>(
+    const browser = setupSession({ paused: true, label: "frontend" });
+    const r = parseOkEnvelope<{
+      session: string;
+      label: string | null;
+      reason: string;
+      call_stack: any[];
+    }>(
       await waitForPause.handler({ timeout_ms: 100 }),
     );
+    expect(r.session).toBe(browser.sessionId);
+    expect(r.label).toBe("frontend");
     expect(r.reason).toBe("breakpoint");
     expect(r.call_stack).toHaveLength(1);
     expect(r.call_stack[0].function_name).toBe("computeStep");
@@ -239,9 +281,9 @@ describe("wait_for_pause", () => {
   });
 
   it("timeout diagnostic: reports that an owned Node target already exited", async () => {
-    setupSession({ kind: "node" });
+    const { session } = setupSession({ kind: "node" });
     // Simulate a launch_node child that ran to completion before pausing.
-    sessionState.ownedProcess = { kind: "node", handle: { exitCode: 0, signalCode: null } as any };
+    session.ownedProcess = { kind: "node", handle: { exitCode: 0, signalCode: null } as any };
     const err = parseErrorEnvelope(await waitForPause.handler({ timeout_ms: 20 }));
     expect(err?.error).toBe("pause_timeout");
     expect(err?.message).toMatch(/exited/i);
@@ -249,8 +291,8 @@ describe("wait_for_pause", () => {
   });
 
   it("timeout diagnostic: lists never-fired conditional breakpoints with resolved TS location + condition", async () => {
-    setupSession();
-    sessionState.breakpoints.set("bp_1", {
+    const { session } = setupSession();
+    session.breakpoints.set("bp_1", {
       id: "bp_1",
       file: "conditional-bp.ts",
       line: 14,
@@ -274,6 +316,128 @@ describe("wait_for_pause", () => {
     expect(r.session_id).toBe("SW1");
     expect(r.call_stack[0].session_id).toBe("SW1");
   });
+
+  it("explicit session scopes the wait when browser and Node are both paused", async () => {
+    setupSession({ paused: true, pausedSessionId: "BROWSER_CHILD" });
+    const node = setupAdditionalSession({
+      kind: "node",
+      paused: true,
+      pausedSessionId: "NODE_CHILD",
+    });
+    const r = parseOkEnvelope<{ session_id: string | null }>(
+      await waitForPause.handler({ session: node.sessionId, timeout_ms: 100 }),
+    );
+    expect(r.session_id).toBe("NODE_CHILD");
+  });
+
+  it("omitted session races every live target, returns the winner identity, and cancels losers", async () => {
+    const browser = setupSession({ label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+
+    const pending = waitForPause.handler({ timeout_ms: 1000 });
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    expect((node.session.pause as any).waiters).toHaveLength(1);
+
+    node.session.pause.onPaused(
+      node.fake.makePauseState({ sessionId: "NODE_CHILD" }),
+    );
+    const r = parseOkEnvelope<{
+      session: string;
+      label: string | null;
+      session_id: string | null;
+    }>(await pending);
+
+    expect(r).toMatchObject({
+      session: node.sessionId,
+      label: "backend",
+      session_id: "NODE_CHILD",
+    });
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("raced mode surfaces an already-paused participant immediately", async () => {
+    const browser = setupSession({ paused: true, label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+
+    const r = parseOkEnvelope<{ session: string; label: string | null }>(
+      await waitForPause.handler({ timeout_ms: 100 }),
+    );
+
+    expect(r).toMatchObject({
+      session: browser.sessionId,
+      label: "frontend",
+    });
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("raced mode snapshots participants when the call starts", async () => {
+    const browser = setupSession();
+    const pending = waitForPause.handler({ timeout_ms: 20 });
+    const node = setupAdditionalSession({ kind: "node", paused: true });
+
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+    expect(parseErrorEnvelope(await pending)?.error).toBe("pause_timeout");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("closing one race participant removes it while another target can still win", async () => {
+    const browser = setupSession({ label: "frontend" });
+    const node = setupAdditionalSession({ kind: "node", label: "backend" });
+    const pending = waitForPause.handler({ timeout_ms: 1000 });
+
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    (node.session.client as any).close = () => closeGate;
+    const closing = registry.close(node.sessionId);
+
+    // close() is deliberately still blocked on the fake CDP socket, but its
+    // pause waiter must already be gone — teardown latency cannot hold a race
+    // participant open.
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+    expect((browser.session.pause as any).waiters).toHaveLength(1);
+    browser.session.pause.onPaused(browser.fake.makePauseState());
+
+    try {
+      const r = parseOkEnvelope<{ session: string; label: string | null }>(await pending);
+      expect(r).toMatchObject({ session: browser.sessionId, label: "frontend" });
+      expect((browser.session.pause as any).waiters).toHaveLength(0);
+    } finally {
+      releaseClose();
+      await closing;
+    }
+  });
+
+  it("closing every race participant rejects with no_session and leaves no waiters", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    const pending = waitForPause.handler({ timeout_ms: 1000 });
+
+    await Promise.all([
+      registry.close(browser.sessionId),
+      registry.close(node.sessionId),
+    ]);
+
+    expect(parseErrorEnvelope(await pending)?.error).toBe("no_session");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
+
+  it("a raced timeout names the multi-session wait and cancels every waiter", async () => {
+    const browser = setupSession();
+    const node = setupAdditionalSession({ kind: "node" });
+    const err = parseErrorEnvelope(
+      await waitForPause.handler({ timeout_ms: 20 }),
+    );
+
+    expect(err?.error).toBe("pause_timeout");
+    expect(err?.message).toContain("any live session");
+    expect((browser.session.pause as any).waiters).toHaveLength(0);
+    expect((node.session.pause as any).waiters).toHaveLength(0);
+  });
 });
 
 describe("registration metadata", () => {
@@ -286,5 +450,15 @@ describe("registration metadata", () => {
       "step_over",
       "wait_for_pause",
     ]);
+  });
+
+  it("uses the centralized raced-session description", () => {
+    const schema = waitForPause.inputSchema as Record<
+      string,
+      { description?: string }
+    >;
+    expect(schema.session?.description).toBe(RACED_WAIT_SESSION_DESC);
+    expect(waitForPause.description).toContain("already-paused participant");
+    expect(waitForPause.description).toContain("when the call starts");
   });
 });

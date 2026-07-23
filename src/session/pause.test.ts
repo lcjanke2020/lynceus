@@ -61,6 +61,31 @@ describe("PauseTracker", () => {
     expect(r2.reason).toBe("breakpoint");
   });
 
+  it("waitForPauseCancellable removes a race loser and clears its timer", async () => {
+    const t = new PauseTracker();
+    const { promise, cancel } = t.waitForPauseCancellable(5000);
+    expect((t as any).waiters).toHaveLength(1);
+
+    cancel();
+
+    await expect(promise).rejects.toThrow("Pause wait cancelled");
+    expect((t as any).waiters).toHaveLength(0);
+    // A later pause is current state only; it cannot revive the cancelled
+    // waiter or produce a second settlement.
+    t.onPaused(fakeState("step"));
+    expect(t.current()?.reason).toBe("step");
+    await expect(promise).rejects.toThrow("Pause wait cancelled");
+  });
+
+  it("waitForPauseCancellable cancel is a no-op after pause already won", async () => {
+    const t = new PauseTracker();
+    const { promise, cancel } = t.waitForPauseCancellable(5000);
+    t.onPaused(fakeState("breakpoint"));
+    await expect(promise).resolves.toMatchObject({ reason: "breakpoint" });
+    expect(() => cancel()).not.toThrow();
+    expect((t as any).waiters).toHaveLength(0);
+  });
+
   it("waitForPauseOrResume: pause arrival in the same tick as the timeout — pause wins", async () => {
     // Race: setTimeout(0) and onPaused() on the next microtask. Because
     // the entry guard checks state synchronously, but here state is null

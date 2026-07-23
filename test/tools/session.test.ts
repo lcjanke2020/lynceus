@@ -2,17 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { resolve } from "node:path";
-import { sessionState } from "../../src/session/state.js";
+import { getSession, registry } from "../../src/session/state.js";
 import { makeFakeCdp, type FakeCdp } from "../fake-cdp.js";
 
 // IMPLEMENTATION NOTE (Opus PR #10 round-2 Nit): this file uses `vi.mock`
 // to stub chrome-launcher and chrome-remote-interface, deliberately
-// breaking the unified `sessionState.client = fake` seam pattern that
+// breaking the unified setupSession() fake-client seam pattern that
 // every other tool-test file uses. Reason: chrome-launcher's `launch()`
 // and chrome-remote-interface's default export + `.List` are STATIC
-// imports — they're resolved at module-load time, before sessionState
-// even exists. There's no runtime seam to redirect them through; only
-// vitest's module mocking can intercept them. Don't try to "unify the
+// imports — they're resolved at module-load time, before the session
+// registry even exists. There's no runtime seam to redirect them through;
+// only vitest's module mocking can intercept them. Don't try to "unify the
 // style" here; the asymmetry is structural.
 
 // Mock chrome-launcher so launch_chrome doesn't actually spawn Chrome.
@@ -54,7 +54,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // Imports MUST come after vi.mock so the registrar sees the mocked modules.
 import { registerSessionTools } from "../../src/tools/session.js";
-import { autoReset } from "../setup.js";
+import { autoReset, setupAdditionalSession, setupSession } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
 autoReset();
@@ -65,6 +65,7 @@ const attachChrome = tools.get("attach_chrome")!;
 const attachNode = tools.get("attach_node")!;
 const launchNode = tools.get("launch_node")!;
 const closeSession = tools.get("close_session")!;
+const listSessions = tools.get("list_sessions")!;
 const listTargets = tools.get("list_targets")!;
 const selectTarget = tools.get("select_target")!;
 
@@ -83,14 +84,22 @@ function makeFakeNodeChild(pid = 4242) {
     stdout: PassThrough;
     stderr: PassThrough;
     kill: ReturnType<typeof vi.fn>;
+    signalCode: NodeJS.Signals | null;
   };
   child.pid = pid;
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
+  // Record the delivered signal like a real ChildProcess so a SECOND
+  // killNodeChild() on an already-killed child takes the already-exited
+  // fast path instead of sitting out the full SIGTERM→SIGKILL grace
+  // window (the round-2 shutdown-barrier path closes an owned child that
+  // a later teardown may close again).
+  child.signalCode = null;
   let killed = false;
   child.kill = vi.fn(() => {
     if (!killed) {
       killed = true;
+      child.signalCode = "SIGTERM";
       child.emit("exit", null, "SIGTERM");
     }
     return true;
@@ -268,9 +277,30 @@ describe("launch_chrome", () => {
     }
   });
 
+  it("returns session id + label and threads the label into the registry", async () => {
+    launchMock.mockResolvedValue({ port: 9999, pid: 1, kill: vi.fn() });
+    cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "http://x/", title: "" }]);
+    const r = parseOkEnvelope<{ session: string; label: string | null; targetId: string }>(
+      await launchChrome.handler({ label: "frontend" }),
+    );
+    expect(r.session).toMatch(/^browser_\d+$/);
+    expect(r.label).toBe("frontend");
+    expect(registry.list()[0]).toMatchObject({ session: r.session, label: "frontend", kind: "browser" });
+  });
+
+  it("duplicate_label when the label is already held by a live session", async () => {
+    const rec = registry.reserve("node", "backend");
+    registry.activate(rec.id);
+    launchMock.mockResolvedValue({ port: 9999, pid: 1, kill: vi.fn() });
+    cdpListMock.mockResolvedValue([{ id: "t1", type: "page", url: "http://x/", title: "" }]);
+    const err = parseErrorEnvelope(await launchChrome.handler({ label: "backend" }));
+    expect(err?.error).toBe("duplicate_label");
+    expect(err?.message).toContain(rec.id);
+    expect(launchMock).not.toHaveBeenCalled(); // guard runs before spawning
+  });
+
   it("already_session error when a session is already active", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.chromePort = 9999;
+    setupSession();
     const r = await launchChrome.handler({});
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
   });
@@ -318,7 +348,7 @@ describe("attach_chrome", () => {
   });
 
   it("already_session error when session already exists", async () => {
-    sessionState.client = makeFakeCdp() as any;
+    setupSession();
     const r = await attachChrome.handler({});
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
   });
@@ -329,18 +359,22 @@ describe("attach_node", () => {
     cdpListMock.mockResolvedValue([
       { id: "node-target-1", type: "node", url: "file:///app/server.js" },
     ]);
-    const r = parseOkEnvelope<{ targetId: string; url: string }>(
+    const r = parseOkEnvelope<{ session: string; label: string | null; targetId: string; url: string }>(
       await attachNode.handler({ port: 9229 }),
     );
-    expect(r).toEqual({ targetId: "node-target-1", url: "file:///app/server.js" });
+    // Ids climb across tests (counters aren't reset); pin the shape, not the ordinal.
+    expect(r.session).toMatch(/^node_\d+$/);
+    const { session: _s, ...rest } = r;
+    expect(rest).toEqual({ label: null, targetId: "node-target-1", url: "file:///app/server.js" });
     expect(cdpListMock).toHaveBeenCalledWith({ port: 9229, host: "127.0.0.1" });
-    expect(sessionState.kind).toBe("node");
-    expect(sessionState.attached).toBe(true);
+    const s = getSession()!;
+    expect(s.kind).toBe("node");
+    expect(s.attached).toBe(true);
     // Attach mode: we did NOT launch the process, so ownedProcess stays
     // null and close_session won't kill it.
-    expect(sessionState.ownedProcess).toBeNull();
-    expect(sessionState.currentTargetId).toBe("node-target-1");
-    expect(sessionState.chromePort).toBe(9229);
+    expect(s.ownedProcess).toBeNull();
+    expect(s.currentTargetId).toBe("node-target-1");
+    expect(s.chromePort).toBe(9229);
   });
 
   it("defaults port=9229, host=127.0.0.1 when neither is supplied", async () => {
@@ -378,9 +412,11 @@ describe("attach_node", () => {
     expect(methods).not.toContain("Debugger.resume");
   });
 
-  it("already_session error when a session is already active", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.chromePort = 9999;
+  it("already_session error when a node session is already active", async () => {
+    // Per-kind capacity: the incumbent must be a NODE session for attach_node
+    // to be refused. A live browser session would NOT block it (that path is
+    // the "coexists with a browser session" test below).
+    setupSession({ kind: "node" });
     const r = await attachNode.handler({ port: 9229 });
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
     // CDP.List must NOT have been called — the guard runs first.
@@ -418,11 +454,12 @@ describe("attach_node", () => {
     expect(r.targetId).toBe("n1");
   });
 
-  it("persists host on sessionState so follow-up CDP.List calls don't fall back to localhost (Ultrareview round 2 — Copilot node.ts:53)", async () => {
+  it("persists host on the session so follow-up CDP.List calls don't fall back to localhost (Ultrareview round 2 — Copilot node.ts:53)", async () => {
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
     await attachNode.handler({ host: "10.0.0.5", port: 9229 });
-    expect(sessionState.chromeHost).toBe("10.0.0.5");
-    expect(sessionState.chromePort).toBe(9229);
+    const s = getSession()!;
+    expect(s.chromeHost).toBe("10.0.0.5");
+    expect(s.chromePort).toBe(9229);
     // Verify list_targets re-uses the persisted host (otherwise a remote
     // attach silently lists localhost targets instead).
     cdpListMock.mockClear();
@@ -435,7 +472,7 @@ describe("attach_node", () => {
     // Before this fix, connectDebugger swallowed Runtime/Debugger.enable
     // errors and attach_node returned success with a half-attached state:
     // no entry pause would fire, no breakpoints would resolve. Now the
-    // failure propagates AND sessionState is rolled back so a follow-up
+    // failure propagates AND the session is rolled back so a follow-up
     // attach attempt isn't blocked by already_session.
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
     const fake = nextFakeForConnect!;
@@ -445,13 +482,17 @@ describe("attach_node", () => {
     const r = await attachNode.handler({ port: 9229 });
     const err = parseErrorEnvelope(r);
     expect(err?.message).toContain("Debugger.enable not supported");
-    // sessionState must be fully reset — the next attach must not see
-    // already_session against the dead client.
-    expect(sessionState.client).toBeNull();
-    expect(sessionState.kind).toBe("browser"); // reset() default
-    expect(sessionState.chromePort).toBeNull();
-    expect(sessionState.chromeHost).toBeNull();
-    expect(sessionState.currentTargetId).toBeNull();
+    // The reservation must be fully aborted — the next attach must not see
+    // already_session against the dead client. (The failed session's
+    // instance is unreachable by design: it was never activated, so the
+    // registry-level "no session" IS the reset contract now.)
+    expect(getSession()).toBeNull();
+    // ...and prove it end-to-end (round-1 review: getSession()===null alone
+    // can't distinguish "slot freed" from "record wedged with a null
+    // client" — only a successful follow-up attach can).
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(await attachNode.handler({ port: 9229 }));
+    expect(r2.targetId).toBe("n1");
   });
 
   it("select_target returns unsupported_target on a Node session (self-protection)", async () => {
@@ -461,11 +502,8 @@ describe("attach_node", () => {
     // The capability table's original entry exists exactly so the state
     // refactor (removing sessionState.chrome) can't silently misbehave on
     // a Node session.
-    nextFakeForConnect = makeFakeCdp();
-    sessionState.client = nextFakeForConnect as any;
-    sessionState.kind = "node";
-    sessionState.currentTargetId = "n1";
-    sessionState.chromePort = 9229;
+    const { session } = setupSession({ kind: "node", chromePort: 9229 });
+    session.currentTargetId = "n1";
     const r = await selectTarget.handler({ id: "n2" });
     const err = parseErrorEnvelope(r);
     expect(err?.error).toBe("unsupported_target");
@@ -510,9 +548,10 @@ describe("launch_node", () => {
     ]);
     expect(opts).toMatchObject({ cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     expect(cdpListMock).toHaveBeenCalledWith({ port: 4567, host: "127.0.0.1" });
-    expect(sessionState.kind).toBe("node");
-    expect(sessionState.attached).toBe(false);
-    expect(sessionState.ownedProcess).toEqual({ kind: "node", handle: child });
+    const s = getSession()!;
+    expect(s.kind).toBe("node");
+    expect(s.attached).toBe(false);
+    expect(s.ownedProcess).toEqual({ kind: "node", handle: child });
   });
 
   it("forwards cwd, script args, env overrides, inspect mode, and explicit inspector port", async () => {
@@ -541,10 +580,28 @@ describe("launch_node", () => {
   });
 
   it("already_session error runs before spawning a child", async () => {
-    sessionState.client = makeFakeCdp() as any;
+    // Same-kind incumbent required under per-kind capacity — a node session
+    // blocks launch_node.
+    setupSession({ kind: "node" });
     const r = await launchNode.handler({ script: fixtureScript });
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("coexists with a live browser session (per-kind capacity, LEO-116 pt 3)", async () => {
+    // The founding-goal behavior change: a live BROWSER session no longer
+    // blocks launch_node — both kinds share one server.
+    setupSession(); // browser_1 live (fake client)
+    mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    const r = parseOkEnvelope<{ session: string; label: string | null }>(
+      await launchNode.handler({ script: fixtureScript, label: "backend" }),
+    );
+    expect(r.session).toMatch(/^node_\d+$/);
+    expect(r.label).toBe("backend");
+    // Both sessions live at once — the two summaries the demo's list_sessions shows.
+    const kinds = registry.list().map((x) => x.kind).sort();
+    expect(kinds).toEqual(["browser", "node"]);
   });
 
   it("not_found error for a missing script runs before spawning a child", async () => {
@@ -585,9 +642,47 @@ describe("launch_node", () => {
     const err = parseErrorEnvelope(r);
     expect(err?.message).toContain("Debugger unavailable");
     expect(child.kill).toHaveBeenCalled();
-    expect(sessionState.client).toBeNull();
-    expect(sessionState.ownedProcess).toBeNull();
-    expect(sessionState.kind).toBe("browser");
+    // The failed launch aborted its reservation — no session survives (the
+    // never-activated instance is unreachable by design).
+    expect(getSession()).toBeNull();
+    // ...and prove the slot is actually free (round-1 review): a follow-up
+    // launch must succeed, not hit already_session against a wedged record.
+    mockNodeInspectorStartup(makeFakeNodeChild(), 4568);
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(
+      await launchNode.handler({ script: fixtureScript }),
+    );
+    expect(r2.targetId).toBe("n1");
+  });
+
+  it("close-all racing an in-flight launch: the child dies BEFORE closeAll settles, launch errors, slot ends free (round-1/2 review)", async () => {
+    // Shutdown-races-launch: closeAll() tears down the "starting"
+    // reservation while the launch is still connecting. The shutdown
+    // barrier must OWN the just-spawned child — it is published on the
+    // reserved state immediately after spawn(), so closeAll() kills it
+    // before settling (round 2: previously the child was invisible until
+    // inspector discovery, and process.exit() after closeAll() orphaned
+    // it). The strict activate() invariant then turns the late activation
+    // into a loud failure, the catch releases the just-connected client,
+    // and the slot ends free.
+    const child = mockNodeInspectorStartup(makeFakeNodeChild(), 4567);
+    let killCallsWhenShutdownSettled = -1;
+    cdpListMock.mockImplementation(async () => {
+      await registry.closeAll();
+      killCallsWhenShutdownSettled = child.kill.mock.calls.length;
+      return [{ id: "n1", type: "node", url: "" }];
+    });
+    const r = await launchNode.handler({ script: fixtureScript });
+    expect(parseErrorEnvelope(r)).not.toBeNull();
+    // The load-bearing round-2 assertion: no spawned child is still live
+    // when closeAll() settles.
+    expect(killCallsWhenShutdownSettled).toBeGreaterThanOrEqual(1);
+    expect(getSession()).toBeNull();
+    // Slot is free — a follow-up attach succeeds.
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    nextFakeForConnect = makeFakeCdp();
+    const r2 = parseOkEnvelope<{ targetId: string }>(await attachNode.handler({}));
+    expect(r2.targetId).toBe("n1");
   });
 
   it("close_session kills a launched Node child because lynceus owns it", async () => {
@@ -595,10 +690,11 @@ describe("launch_node", () => {
     cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
 
     await launchNode.handler({ script: fixtureScript });
-    expect(sessionState.ownedProcess).toEqual({ kind: "node", handle: child });
-    expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+    const s = getSession()!;
+    expect(s.ownedProcess).toEqual({ kind: "node", handle: child });
+    expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
     expect(child.kill).toHaveBeenCalled();
-    expect(sessionState.client).toBeNull();
+    expect(s.client).toBeNull();
   });
 
   // SIGTERM → grace → SIGKILL escalation on owned Node children.
@@ -644,7 +740,7 @@ describe("launch_node", () => {
       cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
       await launchNode.handler({ script: fixtureScript });
 
-      expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+      expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
       // Critical: ONLY SIGTERM — no escalation when the child is cooperative.
       expect(child.kill).toHaveBeenCalledTimes(1);
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
@@ -674,7 +770,7 @@ describe("launch_node", () => {
         // also drains the microtask queue at each step so the synchronous emit
         // inside kill("SIGKILL") propagates.
         await vi.advanceTimersByTimeAsync(2500);
-        expect(parseOkEnvelope(await closePromise)).toBe("closed");
+        expect(parseOkEnvelope<{ status: string }>(await closePromise).status).toBe("closed");
       } finally {
         vi.useRealTimers();
       }
@@ -692,26 +788,75 @@ describe("launch_node", () => {
       // Simulate the child exiting on its own between launch and close.
       child.exitCode = 0;
 
-      expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
+      expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
       expect(child.kill).not.toHaveBeenCalled();
     });
   });
 });
 
 describe("close_session", () => {
-  it("returns 'no active session' (not an error) when no session exists", async () => {
-    // Sentinel string — not an error envelope. The agent calling close
-    // when nothing is open is a benign no-op, not a misuse.
-    expect(parseOkEnvelope(await closeSession.handler({}))).toBe("no active session");
+  it("idempotent success (not an error) when no session exists", async () => {
+    // Closing nothing is a benign no-op, not a misuse — structured success,
+    // never a no_session error (design §5).
+    expect(parseOkEnvelope(await closeSession.handler({}))).toEqual({
+      session: null,
+      label: null,
+      status: "no-active-session",
+    });
   });
 
-  it("calls sessionState.close() and resets state when a session is active", async () => {
-    const fake = makeFakeCdp();
-    sessionState.client = fake as any;
-    sessionState.chromePort = 9999;
-    expect(parseOkEnvelope(await closeSession.handler({}))).toBe("closed");
-    // After close, sessionState.client is null again.
-    expect(sessionState.client).toBeNull();
+  it("calls the session's close() and resets state when a session is active", async () => {
+    const { session } = setupSession();
+    expect(parseOkEnvelope<{ status: string }>(await closeSession.handler({})).status).toBe("closed");
+    // After close, the session's client is null again.
+    expect(session.client).toBeNull();
+  });
+
+  it("returns the closed session's id and label", async () => {
+    const rec = registry.reserve("browser", "frontend");
+    registry.activate(rec.id);
+    expect(parseOkEnvelope(await closeSession.handler({ session: rec.id }))).toEqual({
+      session: rec.id,
+      label: "frontend",
+      status: "closed",
+    });
+    expect(getSession()).toBeNull();
+  });
+
+  it("unknown_session for an explicit id that isn't live", async () => {
+    setupSession(); // browser_1 live
+    const err = parseErrorEnvelope(await closeSession.handler({ session: "node_9" }));
+    expect(err?.error).toBe("unknown_session");
+    expect(err?.message).toContain("node_9");
+  });
+});
+
+describe("list_sessions", () => {
+  it("empty list when nothing is live (not a no_session error)", async () => {
+    expect(parseOkEnvelope(await listSessions.handler({}))).toEqual({ sessions: [] });
+  });
+
+  it("reports the live session's id, kind, label, and flags", async () => {
+    const { session } = setupSession(); // one browser session, no label
+    session.url = "http://localhost:5173/";
+    const r = parseOkEnvelope<{ sessions: any[] }>(await listSessions.handler({}));
+    expect(r.sessions).toHaveLength(1);
+    expect(r.sessions[0].session).toMatch(/^browser_\d+$/);
+    const { session: _s, ...rest } = r.sessions[0];
+    expect(rest).toEqual({
+      kind: "browser",
+      label: null,
+      attached: false,
+      paused: false,
+      url: "http://localhost:5173/",
+    });
+  });
+
+  it("normalizes an empty discovery url to null (never \"\") — review round 2", async () => {
+    cdpListMock.mockResolvedValue([{ id: "n1", type: "node", url: "" }]);
+    await attachNode.handler({ port: 9229 });
+    const r = parseOkEnvelope<{ sessions: Array<{ url: string | null }> }>(await listSessions.handler({}));
+    expect(r.sessions[0]!.url).toBeNull();
   });
 });
 
@@ -722,9 +867,8 @@ describe("list_targets", () => {
   });
 
   it("projects targets with active flag for the current target", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.chromePort = 9999;
-    sessionState.currentTargetId = "page1";
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
     cdpListMock.mockResolvedValue([
       { id: "page1", type: "page", url: "http://x/", title: "Home" },
       { id: "page2", type: "page", url: "http://x/admin", title: "Admin" },
@@ -744,9 +888,8 @@ describe("select_target", () => {
   });
 
   it("returns 'already-active' when id matches current target without reconnecting", async () => {
-    sessionState.client = makeFakeCdp() as any;
-    sessionState.currentTargetId = "page1";
-    sessionState.chromePort = 9999;
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
     cdpListMock.mockClear();
     const r = parseOkEnvelope<{ id: string; status: string }>(
       await selectTarget.handler({ id: "page1" }),
@@ -755,16 +898,65 @@ describe("select_target", () => {
     // Critical: should NOT have called CDP.List — that's the fast-path guard.
     expect(cdpListMock).not.toHaveBeenCalled();
   });
+
+  it("switches the explicitly addressed browser while a Node session remains live", async () => {
+    const browser = setupSession();
+    browser.session.currentTargetId = "page1";
+    const node = setupAdditionalSession({ kind: "node" });
+    const nodeClient = node.session.client;
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+    nextFakeForConnect = makeFakeCdp();
+
+    const r = parseOkEnvelope<{ id: string; url: string; status: string }>(
+      await selectTarget.handler({ id: "page2", session: browser.sessionId }),
+    );
+
+    expect(r).toEqual({ id: "page2", url: "http://x/admin", status: "switched" });
+    expect(getSession(browser.sessionId)?.currentTargetId).toBe("page2");
+    expect(getSession(node.sessionId)?.client).toBe(nodeClient);
+    expect(registry.list()).toHaveLength(2);
+  });
+
+  it("failed reconnect frees the registry slot: a fresh attach recovers, never deadlocks (round-1 P1)", async () => {
+    // Round-1 blocking finding: switchTarget nulls the client on an ACTIVE
+    // record before reconnecting. When the reconnect failed, the record
+    // survived active-but-clientless — invisible to close_session (client
+    // sentinel) yet still counted by reserve(), so every follow-up
+    // launch/attach returned already_session until the server restarted.
+    const { session } = setupSession();
+    session.currentTargetId = "page1";
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+    const badFake = makeFakeCdp();
+    badFake.respond("Debugger.enable", () => {
+      throw new Error("target vanished mid-switch");
+    });
+    nextFakeForConnect = badFake;
+    const failed = await selectTarget.handler({ id: "page2" });
+    expect(parseErrorEnvelope(failed)).not.toBeNull();
+    // The record must be gone, not wedged: accessors see no session AND the
+    // capacity guard lets a fresh attach through.
+    expect(getSession()).toBeNull();
+    nextFakeForConnect = makeFakeCdp();
+    const r = await attachChrome.handler({});
+    expect(parseErrorEnvelope(r)).toBeNull();
+  });
 });
 
 describe("registration metadata", () => {
-  it("registers exactly the seven session tools (launch_node included)", () => {
+  it("registers exactly the eight session tools (list_sessions included)", () => {
     expect(Array.from(tools.keys()).sort()).toEqual([
       "attach_chrome",
       "attach_node",
       "close_session",
       "launch_chrome",
       "launch_node",
+      "list_sessions",
       "list_targets",
       "select_target",
     ]);

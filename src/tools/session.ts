@@ -1,10 +1,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import CDP from "chrome-remote-interface";
-import { launchChrome, attachChrome, closeSession, switchTarget } from "../session/browser.js";
+import { launchChrome, attachChrome, switchTarget } from "../session/browser.js";
 import { attachNode, launchNode } from "../session/node.js";
-import { getSession, requireSession, requireCapable } from "../session/state.js";
+import { requireSession, requireCapable, registry } from "../session/state.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
+
+// Shared across the four launch/attach tools. Labels are the human-facing
+// half of session addressing (design §3) — ids stay the only thing tools
+// accept in `session`, but labels ride along in returns and diagnostics.
+const LABEL_DESC =
+  'Optional friendly label for this session (e.g. "frontend"/"backend"), echoed in list_sessions and errors. Must be unique among live sessions.';
 
 export function registerSessionTools(server: McpServer) {
   registerJsonTool(
@@ -28,6 +35,7 @@ export function registerSessionTools(server: McpServer) {
         .describe(
           "Enable Chromium's sandbox. When omitted, defaults from the CDP_SANDBOX env ('true' or '1' enable it; default false → we add --no-sandbox). On Ubuntu 23.10+ AppArmor restricts the unprivileged user namespace Chromium's sandbox depends on, so unsandboxed launch is the working default for automation. Pass true only on a host with a working sandbox path (AppArmor userns allowance or SUID chrome_sandbox helper).",
         ),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
     async (input: {
       url?: string;
@@ -36,6 +44,7 @@ export function registerSessionTools(server: McpServer) {
       args?: string[];
       chrome_path?: string;
       sandbox?: boolean;
+      label?: string;
     }) => {
       return await launchChrome({
         url: input.url,
@@ -44,6 +53,7 @@ export function registerSessionTools(server: McpServer) {
         args: input.args,
         chromePath: input.chrome_path,
         sandbox: input.sandbox,
+        label: input.label,
       });
     },
   );
@@ -61,11 +71,13 @@ export function registerSessionTools(server: McpServer) {
           url_includes: z.string().optional(),
         })
         .optional(),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
-    async (input: { port?: number; host?: string; target_filter?: { type?: string; url_includes?: string } }) => {
+    async (input: { port?: number; host?: string; target_filter?: { type?: string; url_includes?: string }; label?: string }) => {
       return await attachChrome({
         port: input.port,
         host: input.host,
+        label: input.label,
         targetFilter: input.target_filter
           ? {
               ...(input.target_filter.type ? { type: input.target_filter.type } : {}),
@@ -83,11 +95,13 @@ export function registerSessionTools(server: McpServer) {
     {
       port: z.number().int().positive().optional().describe("Inspector port (default 9229)"),
       host: z.string().optional().describe("Inspector host (default 127.0.0.1)"),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
-    async (input: { port?: number; host?: string }) => {
+    async (input: { port?: number; host?: string; label?: string }) => {
       return await attachNode({
         ...(input.port !== undefined ? { port: input.port } : {}),
         ...(input.host !== undefined ? { host: input.host } : {}),
+        ...(input.label !== undefined ? { label: input.label } : {}),
       });
     },
   );
@@ -117,6 +131,7 @@ export function registerSessionTools(server: McpServer) {
         .positive()
         .optional()
         .describe("Inspector port to request. Omit to let Node pick an available port."),
+      label: z.string().min(1).optional().describe(LABEL_DESC),
     },
     async (input: {
       script: string;
@@ -125,6 +140,7 @@ export function registerSessionTools(server: McpServer) {
       env?: Record<string, string>;
       inspect_mode?: "inspect" | "inspect-brk";
       inspect_port?: number;
+      label?: string;
     }) => {
       return await launchNode({
         script: input.script,
@@ -133,6 +149,7 @@ export function registerSessionTools(server: McpServer) {
         ...(input.env !== undefined ? { env: input.env } : {}),
         ...(input.inspect_mode !== undefined ? { inspectMode: input.inspect_mode } : {}),
         ...(input.inspect_port !== undefined ? { inspectPort: input.inspect_port } : {}),
+        ...(input.label !== undefined ? { label: input.label } : {}),
       });
     },
   );
@@ -140,12 +157,22 @@ export function registerSessionTools(server: McpServer) {
   registerJsonTool(
     server,
     "close_session",
-    "Close the active CDP session. Kills the underlying process (Chrome or Node) if we launched it; leaves it alone if we attached.",
+    "Close a debug session. Kills the underlying process (Chrome or Node) if we launched it; leaves it alone if we attached. Returns { session, label, status }. Omit `session` when only one is live; with two live sessions pass the id (see list_sessions). Closing when nothing is live is a no-op success (status: 'no-active-session').",
+    {
+      session: sessionSchema,
+    },
+    async (input: { session?: string }) => {
+      return await registry.closeAddressed(input.session);
+    },
+  );
+
+  registerJsonTool(
+    server,
+    "list_sessions",
+    "List the live debug sessions (browser and Node) with their ids, labels, kind, attached/paused flags, and last-known url (best-effort: set at launch/attach/select_target/navigate, not live on in-page SPA navigation; null when unknown). The recovery tool that ambiguous_session and unknown_session point at. Returns an empty list when nothing is live.",
     undefined,
     async () => {
-      if (!getSession()) return "no active session";
-      await closeSession();
-      return "closed";
+      return { sessions: registry.list() };
     },
   );
 
@@ -153,9 +180,9 @@ export function registerSessionTools(server: McpServer) {
     server,
     "list_targets",
     "List all debuggable targets: on a browser session, the pages, workers, and iframes; on a Node session, the single root target.",
-    undefined,
-    async () => {
-      const s = requireSession();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requireSession(input.session);
       const targets = await CDP.List({ port: s.chromePort!, host: s.chromeHost ?? undefined });
       return targets.map((t) => ({
         id: t.id,
@@ -171,12 +198,12 @@ export function registerSessionTools(server: McpServer) {
     server,
     "select_target",
     "Switch the active page target. Closes the current CDP socket and opens a new one.",
-    { id: z.string().describe("Target ID from list_targets") },
-    async (input: { id: string }) => {
-      const s = requireSession();
+    { id: z.string().describe("Target ID from list_targets"), session: sessionSchema },
+    async (input: { id: string } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "select_target");
       if (s.currentTargetId === input.id) return { id: input.id, status: "already-active" };
-      const r = await switchTarget(input.id);
+      const r = await switchTarget(s, input.id);
       return { id: r.targetId, url: r.url, status: "switched" };
     },
   );

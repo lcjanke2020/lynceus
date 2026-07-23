@@ -1,23 +1,41 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Protocol } from "devtools-protocol";
-import { requireSession, requirePaused } from "../session/state.js";
+import {
+  registry,
+  requireSession,
+  requirePaused,
+  type Session,
+  type SessionSummary,
+} from "../session/state.js";
+import {
+  PauseTrackerClosedError,
+  type PauseState,
+  type PauseWaitHandle,
+} from "../session/pause.js";
 import {
   mapCdpToOriginal,
   waitForConsumer,
   MAP_LOAD_WAIT_MS,
 } from "../sourcemap/store.js";
-import { ToolError } from "../util/errors.js";
+import { noSession, ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
+import {
+  childSessionIdSchema,
+  RACED_WAIT_SESSION_DESC,
+  sessionSchema,
+  withChildSessionDisambiguation,
+  type SessionInput,
+} from "./_session_input.js";
 
 export function registerExecutionTools(server: McpServer) {
   registerJsonTool(
     server,
     "resume",
     "Resume execution. Dispatched to the session that paused (root, worker, OOPIF, …).",
-    undefined,
-    async () => {
-      const s = requirePaused();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requirePaused(input.session);
       const sid = s.pause.current()!.sessionId;
       // Install the resumed-event listener BEFORE sending Debugger.resume.
       // CRI emits events synchronously, so the Debugger.resumed event can
@@ -58,38 +76,53 @@ export function registerExecutionTools(server: McpServer) {
     server,
     "step_over",
     "Step over the current line. Awaits the next pause (or returns null if execution continues).",
-    { timeout_ms: z.number().int().positive().optional() },
-    async (input: { timeout_ms?: number }) =>
-      stepThen((s, sid) => s.client!.send("Debugger.stepOver", undefined, sid), input.timeout_ms),
+    { timeout_ms: z.number().int().positive().optional(), session: sessionSchema },
+    async (input: { timeout_ms?: number } & SessionInput) =>
+      stepThen(
+        (s, sid) => s.client!.send("Debugger.stepOver", undefined, sid),
+        input.timeout_ms,
+        input.session,
+      ),
   );
 
   registerJsonTool(
     server,
     "step_into",
     "Step into the next function call.",
-    { timeout_ms: z.number().int().positive().optional() },
-    async (input: { timeout_ms?: number }) =>
-      stepThen((s, sid) => s.client!.send("Debugger.stepInto", undefined, sid), input.timeout_ms),
+    { timeout_ms: z.number().int().positive().optional(), session: sessionSchema },
+    async (input: { timeout_ms?: number } & SessionInput) =>
+      stepThen(
+        (s, sid) => s.client!.send("Debugger.stepInto", undefined, sid),
+        input.timeout_ms,
+        input.session,
+      ),
   );
 
   registerJsonTool(
     server,
     "step_out",
     "Step out of the current function.",
-    { timeout_ms: z.number().int().positive().optional() },
-    async (input: { timeout_ms?: number }) =>
-      stepThen((s, sid) => s.client!.send("Debugger.stepOut", undefined, sid), input.timeout_ms),
+    { timeout_ms: z.number().int().positive().optional(), session: sessionSchema },
+    async (input: { timeout_ms?: number } & SessionInput) =>
+      stepThen(
+        (s, sid) => s.client!.send("Debugger.stepOut", undefined, sid),
+        input.timeout_ms,
+        input.session,
+      ),
   );
 
   registerJsonTool(
     server,
     "pause",
-    "Pause execution manually at the next statement. By default targets the root page; pass `session_id` (from list_targets or a script's session_id) to pause a specific worker/iframe/service-worker.",
+    withChildSessionDisambiguation(
+      "Pause execution manually at the next statement. By default targets the root page; pass `session_id` (from list_targets or a script's session_id) to pause a specific worker/iframe/service-worker.",
+    ),
     {
-      session_id: z.string().nullable().optional().describe("null or omitted = root."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
-    async (input: { session_id?: string | null }) => {
-      const s = requireSession();
+    async (input: { session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       const sid = input.session_id ?? undefined;
       await s.client!.send("Debugger.pause", undefined, sid);
       return { paused_session: sid ?? null };
@@ -99,11 +132,34 @@ export function registerExecutionTools(server: McpServer) {
   registerJsonTool(
     server,
     "wait_for_pause",
-    "Block until the debugger pauses (or times out). Returns the pause reason and a TS-mapped call stack.",
-    { timeout_ms: z.number().int().positive().optional().describe("Default 30000") },
-    async (input: { timeout_ms?: number }) => {
-      const s = requireSession();
+    "Block until the debugger pauses (or times out). Pass `session` to wait on one target. Omission snapshots every usable live target when the call starts and races them; an already-paused participant can win immediately, and multiple paused targets have no most-recent priority. Pass `session` when a particular paused target matters. The raced response includes the winner's session + label with the pause summary.",
+    {
+      timeout_ms: z.number().int().positive().optional().describe("Default 30000"),
+      session: z
+        .string()
+        .optional()
+        .describe(RACED_WAIT_SESSION_DESC),
+    },
+    async (input: { timeout_ms?: number } & SessionInput) => {
       const timeoutMs = input.timeout_ms ?? 30000;
+
+      if (input.session === undefined) {
+        const { candidate, state } = await waitForAnyPause(timeoutMs);
+        return {
+          session: candidate.session,
+          label: candidate.label,
+          ...(await summarizePause(
+            candidate.state,
+            state.reason,
+            state.hitBreakpoints,
+            state.data,
+            state.callFrames,
+            state.sessionId,
+          )),
+        };
+      }
+
+      const s = requireSession(input.session);
       let state;
       try {
         state = await s.pause.waitForPause(timeoutMs);
@@ -118,6 +174,93 @@ export function registerExecutionTools(server: McpServer) {
       return await summarizePause(s, state.reason, state.hitBreakpoints, state.data, state.callFrames, state.sessionId);
     },
   );
+}
+
+interface PauseRaceCandidate extends SessionSummary {
+  state: Session;
+}
+
+interface PauseRaceFailure {
+  candidate: PauseRaceCandidate;
+  error: unknown;
+}
+
+function livePauseCandidates(): PauseRaceCandidate[] {
+  const candidates: PauseRaceCandidate[] = [];
+  for (const summary of registry.list()) {
+    const state = registry.get(summary.session);
+    // Match requireSession's client-liveness sentinel. A switch_target socket
+    // swap can leave an active record temporarily clientless; it is not a
+    // usable race participant until the replacement client is installed.
+    if (state?.client) candidates.push({ ...summary, state });
+  }
+  return candidates;
+}
+
+async function waitForAnyPause(
+  timeoutMs: number,
+): Promise<{ candidate: PauseRaceCandidate; state: PauseState }> {
+  const candidates = livePauseCandidates();
+  if (candidates.length === 0) throw noSession();
+
+  const handles: PauseWaitHandle[] = [];
+  const attempts = candidates.map((candidate) => {
+    const handle = candidate.state.pause.waitForPauseCancellable(timeoutMs);
+    handles.push(handle);
+    return handle.promise.then(
+      (state) => ({ candidate, state }),
+      (error) => Promise.reject({ candidate, error } satisfies PauseRaceFailure),
+    );
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch (error) {
+    if (!(error instanceof AggregateError)) throw error;
+    const failures = error.errors as PauseRaceFailure[];
+    const surviving = failures.filter(
+      (failure) => !(failure.error instanceof PauseTrackerClosedError),
+    );
+    // Closing one target removes that participant without failing the race.
+    // If every participant closes, there is no target left to wait on.
+    if (surviving.length === 0) throw noSession();
+
+    if (candidates.length === 1) {
+      const only = surviving[0]!;
+      throw enrichPauseTimeout(only.candidate.state, only.error, timeoutMs);
+    }
+
+    const diagnosticBlocks: string[] = [];
+    for (const failure of surviving) {
+      const enriched = enrichPauseTimeout(
+        failure.candidate.state,
+        failure.error,
+        timeoutMs,
+      );
+      if (enriched === failure.error) throw enriched;
+      const detail = enriched.message.split("\n").slice(1).join("\n").trim();
+      if (detail) {
+        const label =
+          failure.candidate.label === null
+            ? ""
+            : `, label ${JSON.stringify(failure.candidate.label)}`;
+        diagnosticBlocks.push(
+          `Session ${failure.candidate.session} (${failure.candidate.kind}${label}):\n${detail}`,
+        );
+      }
+    }
+
+    const message = [
+      `Timed out after ${timeoutMs}ms waiting for pause in any live session.`,
+      ...diagnosticBlocks,
+    ].join("\n");
+    throw new ToolError("pause_timeout", message);
+  } finally {
+    // Winner included: its handle is already settled, so cancel() is a no-op.
+    // Every loser is removed synchronously and its timer is cleared before the
+    // tool begins the (potentially source-map-waiting) pause-summary work.
+    for (const handle of handles) handle.cancel();
+  }
 }
 
 // Turn a bare wait_for_pause timeout into an actionable diagnosis. Reads live
@@ -180,8 +323,9 @@ export function enrichPauseTimeout(
 async function stepThen(
   send: (s: ReturnType<typeof requirePaused>, sessionId: string | undefined) => Promise<unknown>,
   timeoutMs?: number,
+  session?: string,
 ) {
-  const s = requirePaused();
+  const s = requirePaused(session);
   // Capture the paused session BEFORE marking resumed — pauseState is cleared
   // by onResumed and we still need the sessionId to route the step command.
   const sid = s.pause.current()!.sessionId;

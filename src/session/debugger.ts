@@ -1,6 +1,6 @@
 import type CDP from "chrome-remote-interface";
 import type { Protocol } from "devtools-protocol";
-import { sessionState, registerHandler, type Session } from "./state.js";
+import { registerHandler, type Session } from "./state.js";
 import { buildScriptParsedHandler } from "../sourcemap/loader.js";
 import { mapCdpToOriginal } from "../sourcemap/store.js";
 import { previewRemoteObject } from "../util/format.js";
@@ -11,6 +11,7 @@ import { log } from "../util/log.js";
 // domains. Browser-specific concerns (Page/DOM/Network enable + network
 // ring-buffer wiring) stay in src/session/browser.ts.
 export async function connectDebugger(
+  session: Session,
   client: CDP.Client,
   sessionId: string | undefined,
 ): Promise<void> {
@@ -20,19 +21,19 @@ export async function connectDebugger(
   const own = (eventSessionId: string | undefined) => eventSessionId === sessionId;
 
   registerHandler(
-    sessionState,
+    session,
     client,
     sessionId,
     "Debugger.scriptParsed",
-    buildScriptParsedHandler(sessionState, sessionId),
+    buildScriptParsedHandler(session, sessionId),
   );
 
-  registerHandler(sessionState, client, sessionId, "Debugger.paused", (
+  registerHandler(session, client, sessionId, "Debugger.paused", (
     params: Protocol.Debugger.PausedEvent,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
-    sessionState.pause.onPaused({
+    session.pause.onPaused({
       // Node emits non-Chromium reason strings (empirically "Break on start"
       // for --inspect-brk); keep this as the raw string and let callers
       // drive off hitBreakpoints, not reason.
@@ -47,28 +48,28 @@ export async function connectDebugger(
     log.debug("paused", { reason: params.reason, hit: params.hitBreakpoints });
   });
 
-  registerHandler(sessionState, client, sessionId, "Debugger.resumed", (
+  registerHandler(session, client, sessionId, "Debugger.resumed", (
     _p: unknown,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
-    sessionState.pause.onResumed();
+    session.pause.onResumed();
   });
 
-  registerHandler(sessionState, client, sessionId, "Runtime.consoleAPICalled", (
+  registerHandler(session, client, sessionId, "Runtime.consoleAPICalled", (
     params: Protocol.Runtime.ConsoleAPICalledEvent,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
-    pushConsoleFromApi(sessionState, params, eventSessionId);
+    pushConsoleFromApi(session, params, eventSessionId);
   });
 
-  registerHandler(sessionState, client, sessionId, "Runtime.exceptionThrown", (
+  registerHandler(session, client, sessionId, "Runtime.exceptionThrown", (
     params: Protocol.Runtime.ExceptionThrownEvent,
     eventSessionId?: string,
   ) => {
     if (!own(eventSessionId)) return;
-    pushConsoleFromException(sessionState, params, eventSessionId);
+    pushConsoleFromException(session, params, eventSessionId);
   });
 
   // Runtime + Debugger are the load-bearing common denominator for both

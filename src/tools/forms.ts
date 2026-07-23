@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { requireSession, requireCapable } from "../session/state.js";
+import { requireSession, requireCapable, type Session } from "../session/state.js";
 import { ToolError } from "../util/errors.js";
 import { registerJsonTool } from "./_register.js";
 import { locatorShape, type LocatorSpec } from "../locator.js";
@@ -9,6 +9,12 @@ import {
   locatorHelpersScript,
   mutationHelpersScript,
 } from "./_locator_runtime.js";
+import {
+  childSessionIdSchema,
+  sessionSchema,
+  withChildSessionDisambiguation,
+  type SessionInput,
+} from "./_session_input.js";
 
 /**
  * Form-driving tools (issue #12 items 1, 2, 3, 6). Each LocatorSpec-driven tool
@@ -20,7 +26,9 @@ export function registerFormTools(server: McpServer) {
   registerJsonTool(
     server,
     "select_option",
-    "Set the value of a native <select> located by LocatorSpec. Match options by option_value, option_label, and/or option_index (named distinctly from the locator's own fields). Dispatches input + change. For <select multiple>, pass multiple:true to select every match. Returns status:\"selected\" with the resolved option(s).",
+    withChildSessionDisambiguation(
+      "Set the value of a native <select> located by LocatorSpec. Match options by option_value, option_label, and/or option_index (named distinctly from the locator's own fields). Dispatches input + change. For <select multiple>, pass multiple:true to select every match. Returns status:\"selected\" with the resolved option(s).",
+    ),
     {
       ...locatorShape,
       option_value: z
@@ -36,10 +44,11 @@ export function registerFormTools(server: McpServer) {
         .optional()
         .describe("Zero-based option index(es) to select."),
       multiple: z.boolean().optional().describe("Select every match in a <select multiple> (default false: first match only)."),
-      session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
     async (input: SelectOptionInput) => {
-      const s = requireSession();
+      const s = requireSession(input.session);
       requireCapable(s, "select_option");
       const values = toArray(input.option_value);
       const labels = toArray(input.option_label);
@@ -84,7 +93,7 @@ export function registerFormTools(server: McpServer) {
         fireEvents(el, ["input", "change"]);
         return { ok: true, selected, multiple: el.multiple, count };
       `;
-      const v = await runMutation(locator, body, input.session_id);
+      const v = await runMutation(s, locator, body, input.session_id);
       if (!v.ok) throw new ToolError(v.code ?? "not_found", v.error ?? "select_option failed");
       return { status: "selected", selected: v.selected, multiple: v.multiple, count: v.count };
     },
@@ -96,14 +105,17 @@ export function registerFormTools(server: McpServer) {
   registerJsonTool(
     server,
     "fill",
-    "Set an input, textarea, or contenteditable element (located by LocatorSpec) to exactly the given value, replacing any existing contents. Dispatches input + change. Use this (not type_text) when you need the field to end up equal to a specific value.",
+    withChildSessionDisambiguation(
+      "Set an input, textarea, or contenteditable element (located by LocatorSpec) to exactly the given value, replacing any existing contents. Dispatches input + change. Use this (not type_text) when you need the field to end up equal to a specific value.",
+    ),
     {
       ...locatorShape,
       value: z.string().describe("The exact value the field should contain afterwards (replaces existing contents)."),
-      session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
-    async (input: LocatorSpec & { value: string; session_id?: string }) => {
-      const s = requireSession();
+    async (input: LocatorSpec & { value: string; session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "fill");
       const locator = normalizeLocator(input);
       const body = String.raw`
@@ -128,7 +140,7 @@ export function registerFormTools(server: McpServer) {
         fireEvents(el, ["input", "change"]);
         return { ok: true, tag: el.tagName.toLowerCase(), count };
       `;
-      const v = await runMutation(locator, body, input.session_id);
+      const v = await runMutation(s, locator, body, input.session_id);
       if (!v.ok) throw new ToolError(v.code ?? "not_found", v.error ?? "fill failed");
       return { status: "filled", value_length: input.value.length, tag: v.tag, count: v.count };
     },
@@ -137,14 +149,17 @@ export function registerFormTools(server: McpServer) {
   registerJsonTool(
     server,
     "suggest_locator",
-    "Given a starting element (by node_id or CSS selector), return ranked LocatorSpec candidates (role+name → text → test-id → label → placeholder → name → CSS fallback), each annotated with how many elements it currently matches (1 = unambiguous) and whether it resolves back to the target. Useful for validating/normalising a locator before driving with it.",
+    withChildSessionDisambiguation(
+      "Given a starting element (by node_id or CSS selector), return ranked LocatorSpec candidates (role+name → text → test-id → label → placeholder → name → CSS fallback), each annotated with how many elements it currently matches (1 = unambiguous) and whether it resolves back to the target. Useful for validating/normalising a locator before driving with it.",
+    ),
     {
       node_id: z.number().int().positive().optional().describe("DOM nodeId from query_selector/locate."),
       selector: z.string().optional().describe("CSS selector for the starting element (alternative to node_id)."),
-      session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page."),
+      session_id: childSessionIdSchema,
+      session: sessionSchema,
     },
-    async (input: { node_id?: number; selector?: string; session_id?: string }) => {
-      const s = requireSession();
+    async (input: { node_id?: number; selector?: string; session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "suggest_locator");
       if (input.node_id === undefined && !input.selector) {
         throw new ToolError("missing_arg", "node_id or selector required");
@@ -162,10 +177,10 @@ export function registerFormTools(server: McpServer) {
           if (!el) return { ok: false, error: "no element matches selector", code: "not_found" };
           return suggest(el);
         })()`;
-        const res = await s.client!.send("Runtime.evaluate", { expression, returnByValue: true }, input.session_id);
+        const res = await s.client!.send("Runtime.evaluate", { expression, returnByValue: true }, input.session_id ?? undefined);
         value = res.result.value as SuggestResult;
       } else {
-        const resolved = await s.client!.send("DOM.resolveNode", { nodeId: input.node_id }, input.session_id);
+        const resolved = await s.client!.send("DOM.resolveNode", { nodeId: input.node_id }, input.session_id ?? undefined);
         const objectId = resolved.object?.objectId;
         if (!objectId) throw new ToolError("not_found", `could not resolve node ${input.node_id}`);
         const functionDeclaration = `function() {
@@ -175,7 +190,7 @@ export function registerFormTools(server: McpServer) {
         const res = await s.client!.send(
           "Runtime.callFunctionOn",
           { objectId, functionDeclaration, returnByValue: true },
-          input.session_id,
+          input.session_id ?? undefined,
         );
         value = res.result.value as SuggestResult;
       }
@@ -185,12 +200,12 @@ export function registerFormTools(server: McpServer) {
   );
 }
 
-interface SelectOptionInput extends LocatorSpec {
+interface SelectOptionInput extends LocatorSpec, SessionInput {
   option_value?: string | string[];
   option_label?: string | string[];
   option_index?: number | number[];
   multiple?: boolean;
-  session_id?: string;
+  session_id?: string | null;
 }
 
 interface MutationResult {
@@ -219,8 +234,12 @@ function toArray<T>(x: T | T[] | undefined): T[] {
  * matches), and `fireEvents(el, types)` in scope, and must `return` a
  * `{ ok, ... }` object (with an optional `code` on failure).
  */
-async function runMutation(locator: LocatorSpec, body: string, sessionId?: string): Promise<MutationResult> {
-  const s = requireSession();
+async function runMutation(
+  s: Session,
+  locator: LocatorSpec,
+  body: string,
+  sessionId?: string | null,
+): Promise<MutationResult> {
   const expression = `(() => {
     const spec = ${JSON.stringify(locator)};
     ${locatorHelpersScript()}${mutationHelpersScript()}
@@ -230,7 +249,7 @@ async function runMutation(locator: LocatorSpec, body: string, sessionId?: strin
     const count = resolved.count;
     ${body}
   })()`;
-  const res = await s.client!.send("Runtime.evaluate", { expression, returnByValue: true }, sessionId);
+  const res = await s.client!.send("Runtime.evaluate", { expression, returnByValue: true }, sessionId ?? undefined);
   return res.result.value as MutationResult;
 }
 
@@ -243,10 +262,10 @@ function registerToggle(server: McpServer, name: "check" | "uncheck") {
   registerJsonTool(
     server,
     name,
-    description,
-    { ...locatorShape, session_id: z.string().optional().describe("Target a worker/iframe session; omit for the root page.") },
-    async (input: LocatorSpec & { session_id?: string }) => {
-      const s = requireSession();
+    withChildSessionDisambiguation(description),
+    { ...locatorShape, session_id: childSessionIdSchema, session: sessionSchema },
+    async (input: LocatorSpec & { session_id?: string | null } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, name);
       const locator = normalizeLocator(input);
       const body = String.raw`
@@ -257,7 +276,7 @@ function registerToggle(server: McpServer, name: "check" | "uncheck") {
         fireEvents(el, ["input", "change"]);
         return { ok: true, changed: true, checked: el.checked, count };
       `;
-      const v = await runMutation(locator, body, input.session_id);
+      const v = await runMutation(s, locator, body, input.session_id);
       if (!v.ok) throw new ToolError(v.code ?? "not_found", v.error ?? `${name} failed`);
       const status = wantChecked
         ? v.changed

@@ -172,7 +172,7 @@ export async function spawnMcpServer(opts: SpawnOpts = {}): Promise<McpSubproces
 
 /** Convert MCP tool definitions to Anthropic's tools shape + tag the
  *  LAST entry with cache_control so the full tool catalog (~5K tokens
- *  measured on lynceus's current 52 tools — was estimated at ~40K but
+ *  measured on lynceus's current 54 tools — was estimated at ~40K but
  *  measured from a real trace) hits the cache on every trial after the
  *  first. Comfortably above Anthropic's ~1024-token cache breakpoint
  *  minimum, so this marker IS effective even when paired with a short

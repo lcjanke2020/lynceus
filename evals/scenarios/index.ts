@@ -33,6 +33,8 @@ import { nodeComputeStep } from "./node-compute-step.js";
 import { nodeStdioBug } from "./node-stdio-bug.js";
 import { nodeConditionalBp } from "./node-conditional-bp.js";
 import { nodeUncaughtThrow } from "./node-uncaught-throw.js";
+// First concurrent browser + Node L4 scenario.
+import { fullstackCart } from "./fullstack-cart.js";
 
 export const SCENARIOS: Record<string, Scenario> = {
   [computeStep.name]: computeStep,
@@ -55,6 +57,8 @@ export const SCENARIOS: Record<string, Scenario> = {
   [nodeStdioBug.name]: nodeStdioBug,
   [nodeConditionalBp.name]: nodeConditionalBp,
   [nodeUncaughtThrow.name]: nodeUncaughtThrow,
+  // Dual-target L4 scenario.
+  [fullstackCart.name]: fullstackCart,
 };
 
 export function lookupScenario(name: string): Scenario {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSession } from "../session/state.js";
 import { truncate } from "../util/format.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 const LEVELS = ["log", "info", "warn", "error", "debug", "trace", "verbose"] as const;
 
@@ -16,9 +17,10 @@ export function registerConsoleTools(server: McpServer) {
       level: z.enum(LEVELS).optional(),
       search: z.string().optional().describe("Substring filter on message text"),
       limit: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { since?: number; level?: typeof LEVELS[number]; search?: string; limit?: number }) => {
-      const s = requireSession();
+    async (input: { since?: number; level?: typeof LEVELS[number]; search?: string; limit?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       const search = input.search?.toLowerCase();
       const items = s.console.query({
         since: input.since ?? 0,
@@ -51,9 +53,9 @@ export function registerConsoleTools(server: McpServer) {
     server,
     "clear_console",
     "Clear the buffered console stream (does not clear the browser's own console).",
-    undefined,
-    async () => {
-      const s = requireSession();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requireSession(input.session);
       s.console.clear();
       return "cleared";
     },

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Protocol } from "devtools-protocol";
 import { requireSession, requireCapable } from "../session/state.js";
 import { registerJsonTool } from "./_register.js";
+import { sessionSchema, type SessionInput } from "./_session_input.js";
 
 type WaitMode = "load" | "domcontentloaded" | "networkidle" | "none";
 
@@ -16,9 +17,10 @@ export function registerNavTools(server: McpServer) {
       wait: z.enum(["load", "domcontentloaded", "networkidle", "none"]).optional()
         .describe("Default: load"),
       timeout_ms: z.number().int().positive().optional(),
+      session: sessionSchema,
     },
-    async (input: { url: string; wait?: WaitMode; timeout_ms?: number }) => {
-      const s = requireSession();
+    async (input: { url: string; wait?: WaitMode; timeout_ms?: number } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "navigate");
       const wait = input.wait ?? "load";
       const timeout = input.timeout_ms ?? 30000;
@@ -26,6 +28,7 @@ export function registerNavTools(server: McpServer) {
       await s.client!.send("Page.navigate", { url: input.url });
       await loadPromise;
       const { frameTree } = await s.client!.send("Page.getFrameTree");
+      s.url = frameTree.frame.url || null; // keep list_sessions' url current across navigations (null, never "")
       return { url: frameTree.frame.url, wait };
     },
   );
@@ -34,9 +37,9 @@ export function registerNavTools(server: McpServer) {
     server,
     "reload",
     "Reload the active page.",
-    { hard: z.boolean().optional().describe("Bypass cache") },
-    async (input: { hard?: boolean }) => {
-      const s = requireSession();
+    { hard: z.boolean().optional().describe("Bypass cache"), session: sessionSchema },
+    async (input: { hard?: boolean } & SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "reload");
       await s.client!.send("Page.reload", { ignoreCache: !!input.hard });
       return "reloaded";
@@ -47,9 +50,9 @@ export function registerNavTools(server: McpServer) {
     server,
     "get_url",
     "Return the current top-frame URL.",
-    undefined,
-    async () => {
-      const s = requireSession();
+    { session: sessionSchema },
+    async (input: SessionInput) => {
+      const s = requireSession(input.session);
       requireCapable(s, "get_url");
       const { frameTree } = await s.client!.send("Page.getFrameTree");
       return { url: frameTree.frame.url };
@@ -154,4 +157,3 @@ function waitForLoad(
     }
   });
 }
-

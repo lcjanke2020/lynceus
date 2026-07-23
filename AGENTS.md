@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**Last updated: 2026-07-06**
+**Last updated: 2026-07-20**
 
 Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropped into this repo. Read this end-to-end before doing anything else.
 
 ## What this project is
 
-`lynceus` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 52 tools across 12 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console, buffered network, structured DOM driving, form driving, session-portability (cookies + storage state), and Node-process output. Both **browser** (Chrome / Chromium) and **Node.js Inspector** sessions are first-class via `launch_chrome` / `attach_chrome` and `launch_node` / `attach_node`; the Runtime + Debugger surface is shared across both, and browser-only / Node-only tools gate via the `unsupported_target` envelope. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
+`lynceus` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 54 tools across 13 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console, buffered network, structured DOM driving, form driving, session-portability (cookies + storage state), Node-process output, and the merged cross-session timeline. Both **browser** (Chrome / Chromium) and **Node.js Inspector** sessions are first-class via `launch_chrome` / `attach_chrome` and `launch_node` / `attach_node`; the Runtime + Debugger surface is shared across both, and browser-only / Node-only tools gate via the `unsupported_target` envelope. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
 
 ## Read first
 
@@ -33,9 +33,10 @@ The L1 → L4 test pyramid is in place and the L4 agent-eval harness is multi-ve
 | A test fails on macOS/Windows but passes on Linux | [docs/known-chromium-gaps.md](./docs/known-chromium-gaps.md) |
 | Original design rationale + post-implementation discoveries | [docs/design-notes.md](./docs/design-notes.md) |
 | Node.js Inspector session-mode design (`SessionState.kind`, module split, capability gating) | [docs/node-session-design.md](./docs/node-session-design.md) |
+| Concurrent browser + Node session design (`session` addressing, `SessionRegistry`, merged timelines) | [docs/dual-target-debugging.md](./docs/dual-target-debugging.md) |
 | L3 e2e + L4 eval coverage shape for Node sessions | [docs/node-test-coverage-proposal.md](./docs/node-test-coverage-proposal.md) |
 | React DevTools bridge (RDT-1..6: injection recipe, `operations` decoding, support floor, tool surface) | [docs/react-devtools-design.md](./docs/react-devtools-design.md) |
-| `examples/sample-node-app/` — shared Node fixture (5 runnable entries — `index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp` — plus the shared helper `handlers.ts`) | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) |
+| `examples/sample-node-app/` — shared Node fixture (6 runnable entries — `index`, `compute-step`, `throw`, `stdio-bug`, `conditional-bp`, `fullstack-api` — plus the shared helper `handlers.ts`) | [examples/sample-node-app/README.md](./examples/sample-node-app/README.md) |
 
 ## Eval run storage
 
