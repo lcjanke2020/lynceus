@@ -2,7 +2,13 @@ import type CDP from "chrome-remote-interface";
 import type { LaunchedChrome } from "chrome-launcher";
 import type { ChildProcess } from "node:child_process";
 import { PauseTracker } from "./pause.js";
-import { RingBuffer, type ConsoleEntry, type NetworkEntry, type NodeOutputEntry } from "./buffers.js";
+import {
+  RingBuffer,
+  type ConsoleEntry,
+  type NetworkEntry,
+  type NodeOutputEntry,
+  type ReactBridgeEvent,
+} from "./buffers.js";
 import { ScriptStore } from "../sourcemap/store.js";
 import { log } from "../util/log.js";
 import {
@@ -10,6 +16,7 @@ import {
   ambiguousSession,
   duplicateLabel,
   noSession,
+  noReactBridge,
   notPaused,
   unknownSession,
   unsupportedTarget,
@@ -67,6 +74,48 @@ export interface PreDocumentScriptRecord {
 
 export type HandlerEntry = { event: string; handler: (...args: any[]) => void };
 
+export interface RuntimeExecutionContextRecord {
+  id: number;
+  sessionId?: string;
+  frameId?: string;
+  isDefault: boolean;
+}
+
+export interface ReactBridgeState {
+  readonly framework: "react";
+  readonly bindingName: "__lynceusReact__";
+  readonly generation: number;
+  status: "attaching" | "attached";
+  // Main-document generation. Incremented only when Page.frameNavigated
+  // reports a different loader id; bfcache restores retain the generation.
+  documentGeneration: number;
+  loaderId: string | null;
+  sentinelSeen: boolean;
+  operationsSeen: boolean;
+  readinessArmed: boolean;
+  // Attachment evaluates the backend in the current document before forcing
+  // a reload. Async binding events from that old document must not satisfy
+  // readiness for the replacement document.
+  minimumAcceptedDocumentGeneration: number;
+  readonly bindingInstallations: Set<string>;
+  readonly pendingBindingInstallations: Map<string, Promise<void>>;
+  bootstrapScriptId?: string;
+  backendScriptId?: string;
+  eventHandler?: (...args: any[]) => void;
+  attachPromise?: Promise<ReactBridgeAttachResult>;
+  cleanup?: () => Promise<void>;
+  resolveReady: () => void;
+  readonly readyPromise: Promise<void>;
+}
+
+export interface ReactBridgeAttachResult {
+  framework: "react";
+  status: "attached" | "already-attached";
+  generation: number;
+  backend_version: string;
+  events_buffered: number;
+}
+
 // User-facing concept: what kind of debugging context the session represents.
 // Matches the "requires a browser session" phrasing in unsupportedTarget().
 // (A future non-Chromium engine would stay "browser" — the OwnedProcess.kind
@@ -112,6 +161,7 @@ class SessionState {
   // Populated by launch_node; attach_node leaves it empty (we never see the
   // process stdio in attach mode). Exposed via the get_node_output tool.
   readonly nodeOutput: RingBuffer<NodeOutputEntry>;
+  readonly reactEvents: RingBuffer<ReactBridgeEvent>;
   // Cross-session guard. Bumped on every `reset()`. Output-capture
   // listeners snapshot this at attach time and silently no-op if it has
   // moved on, so stale 'close' / 'data' events from a dead child can't
@@ -120,6 +170,20 @@ class SessionState {
   // listeners attached on the dying child, and (2) `close_session`'s
   // reset can run before the child's 'close' event drains.
   ownedProcessGeneration = 0;
+  // Attachment epoch for framework bridge callbacks. Bumped on attach,
+  // detach, and full session reset so late Runtime.bindingCalled events from
+  // an old page/backend can never enter a later bridge instance.
+  reactBridgeGeneration = 0;
+  reactBridge: ReactBridgeState | null = null;
+  // Browser root-frame provenance. The loader id is the new-document signal;
+  // a repeated id (not merely a repeated frameNavigated event) is a bfcache
+  // restore and must not wipe React's materialized state.
+  mainFrameId: string | null = null;
+  mainFrameLoaderId: string | null = null;
+  // Runtime context ids are scoped to a flat CDP agent, so use a compound
+  // key. React v1 accepts only the root agent's default context for the
+  // current main frame; same-process iframe events otherwise look root-owned.
+  readonly executionContexts = new Map<string, RuntimeExecutionContextRecord>();
   readonly scripts = new ScriptStore();
   readonly breakpoints = new Map<string, BreakpointRecord>();
   // Per-session handler refs so we can removeListener on Target.detachedFromTarget.
@@ -139,17 +203,78 @@ class SessionState {
 
   constructor(allocateSeq: () => number) {
     // One registry-global allocator feeds every buffer on every session. The
-    // per-buffer streams therefore stay monotonic but become sparse, while a
-    // single cursor can order console, network, and Node-output events across
-    // the browser/Node boundary (dual-target design §7).
+    // per-buffer streams therefore stay monotonic but become sparse. The
+    // public timeline cursor orders console, network, and Node-output events
+    // across the browser/Node boundary; React operations use the same clock
+    // internally for later framework projections (dual-target design §7).
     this.console = new RingBuffer<ConsoleEntry>(1000, allocateSeq);
     this.network = new RingBuffer<NetworkEntry>(1000, allocateSeq);
     this.nodeOutput = new RingBuffer<NodeOutputEntry>(1000, allocateSeq);
+    this.reactEvents = new RingBuffer<ReactBridgeEvent>(1000, allocateSeq);
   }
 
   nextBpId(): string {
     this.bpCounter += 1;
     return `bp_${this.bpCounter}`;
+  }
+
+  nextReactBridgeGeneration(): number {
+    this.reactBridgeGeneration += 1;
+    return this.reactBridgeGeneration;
+  }
+
+  clearReactBridge(): void {
+    this.reactBridge = null;
+    this.reactEvents.clear();
+    this.reactBridgeGeneration += 1;
+  }
+
+  noteMainFrame(frameId: string, loaderId: string | undefined): void {
+    const nextLoader = loaderId || null;
+    const loaderChanged =
+      this.mainFrameLoaderId !== null &&
+      nextLoader !== null &&
+      this.mainFrameLoaderId !== nextLoader;
+    this.mainFrameId = frameId;
+    this.mainFrameLoaderId = nextLoader;
+
+    const bridge = this.reactBridge;
+    if (!bridge) return;
+    if (bridge.loaderId === null) {
+      bridge.loaderId = nextLoader;
+      return;
+    }
+    if (!loaderChanged) return;
+
+    bridge.loaderId = nextLoader;
+    bridge.documentGeneration += 1;
+    bridge.sentinelSeen = false;
+    bridge.operationsSeen = false;
+    this.reactEvents.clear();
+  }
+
+  recordExecutionContext(
+    sessionId: string | undefined,
+    context: RuntimeExecutionContextRecord,
+  ): void {
+    this.executionContexts.set(executionContextKey(sessionId, context.id), context);
+  }
+
+  removeExecutionContext(sessionId: string | undefined, contextId: number): void {
+    this.executionContexts.delete(executionContextKey(sessionId, contextId));
+  }
+
+  clearExecutionContexts(sessionId: string | undefined): void {
+    const prefix = `${sessionId ?? ROOT_SESSION_KEY}:`;
+    for (const key of this.executionContexts.keys()) {
+      if (key.startsWith(prefix)) this.executionContexts.delete(key);
+    }
+  }
+
+  isMainExecutionContext(sessionId: string | undefined, contextId: number): boolean {
+    if (sessionId !== undefined || this.mainFrameId === null) return false;
+    const context = this.executionContexts.get(executionContextKey(sessionId, contextId));
+    return !!context && context.isDefault && context.frameId === this.mainFrameId;
   }
 
   reset() {
@@ -162,20 +287,26 @@ class SessionState {
     this.currentTargetId = null;
     this.currentSessionId = undefined;
     this.url = null;
+    this.mainFrameId = null;
+    this.mainFrameLoaderId = null;
     this.pause.reset();
     this.console.clear();
     this.network.clear();
     this.nodeOutput.clear();
+    this.reactEvents.clear();
     this.scripts.clear();
     this.breakpoints.clear();
     this.sessionHandlers.clear();
     this.preDocumentScripts.clear();
+    this.executionContexts.clear();
+    this.reactBridge = null;
     this.pauseOnExceptions = "none";
     this.bpCounter = 0;
     // Bump LAST so any listener that snapshots `ownedProcessGeneration`
     // before reset() sees the new value once they next push, regardless
     // of whether they were mid-flight when reset ran.
     this.ownedProcessGeneration += 1;
+    this.reactBridgeGeneration += 1;
   }
 
   async close(): Promise<void> {
@@ -187,6 +318,18 @@ class SessionState {
     // stale callback during teardown.
     this.pause.reset();
     try {
+      // An attached browser may be externally owned. Unsubscribe framework
+      // code and remove target-level registrations before closing our CDP
+      // socket so close_session does not leave an active backend in the page.
+      if (this.reactBridge?.cleanup) {
+        try {
+          await this.reactBridge.cleanup();
+        } catch (e) {
+          log.warn("failed to clean up framework bridge while closing session", {
+            error: String(e),
+          });
+        }
+      }
       if (this.client) {
         try {
           await this.client.close();
@@ -648,6 +791,19 @@ export function requirePaused(session?: SessionId): SessionState {
   return s;
 }
 
+export function requireReactBridge(s: SessionState): ReactBridgeState {
+  const bridge = s.reactBridge;
+  if (
+    !bridge ||
+    bridge.status !== "attached" ||
+    !bridge.sentinelSeen ||
+    !bridge.operationsSeen
+  ) {
+    throw noReactBridge();
+  }
+  return bridge;
+}
+
 // Throws unsupported_target if the active session's kind isn't in the tool's
 // capability set. Permissive when the tool isn't listed — the table began with
 // only the select_target entry (self-protection during the state refactor) and
@@ -675,6 +831,26 @@ export function registerHandler(
   const list = s.sessionHandlers.get(key) ?? [];
   list.push({ event, handler });
   s.sessionHandlers.set(key, list);
+}
+
+export function unregisterHandler(
+  s: SessionState,
+  client: CDP.Client,
+  sessionId: string | undefined,
+  event: string,
+  handler: (...args: any[]) => void,
+): void {
+  (client as unknown as { removeListener: (e: string, h: Function) => void }).removeListener(event, handler);
+  const key = sessionId ?? ROOT_SESSION_KEY;
+  const list = s.sessionHandlers.get(key);
+  if (!list) return;
+  const next = list.filter((entry) => entry.event !== event || entry.handler !== handler);
+  if (next.length === 0) s.sessionHandlers.delete(key);
+  else s.sessionHandlers.set(key, next);
+}
+
+function executionContextKey(sessionId: string | undefined, contextId: number): string {
+  return `${sessionId ?? ROOT_SESSION_KEY}:${contextId}`;
 }
 
 export type Session = SessionState;

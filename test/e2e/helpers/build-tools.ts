@@ -21,6 +21,7 @@ import { registerFormTools } from "../../../src/tools/forms.js";
 import { registerStorageTools } from "../../../src/tools/storage.js";
 import { registerNodeOutputTools } from "../../../src/tools/node-output.js";
 import { registerTimelineTools } from "../../../src/tools/timeline.js";
+import { registerReactTools } from "../../../src/tools/react.js";
 
 export function buildToolMap(): Map<string, CapturedTool> {
   return captureTools((server: McpServer) => {
@@ -37,6 +38,7 @@ export function buildToolMap(): Map<string, CapturedTool> {
     registerStorageTools(server);
     registerNodeOutputTools(server);
     registerTimelineTools(server);
+    registerReactTools(server);
   });
 }
 

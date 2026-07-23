@@ -2,7 +2,7 @@
 
 **Last updated: 2026-07-20**
 
-All 54 MCP tools live here, one file per category (`node-output.ts` is the Node-only stdio buffer tool; `timeline.ts` merges all buffered event kinds). Every ordinary session-scoped tool accepts optional `session`; most resolve it through `requireSession(input.session)` (or `requirePaused(input.session)`), while `wait_for_pause` races all live targets when it is omitted and `get_timeline` additionally accepts the reserved value `"all"`. Among the lifecycle tools, `list_sessions` is unscoped and `close_session` addresses registry records directly. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
+All 56 MCP tools live here, one file per category (`react.ts` owns the opt-in React DevTools bridge; `node-output.ts` is the Node-only stdio buffer tool; `timeline.ts` merges all buffered event kinds). Every ordinary session-scoped tool accepts optional `session`; most resolve it through `requireSession(input.session)` (or `requirePaused(input.session)`), while `wait_for_pause` races all live targets when it is omitted and `get_timeline` additionally accepts the reserved value `"all"`. Among the lifecycle tools, `list_sessions` is unscoped and `close_session` addresses registry records directly. The standard error path is `{ isError: true, content: [{ text: '{"error":"<code>","message":"<msg>"}' }] }`.
 
 ## The `registerJsonTool` pattern
 
@@ -36,7 +36,7 @@ These names address different layers and can appear together on one tool call:
 | `session` | The debug target managed by lynceus | Kind-prefixed ids such as `browser_1` / `node_1`, returned by launch/attach and `list_sessions` | The only live session; omitted with two returns `ambiguous_session` |
 | `session_id` | A CDP flat child session inside the selected browser target | CDP-minted worker/iframe/OOPIF id from the originating tool response | `null` or omitted means the root CDP session |
 
-All 48 ordinary session-scoped tools—and `close_session`—accept `session`. Eleven tools additionally accept `session_id`: `get_object_properties`, `get_request_body`, `get_response_body`, `pause`, `get_source`, `get_script_source`, `select_option`, `fill`, `check`, `uncheck`, and `suggest_locator`. Their shared schema rejects a debug-target id such as `browser_1` in `session_id` and points the caller to `session`.
+All 50 ordinary session-scoped tools—and `close_session`—accept `session`. Eleven tools additionally accept `session_id`: `get_object_properties`, `get_request_body`, `get_response_body`, `pause`, `get_source`, `get_script_source`, `select_option`, `fill`, `check`, `uncheck`, and `suggest_locator`. Their shared schema rejects a debug-target id such as `browser_1` in `session_id` and points the caller to `session`.
 
 `registerJsonTool` catches every exception, maps `ToolError.code` to the `error` field, packs the result with `toolJson()` (objects) or `toolText()` (strings), and logs every error to stderr via `src/util/log.ts`. You don't need to handle errors yourself unless you have a special-case envelope.
 
@@ -60,9 +60,9 @@ Everything else (the `Runtime` / `Debugger` surface — breakpoints, execution s
 - **Buffered tools.** `get_console_logs`, `get_network_requests`, and `get_node_output` keep their per-session latest-N query semantics. `get_timeline` merges those retained buffers by registry-global `seq` and paginates forward (earliest rows after `since` first), so pass its returned `cursor` back with the same `session` and `event_types` selection to continue without skipping rows.
 - **Compact previews.** Use `previewRemoteObject()` and `truncate()` from `src/util/format.ts`. Lists capped at sensible defaults; bodies lazy-loaded via dedicated tools, never inlined in list responses.
 
-## Tool catalog (54 tools)
+## Tool catalog (56 tools)
 
-The **Kind** column reflects which session kind a tool is meaningful for. **Shared** = works on both browser and Node sessions (the Runtime + Debugger surface). **Browser** = only meaningful against a browser session — the 25 tools in `BROWSER_ONLY` (`src/session/capabilities.ts`, including `select_target`) return `error: "unsupported_target"` when called against a Node session, and `launch_chrome` / `attach_chrome` are session-startup tools listed Browser for the same affinity reason. **Node** = only meaningful against a Node session — `attach_node` / `launch_node` are session-startup, and `get_node_output` is in `NODE_ONLY` (returns `unsupported_target` on a browser session).
+The **Kind** column reflects which session kind a tool is meaningful for. **Shared** = works on both browser and Node sessions (the Runtime + Debugger surface). **Browser** = only meaningful against a browser session — the 27 tools in `BROWSER_ONLY` (`src/session/capabilities.ts`, including `select_target`) return `error: "unsupported_target"` when called against a Node session, and `launch_chrome` / `attach_chrome` are session-startup tools listed Browser for the same affinity reason. **Node** = only meaningful against a Node session — `attach_node` / `launch_node` are session-startup, and `get_node_output` is in `NODE_ONLY` (returns `unsupported_target` on a browser session).
 
 | File | Tool | Kind | One-line description |
 |---|---|---|---|
@@ -102,6 +102,8 @@ The **Kind** column reflects which session kind a tool is meaningful for. **Shar
 | | `get_response_body` | Browser | Lazy; safe ONLY when `finished:true` AND `failure` absent. Binary stays base64 (never UTF-8-corrupted, never truncated — truncate text only). |
 | `node-output.ts` | `get_node_output` | Node | Buffered stdout/stderr from a `launch_node`-owned Node child. Pull-based with `since` cursor (mirrors `get_console_logs`). Filter by `stream` (stdout/stderr) and `search`. Separate from `get_console_logs` — that's the V8 inspector's `Runtime.consoleAPICalled` stream; this is the OS-level pipe. Populated only on `launch_node` sessions; `attach_node` leaves it empty. |
 | `timeline.ts` | `get_timeline` | Shared | Merge console, network request-start, and Node-output rows by registry-global `seq`. `session: "all"` spans both targets; forward pagination applies `limit` after the merge and is lossless while the session/event filters stay unchanged. |
+| `react.ts` | `attach_react_devtools` | Browser | Opt in to the pinned React DevTools backend for the addressed main-frame React tree. Installs the CDP binding + pre-document bridge, reloads, and waits for the bootstrap sentinel plus first structural `operations` event. Idempotent after attachment. |
+| | `detach_react_devtools` | Browser | Unsubscribe the React backend; remove future-document scripts and binding registrations; clear bridge state and fence late events. Idempotent when already detached. |
 | `dom.ts` | `query_selector` | Browser | `nodeId` + preview. |
 | | `get_element_html` | Browser | Outer or inner HTML. |
 | | `locate` | Browser | Structured LocatorSpec search (CSS, text, role, test-id, label, placeholder, name). |

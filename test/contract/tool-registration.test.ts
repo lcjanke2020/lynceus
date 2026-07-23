@@ -48,6 +48,8 @@ const EXPECTED_TOOL_NAMES = [
   "get_node_output",
   // timeline
   "get_timeline",
+  // react
+  "attach_react_devtools", "detach_react_devtools",
 ];
 const EXPECTED_TOOL_COUNT = EXPECTED_TOOL_NAMES.length;
 
@@ -129,7 +131,7 @@ describe("tools/list", () => {
   it("every addressed tool exposes the debug-target session selector", async () => {
     const r = await client.listTools();
     const byName = new Map(r.tools.map((tool) => [tool.name, tool]));
-    expect(SESSION_ADDRESSED_TOOL_NAMES).toHaveLength(49); // 48 ordinary tools + close_session
+    expect(SESSION_ADDRESSED_TOOL_NAMES).toHaveLength(51); // 50 ordinary tools + close_session
     for (const name of SESSION_ADDRESSED_TOOL_NAMES) {
       const schema = byName.get(name)?.inputSchema as any;
       expect(schema?.properties?.session, `${name} is missing session`).toBeDefined();

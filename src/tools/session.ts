@@ -6,6 +6,7 @@ import { attachNode, launchNode } from "../session/node.js";
 import { requireSession, requireCapable, registry } from "../session/state.js";
 import { registerJsonTool } from "./_register.js";
 import { sessionSchema, type SessionInput } from "./_session_input.js";
+import { resolveFrameworkAdapter } from "../framework/adapter.js";
 
 // Shared across the four launch/attach tools. Labels are the human-facing
 // half of session addressing (design §3) — ids stay the only thing tools
@@ -203,6 +204,12 @@ export function registerSessionTools(server: McpServer) {
       const s = requireSession(input.session);
       requireCapable(s, "select_target");
       if (s.currentTargetId === input.id) return { id: input.id, status: "already-active" };
+      // A framework bridge is scoped to the concrete page target. Fully
+      // detach before replacing the CDP socket so the old page's backend is
+      // unsubscribed and its tracked scripts cannot replay onto the new page.
+      if (s.reactBridge) {
+        await resolveFrameworkAdapter(s.reactBridge.framework).detach(s);
+      }
       const r = await switchTarget(s, input.id);
       return { id: r.targetId, url: r.url, status: "switched" };
     },

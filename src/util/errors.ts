@@ -17,6 +17,12 @@ export const notPaused = () =>
     "Operation requires the debugger to be paused. Set a breakpoint and call wait_for_pause.",
   );
 
+export const noReactBridge = () =>
+  new ToolError(
+    "no_react_bridge",
+    "No ready React DevTools bridge is attached to this browser session. Call attach_react_devtools first and wait for status 'attached'.",
+  );
+
 // A live session as the recovery-oriented errors (ambiguous_session /
 // unknown_session) name it. Structurally a subset of SessionSummary
 // (src/session/state.ts) so a summary array passes without a cast; declared

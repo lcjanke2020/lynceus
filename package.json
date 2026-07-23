@@ -54,7 +54,7 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pretest:e2e": "node scripts/check-chromium-skips.mjs && npm run build && npm run sample:build && npm run sample-node:build",
+    "pretest:e2e": "node scripts/check-chromium-skips.mjs && npm run build && npm run sample:build && npm run sample-node:build && npm run sample-fullstack:build",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "sample:build": "npm ci --prefix examples/sample-app && npm run --prefix examples/sample-app build && npm run variants:build",
     "sample-node:build": "tsc -p examples/sample-node-app/tsconfig.json",
@@ -80,6 +80,7 @@
     "chrome-launcher": "^1.2.1",
     "chrome-remote-interface": "^0.34.0",
     "devtools-protocol": "^0.0.1628107",
+    "react-devtools-core": "7.0.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

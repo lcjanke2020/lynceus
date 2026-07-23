@@ -7,8 +7,8 @@ import { previewRemoteObject } from "../util/format.js";
 import { log } from "../util/log.js";
 
 // Target-agnostic debugger setup shared between browser and Node sessions.
-// Wires the five Runtime+Debugger event handlers and enables the two
-// domains. Browser-specific concerns (Page/DOM/Network enable + network
+// Wires the Runtime+Debugger event handlers and enables the two domains.
+// Browser-specific concerns (Page/DOM/Network enable + network
 // ring-buffer wiring) stay in src/session/browser.ts.
 export async function connectDebugger(
   session: Session,
@@ -54,6 +54,43 @@ export async function connectDebugger(
   ) => {
     if (!own(eventSessionId)) return;
     session.pause.onResumed();
+  });
+
+  // Runtime context ids are the missing coordinate for v1's main-frame-only
+  // React bridge. A same-process iframe emits Runtime.bindingCalled on the
+  // root flat session just like the top frame; auxData.frameId + isDefault is
+  // what lets the bridge reject it deterministically. Register before
+  // Runtime.enable because CDP replays existing contexts inline with enable.
+  registerHandler(session, client, sessionId, "Runtime.executionContextCreated", (
+    params: Protocol.Runtime.ExecutionContextCreatedEvent,
+    eventSessionId?: string,
+  ) => {
+    if (!own(eventSessionId)) return;
+    const aux = params.context.auxData as
+      | { frameId?: string; isDefault?: boolean }
+      | undefined;
+    session.recordExecutionContext(sessionId, {
+      id: params.context.id,
+      ...(sessionId ? { sessionId } : {}),
+      ...(aux?.frameId ? { frameId: aux.frameId } : {}),
+      isDefault: aux?.isDefault === true,
+    });
+  });
+
+  registerHandler(session, client, sessionId, "Runtime.executionContextDestroyed", (
+    params: Protocol.Runtime.ExecutionContextDestroyedEvent,
+    eventSessionId?: string,
+  ) => {
+    if (!own(eventSessionId)) return;
+    session.removeExecutionContext(sessionId, params.executionContextId);
+  });
+
+  registerHandler(session, client, sessionId, "Runtime.executionContextsCleared", (
+    _params: unknown,
+    eventSessionId?: string,
+  ) => {
+    if (!own(eventSessionId)) return;
+    session.clearExecutionContexts(sessionId);
   });
 
   registerHandler(session, client, sessionId, "Runtime.consoleAPICalled", (

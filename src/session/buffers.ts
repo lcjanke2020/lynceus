@@ -54,6 +54,20 @@ export interface NetworkEntry {
   // Bodies are NOT stored; fetch on demand via get_request_body/get_response_body.
 }
 
+// Raw message delivered by the embedded react-devtools-core backend. React's
+// `operations` payload is a structural patch stream; RDT-1 only buffers the
+// transport faithfully, while RDT-2 will consume those patches into a
+// server-materialized component tree. `generation` is the main-document
+// generation (loader-id changes only), not the debug-target session id.
+export interface ReactBridgeEvent {
+  seq: number;
+  ts: number;
+  generation: number;
+  event: string;
+  payload: unknown;
+  executionContextId: number;
+}
+
 export class RingBuffer<T extends { seq: number }> {
   private items: T[] = [];
   private nextSeq = 1;
