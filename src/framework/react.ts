@@ -46,7 +46,18 @@ export async function attachReactDevTools(
 ): Promise<FrameworkAttachResult> {
   const existing = s.reactBridge;
   if (existing) {
-    if (existing.attachPromise) await existing.attachPromise;
+    if (existing.status === "detaching") {
+      await existing.cleanupPromise;
+      return attachReactDevTools(s, opts);
+    }
+    if (existing.status === "attaching" && existing.attachPromise) {
+      await existing.attachPromise;
+      // A detach can win immediately after the original attach settles. Do
+      // not report already-attached for a bridge whose teardown is visible.
+      if (!isAttachedBridge(s, existing)) {
+        return attachReactDevTools(s, opts);
+      }
+    }
     return {
       framework: "react",
       status: "already-attached",
@@ -56,16 +67,28 @@ export async function attachReactDevTools(
     };
   }
 
+  const client = s.client;
+  if (!client) {
+    throw new ToolError("no_session", "Cannot attach React DevTools without an active CDP client.");
+  }
+
   const generation = s.nextReactBridgeGeneration();
   let resolveReady!: () => void;
   const readyPromise = new Promise<void>((resolve) => {
     resolveReady = resolve;
+  });
+  let resolveCancellation!: () => void;
+  const cancellationPromise = new Promise<void>((resolve) => {
+    resolveCancellation = resolve;
   });
   const bridge: ReactBridgeState = {
     framework: "react",
     bindingName: REACT_BINDING_NAME,
     generation,
     status: "attaching",
+    cancelled: false,
+    resolveCancellation,
+    cancellationPromise,
     documentGeneration: 0,
     loaderId: s.mainFrameLoaderId,
     sentinelSeen: false,
@@ -81,12 +104,6 @@ export async function attachReactDevTools(
   s.reactBridge = bridge;
   bridge.cleanup = () => cleanupReactBridge(s, bridge);
 
-  const client = s.client;
-  if (!client) {
-    s.clearReactBridge();
-    throw new ToolError("no_session", "Cannot attach React DevTools without an active CDP client.");
-  }
-
   const eventHandler = (
     params: Protocol.Runtime.BindingCalledEvent,
     eventSessionId?: string,
@@ -94,11 +111,13 @@ export async function attachReactDevTools(
   bridge.eventHandler = eventHandler;
   registerHandler(s, client, undefined, "Runtime.bindingCalled", eventHandler);
 
-  const attachPromise = performAttach(
+  const attachWorkPromise = performAttach(
     s,
     bridge,
     opts.timeoutMs ?? DEFAULT_ATTACH_TIMEOUT_MS,
-  ).catch(async (error) => {
+  );
+  bridge.attachWorkPromise = attachWorkPromise;
+  const attachPromise = attachWorkPromise.catch(async (error) => {
     await cleanupReactBridge(s, bridge);
     throw error;
   });
@@ -114,6 +133,7 @@ async function performAttach(
   const client = s.client!;
   if (s.mainFrameId === null) {
     const { frameTree } = await client.Page.getFrameTree();
+    assertCurrentBridge(s, bridge);
     s.noteMainFrame(frameTree.frame.id, frameTree.frame.loaderId);
     bridge.loaderId = s.mainFrameLoaderId;
   }
@@ -123,9 +143,13 @@ async function performAttach(
 
   const bootstrap = buildReactBootstrap(bridge.generation);
   const backend = getReactBackendSource();
-  const bootstrapRecord = await addPreDocumentScript(s, { source: bootstrap });
+  const bootstrapRecord = await addBridgePreDocumentScript(
+    s,
+    bridge,
+    bootstrap,
+  );
   bridge.bootstrapScriptId = bootstrapRecord.id;
-  const backendRecord = await addPreDocumentScript(s, { source: backend });
+  const backendRecord = await addBridgePreDocumentScript(s, bridge, backend);
   bridge.backendScriptId = backendRecord.id;
   assertCurrentBridge(s, bridge);
 
@@ -133,10 +157,13 @@ async function performAttach(
   // document for same-document reattach, inject the backend, then reload so
   // the same two tracked scripts run before React in the replacement document.
   await evaluateOrThrow(client, bootstrap, "React bridge bootstrap");
+  assertCurrentBridge(s, bridge);
   await evaluateOrThrow(client, backend, "React DevTools backend");
+  assertCurrentBridge(s, bridge);
   bridge.minimumAcceptedDocumentGeneration = bridge.documentGeneration + 1;
   bridge.readinessArmed = true;
   await client.Page.reload({ ignoreCache: false });
+  assertCurrentBridge(s, bridge);
   await waitForReady(bridge, timeoutMs);
   assertCurrentBridge(s, bridge);
   bridge.status = "attached";
@@ -162,13 +189,46 @@ export async function detachReactDevTools(s: Session): Promise<FrameworkDetachRe
   return {
     framework: "react",
     status: "detached",
-    generation: s.reactBridgeGeneration,
+    generation: bridge.detachedGeneration ?? s.reactBridgeGeneration,
   };
 }
 
-async function cleanupReactBridge(s: Session, bridge: ReactBridgeState): Promise<void> {
-  if (s.reactBridge !== bridge) return;
+function cleanupReactBridge(s: Session, bridge: ReactBridgeState): Promise<void> {
+  if (bridge.cleanupPromise) return bridge.cleanupPromise;
+  if (s.reactBridge !== bridge) return Promise.resolve();
+
+  // This state transition is the lifecycle lock. Child-session replay and
+  // concurrent attach calls observe it before cleanup performs any await.
+  bridge.status = "detaching";
+  bridge.cancelled = true;
+  bridge.resolveCancellation();
+
   const client = s.client;
+  if (client && bridge.eventHandler) {
+    unregisterHandler(
+      s,
+      client,
+      undefined,
+      "Runtime.bindingCalled",
+      bridge.eventHandler,
+    );
+  }
+
+  const cleanupPromise = performReactBridgeCleanup(s, bridge, client);
+  bridge.cleanupPromise = cleanupPromise;
+  return cleanupPromise;
+}
+
+async function performReactBridgeCleanup(
+  s: Session,
+  bridge: ReactBridgeState,
+  client: Session["client"],
+): Promise<void> {
+  // A raw attach never awaits cleanup. Waiting here makes detach completion a
+  // barrier: any CDP command that was already in flight has either published
+  // a tracked identifier or rolled that identifier back before the sweep.
+  await bridge.attachWorkPromise?.catch(() => {});
+
   if (client) {
     try {
       await client.Runtime.evaluate({
@@ -190,16 +250,26 @@ async function cleanupReactBridge(s: Session, bridge: ReactBridgeState): Promise
   }
   await removeReactBridgeBindings(s);
 
-  if (client && bridge.eventHandler) {
-    unregisterHandler(
-      s,
-      client,
-      undefined,
-      "Runtime.bindingCalled",
-      bridge.eventHandler,
-    );
+  if (s.reactBridge === bridge) {
+    s.clearReactBridge();
+    bridge.detachedGeneration = s.reactBridgeGeneration;
   }
-  if (s.reactBridge === bridge) s.clearReactBridge();
+}
+
+async function addBridgePreDocumentScript(
+  s: Session,
+  bridge: ReactBridgeState,
+  source: string,
+) {
+  const record = await addPreDocumentScript(s, { source });
+  if (s.reactBridge !== bridge || bridge.cancelled) {
+    // The Page command may have returned after teardown began and before the
+    // bridge could publish its logical script id. Roll it back in the same
+    // operation so cleanup cannot finish with a replayable orphan.
+    await removePreDocumentScript(s, record.id);
+    throw reactBridgeCancelled();
+  }
+  return record;
 }
 
 function handleReactBindingCalled(
@@ -211,6 +281,7 @@ function handleReactBindingCalled(
   const bridge = s.reactBridge;
   if (
     bridge !== installedBridge ||
+    bridge.status === "detaching" ||
     params.name !== REACT_BINDING_NAME ||
     eventSessionId !== undefined ||
     !s.isMainExecutionContext(eventSessionId, params.executionContextId)
@@ -250,13 +321,19 @@ function handleReactBindingCalled(
   if (bridge.sentinelSeen && bridge.operationsSeen) bridge.resolveReady();
 }
 
+function isAttachedBridge(s: Session, bridge: ReactBridgeState): boolean {
+  return s.reactBridge === bridge && bridge.status === "attached";
+}
+
+function reactBridgeCancelled(): ToolError {
+  return new ToolError(
+    "react_bridge_cancelled",
+    "React DevTools attachment was cancelled before it became ready.",
+  );
+}
+
 function assertCurrentBridge(s: Session, bridge: ReactBridgeState): void {
-  if (s.reactBridge !== bridge) {
-    throw new ToolError(
-      "react_bridge_cancelled",
-      "React DevTools attachment was cancelled before it became ready.",
-    );
-  }
+  if (s.reactBridge !== bridge || bridge.cancelled) throw reactBridgeCancelled();
 }
 
 async function evaluateOrThrow(
@@ -288,6 +365,9 @@ async function waitForReady(bridge: ReactBridgeState, timeoutMs: number): Promis
   try {
     await Promise.race([
       bridge.readyPromise,
+      bridge.cancellationPromise.then(() => {
+        throw reactBridgeCancelled();
+      }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           reject(

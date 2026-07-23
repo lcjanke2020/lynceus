@@ -1,12 +1,12 @@
 # AGENTS.md
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-23**
 
 Quick-boot for AI agents (Claude Code, GitHub Copilot CLI, Codex CLI, …) dropped into this repo. Read this end-to-end before doing anything else.
 
 ## What this project is
 
-`lynceus` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 54 tools across 13 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console, buffered network, structured DOM driving, form driving, session-portability (cookies + storage state), Node-process output, and the merged cross-session timeline. Both **browser** (Chrome / Chromium) and **Node.js Inspector** sessions are first-class via `launch_chrome` / `attach_chrome` and `launch_node` / `attach_node`; the Runtime + Debugger surface is shared across both, and browser-only / Node-only tools gate via the `unsupported_target` envelope. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
+`lynceus` is a Model Context Protocol (MCP) server that exposes the Chrome DevTools Protocol (CDP) to AI agents as a **TypeScript-aware frontend debugger**. 56 tools across 14 categories: session lifecycle, navigation, source, breakpoints, execution stepping, paused-frame inspection, buffered console, buffered network, structured DOM driving, form driving, session-portability (cookies + storage state), Node-process output, the merged cross-session timeline, and React DevTools bridge lifecycle. Both **browser** (Chrome / Chromium) and **Node.js Inspector** sessions are first-class via `launch_chrome` / `attach_chrome` and `launch_node` / `attach_node`; the Runtime + Debugger surface is shared across both, and browser-only / Node-only tools gate via the `unsupported_target` envelope. Supports stdio and SSE transports. Coordinates flow in TS terms; the server resolves source maps and translates to JS for CDP under the hood. Designed for agents in CLIs that already have local source + source maps. The production server has no LLM dependency — `@anthropic-ai/sdk`, `@google/genai`, and the raw-fetch OpenAI/LM-Studio clients are used only by the L4 evals, where they sit behind a vendor-agnostic `VendorAdapter` seam so the five production vendors (Anthropic + OpenAI + Vertex + DeepSeek + Moonshot/Kimi) and the LM Studio reference adapter share one runner.
 
 ## Read first
 

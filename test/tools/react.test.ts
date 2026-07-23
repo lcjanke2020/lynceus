@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerReactTools } from "../../src/tools/react.js";
 import { registry, requireReactBridge } from "../../src/session/state.js";
 import {
@@ -42,9 +42,16 @@ function readyOnReload(
   session: Session,
   beforeReady?: (generation: number) => void,
 ): void {
+  let reloadCount = 0;
   fake.onSend("Page.reload", () => {
+    reloadCount += 1;
     const generation = session.reactBridge!.generation;
-    session.noteMainFrame("main-frame", "loader-after-reload");
+    session.noteMainFrame(
+      "main-frame",
+      reloadCount === 1
+        ? "loader-after-reload"
+        : `loader-after-reload-${reloadCount}`,
+    );
     session.clearExecutionContexts(undefined);
     session.recordExecutionContext(undefined, {
       id: 1,
@@ -75,6 +82,14 @@ async function attachReady(fake: FakeCdp, session: Session, sessionId?: string) 
     backend_version: string;
     events_buffered: number;
   }>(await attach.handler({ session: sessionId, timeout_ms: 500 }));
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((fulfill) => {
+    resolve = fulfill;
+  });
+  return { promise, resolve };
 }
 
 describe("React DevTools tools — attach lifecycle", () => {
@@ -222,6 +237,121 @@ describe("React DevTools tools — attach lifecycle", () => {
     expect(session.reactEvents.query().map((event) => event.payload)).toEqual([
       [1, 1, 0],
     ]);
+  });
+
+  it("cancels an attach blocked in script registration and rolls back the late identifier", async () => {
+    const { fake, session, sessionId } = setupSession();
+    seedMainDocument(session);
+    const firstInstall = deferred<{ identifier: string }>();
+    let installCount = 0;
+    fake.respond("Page.addScriptToEvaluateOnNewDocument", () => {
+      installCount += 1;
+      if (installCount === 1) return firstInstall.promise;
+      return { identifier: `unexpected-script-${installCount}` };
+    });
+
+    const attachPromise = attach.handler({ session: sessionId, timeout_ms: 500 });
+    await vi.waitFor(() => {
+      expect(
+        fake.sentCalls.filter(
+          (call) => call.method === "Page.addScriptToEvaluateOnNewDocument",
+        ),
+      ).toHaveLength(1);
+    });
+
+    const detachPromise = detach.handler({ session: sessionId });
+    expect(session.reactBridge?.status).toBe("detaching");
+    firstInstall.resolve({ identifier: "late-bootstrap-script" });
+
+    const [attachResponse, detachResponse] = await Promise.all([
+      attachPromise,
+      detachPromise,
+    ]);
+    expect(parseErrorEnvelope(attachResponse)?.error).toBe(
+      "react_bridge_cancelled",
+    );
+    expect(parseOkEnvelope<{ status: string }>(detachResponse).status).toBe(
+      "detached",
+    );
+    expect(session.reactBridge).toBeNull();
+    expect(session.preDocumentScripts.size).toBe(0);
+    expect(fake.sentCalls).toContainEqual({
+      method: "Page.removeScriptToEvaluateOnNewDocument",
+      params: { identifier: "late-bootstrap-script" },
+      sessionId: undefined,
+    });
+    expect(
+      fake.sentCalls.filter((call) => call.method === "Runtime.removeBinding"),
+    ).toHaveLength(1);
+  });
+
+  it("settles an attach waiting for readiness as cancelled when detach completes", async () => {
+    const { fake, session, sessionId } = setupSession();
+    seedMainDocument(session);
+    const reloadReached = deferred<void>();
+    fake.onSend("Page.reload", () => reloadReached.resolve());
+
+    const attachPromise = attach.handler({ session: sessionId, timeout_ms: 1_000 });
+    await reloadReached.promise;
+    const detachResponse = await detach.handler({ session: sessionId });
+    const attachResponse = await attachPromise;
+
+    expect(parseOkEnvelope<{ status: string }>(detachResponse).status).toBe(
+      "detached",
+    );
+    expect(parseErrorEnvelope(attachResponse)?.error).toBe(
+      "react_bridge_cancelled",
+    );
+    expect(session.reactBridge).toBeNull();
+  });
+
+  it("serializes a new attach behind an in-flight detach", async () => {
+    const { fake, session, sessionId } = setupSession();
+    const firstAttach = await attachReady(fake, session, sessionId);
+    const detachEvaluate = deferred<{
+      result: { type: "undefined" };
+    }>();
+    const detachStarted = deferred<void>();
+    let evaluateCount = 0;
+    fake.respond("Runtime.evaluate", () => {
+      evaluateCount += 1;
+      if (evaluateCount === 1) {
+        detachStarted.resolve();
+        return detachEvaluate.promise;
+      }
+      return { result: { type: "undefined" } };
+    });
+
+    const detachPromise = detach.handler({ session: sessionId });
+    await detachStarted.promise;
+    const reattachPromise = attach.handler({
+      session: sessionId,
+      timeout_ms: 500,
+    });
+    let reattachSettled = false;
+    void reattachPromise.then(() => {
+      reattachSettled = true;
+    });
+    await Promise.resolve();
+    expect(reattachSettled).toBe(false);
+
+    detachEvaluate.resolve({ result: { type: "undefined" } });
+    const [detachResponse, reattachResponse] = await Promise.all([
+      detachPromise,
+      reattachPromise,
+    ]);
+    const detached = parseOkEnvelope<{ generation: number; status: string }>(
+      detachResponse,
+    );
+    const reattached = parseOkEnvelope<{
+      generation: number;
+      status: string;
+    }>(reattachResponse);
+    expect(detached.status).toBe("detached");
+    expect(reattached.status).toBe("attached");
+    expect(detached.generation).toBeGreaterThan(firstAttach.generation);
+    expect(reattached.generation).toBeGreaterThan(detached.generation);
+    expect(session.reactBridge?.generation).toBe(reattached.generation);
   });
 
   it("times out and rolls back when only a non-main-frame backend responds", async () => {

@@ -139,7 +139,7 @@ in [examples/sample-fullstack-app/DEMO.md](examples/sample-fullstack-app/DEMO.md
 
 ## What it gives an agent
 
-Across 54 tools ([full catalog](./src/tools/README.md)):
+Across 56 tools ([full catalog](./src/tools/README.md)):
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Concurrent frontend + backend sessions** — one browser and one Node target may be live together. Launch/attach returns monotonic `browser_N` / `node_N` IDs, `list_sessions` exposes both lanes, and ordinary tools accept `session` for explicit routing. Omission stays convenient with one live target and returns `ambiguous_session` with two.

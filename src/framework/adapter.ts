@@ -27,6 +27,8 @@ export interface FrameworkAttachResult {
 export interface FrameworkDetachResult {
   framework: FrameworkName;
   status: "detached" | "not-attached";
+  // Current post-detach epoch. It is intentionally newer than the generation
+  // of the bridge that was torn down.
   generation: number;
 }
 

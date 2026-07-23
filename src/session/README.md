@@ -106,6 +106,9 @@ binding and tracked scripts persist across navigation; a changed main-frame load
 clears raw operations and advances only the document generation, while a BFCache restore
 with the same loader retains it. Detach unsubscribes, removes registrations, clears the
 buffer, and advances the attachment generation so late callbacks cannot cross epochs.
+Attach and detach share one serialized lifecycle: teardown publishes cancellation before
+its first CDP await, waits for already-issued registrations to settle or self-roll back,
+and a concurrent reattach waits behind that cleanup barrier.
 
 ## Pauses and merged event order
 

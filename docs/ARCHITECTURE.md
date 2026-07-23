@@ -10,7 +10,7 @@ How `lynceus` is put together. For *why* decisions were made the way they were, 
 
 Three big pieces:
 
-- A **tool layer** (`src/tools/`) — 54 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
+- A **tool layer** (`src/tools/`) — 56 thin handlers wrapping CDP calls with Zod schemas + a structured error envelope.
 - A **state layer** (`src/session/` + `src/sourcemap/`) — a `SessionRegistry` can own one browser record and one Node record concurrently. Each record has its own CDP client, pause tracker, breakpoints, ring buffers, and source-map index; one registry-global sequence allocator orders buffered events across records.
 - A **CDP transport** (`chrome-remote-interface`) — the WebSocket to Chrome (root page + every attached worker/iframe via `flatten:true` auto-attach) or to a Node `--inspect` endpoint (single root target).
 
@@ -20,8 +20,8 @@ Three big pieces:
 flowchart LR
     Agent["AI agent<br/>Claude Code / Copilot CLI"]
     Index["src/index.ts<br/>stdio MCP lifecycle"]
-    Server["src/server.ts<br/>registers 13 tool modules"]
-    Tools["src/tools/<br/>54 tool handlers"]
+    Server["src/server.ts<br/>registers 14 tool modules"]
+    Tools["src/tools/<br/>56 tool handlers"]
     Registry["SessionRegistry<br/>browser_N + node_N"]
     BrowserState["browser Session<br/>pause · maps · buffers"]
     NodeState["node Session<br/>pause · maps · buffers"]
@@ -55,7 +55,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph T["Tool layer — src/tools/"]
-        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage · node-output · timeline"]
+        TT["session · nav · source · breakpoints<br/>execution · inspect · console · network · dom<br/>forms · storage · node-output · timeline · react"]
     end
     subgraph S["State layer — src/session/ + src/sourcemap/"]
         R["SessionRegistry<br/>capacity: 1 browser + 1 Node<br/>global seq allocator"]
@@ -81,7 +81,7 @@ flowchart TB
 A registry record is either a **browser** target (Chrome / Chromium via `chrome-launcher` or a `--remote-debugging-port` attach) or a **Node Inspector** target (Node `--inspect` / `--inspect-brk`). One of each kind may be live concurrently. The record's `kind` gates the tool surface:
 
 - Both kinds share the Runtime + Debugger surface — breakpoints, stepping, pause, scope, evaluate, console reads, source maps. The `connectDebugger` helper in `src/session/debugger.ts` is shared.
-- Browser-only domains (`Page`, `DOM`, `Input`, `Network`) are not enabled in Node sessions. The 25 browser-only MCP tools return the structured error envelope `{ error: "unsupported_target", message: "Tool <name> requires a browser session (current session is node)" }` when called against a Node session. The reverse holds for `get_node_output`, which targets a Node-only surface and returns `{ error: "unsupported_target", message: "Tool get_node_output requires a node session (current session is browser)" }` when called against a browser session. The lookup table lives in `src/session/capabilities.ts` (see [`src/tools/README.md`](../src/tools/README.md) §Capability gating).
+- Browser-only domains (`Page`, `DOM`, `Input`, `Network`) are not enabled in Node sessions. The 27 browser-only MCP tools return the structured error envelope `{ error: "unsupported_target", message: "Tool <name> requires a browser session (current session is node)" }` when called against a Node session. The reverse holds for `get_node_output`, which targets a Node-only surface and returns `{ error: "unsupported_target", message: "Tool get_node_output requires a node session (current session is browser)" }` when called against a browser session. The lookup table lives in `src/session/capabilities.ts` (see [`src/tools/README.md`](../src/tools/README.md) §Capability gating).
 - Lifecycle plumbing differs: browser sessions go through `chrome-launcher` (or a port attach) and `Target.setAutoAttach({ flatten: true })` to fan out to workers + iframes. Node sessions use `child_process.spawn` (for `launch_node`) or a direct CDP connect to the inspector websocket (for `attach_node`), and remain single-target — no child sessions in v1 (Worker-threads auto-attach is deferred per [`node-session-design.md`](./node-session-design.md) §9).
 
 The session-mode design itself is locked in at [`node-session-design.md`](./node-session-design.md).
@@ -98,10 +98,10 @@ contract.
 | Directory | Files | Responsibility | Component README |
 |---|---|---|---|
 | [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `lynceus/contract` (LocatorSpec) | — |
-| [`src/framework/`](../src/framework/) | `adapter.ts`, `react.ts` | Stateless framework resolution seam (React-only in v1); mutable bridge/runtime state remains per addressed `SessionState` | [React DevTools design](./react-devtools-design.md) |
+| [`src/framework/`](../src/framework/) | `adapter.ts`, `react.ts`, `react-backend.ts` | Stateless framework resolution seam plus exact-pinned React backend loading and attach/detach orchestration; mutable bridge/runtime state remains per addressed `SessionState` | [React DevTools design](./react-devtools-design.md) |
 | [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `node.ts`, `debugger.ts`, `capabilities.ts`, `pause.ts`, `buffers.ts` | `SessionRegistry`, transactional lifecycle, per-record pause/maps/buffers, registry-global sequencing; browser + Node kinds share `connectDebugger` | [README](../src/session/README.md) |
 | [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing; kind-aware source-map fetch (browser via `Network.loadNetworkResource`, Node via `file://` on loopback only) | [README](../src/sourcemap/README.md) |
-| [`src/tools/`](../src/tools/) | 13 tool files + `_register.ts` + `_session_input.ts` + `_locator_runtime.ts` | 54 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` / `timeline` | [README](../src/tools/README.md) |
+| [`src/tools/`](../src/tools/) | 14 tool files + `_register.ts` + `_session_input.ts` + `_locator_runtime.ts` | 56 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` / `timeline` / `react` | [README](../src/tools/README.md) |
 | [`src/util/`](../src/util/) | `errors.ts`, `format.ts`, `log.ts` | `ToolError`, preview/truncate helpers, structured stderr logging | — |
 
 ## Request flow — `set_breakpoint`
@@ -202,7 +202,7 @@ The full 4-layer strategy lives in [test-eval-plan.md](./test-eval-plan.md). The
 ```mermaid
 flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
-    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>54 tools · no real browser · npm test"]
+    L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>56 tools · no real browser · npm test"]
     L3["L3 — E2E<br/>test/e2e/*.test.ts vs real Chromium + real Node --inspect<br/>20 specs (11 browser + 7 Node + 1 dual-session + 1 harness) · seconds · npm run test:e2e"]
     L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter + Scenario.target seams<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>14 browser + 4 Node + 1 dual scenario<br/>deterministic trace oracles · npm run eval"]
     L1 --> L2 --> L3 --> L4

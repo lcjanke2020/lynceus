@@ -85,7 +85,13 @@ export interface ReactBridgeState {
   readonly framework: "react";
   readonly bindingName: "__lynceusReact__";
   readonly generation: number;
-  status: "attaching" | "attached";
+  status: "attaching" | "attached" | "detaching";
+  // Teardown publishes cancellation synchronously, before its first CDP
+  // await. Attach work races this resolved-only signal so cancellation never
+  // creates an unhandled rejection while an earlier CDP command is pending.
+  cancelled: boolean;
+  resolveCancellation: () => void;
+  readonly cancellationPromise: Promise<void>;
   // Main-document generation. Incremented only when Page.frameNavigated
   // reports a different loader id; bfcache restores retain the generation.
   documentGeneration: number;
@@ -102,7 +108,13 @@ export interface ReactBridgeState {
   bootstrapScriptId?: string;
   backendScriptId?: string;
   eventHandler?: (...args: any[]) => void;
+  // Raw attach work never awaits cleanup. Teardown can therefore wait for all
+  // late CDP registrations to settle before sweeping them without forming an
+  // attach -> cleanup -> attach cycle.
+  attachWorkPromise?: Promise<ReactBridgeAttachResult>;
   attachPromise?: Promise<ReactBridgeAttachResult>;
+  cleanupPromise?: Promise<void>;
+  detachedGeneration?: number;
   cleanup?: () => Promise<void>;
   resolveReady: () => void;
   readonly readyPromise: Promise<void>;

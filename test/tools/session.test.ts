@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { resolve } from "node:path";
-import { getSession, registry, ROOT_SESSION_KEY } from "../../src/session/state.js";
+import {
+  getSession,
+  registry,
+  ROOT_SESSION_KEY,
+  type Session,
+} from "../../src/session/state.js";
 import { makeFakeCdp, type FakeCdp } from "../fake-cdp.js";
 
 // IMPLEMENTATION NOTE (Opus PR #10 round-2 Nit): this file uses `vi.mock`
@@ -55,6 +60,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 // Imports MUST come after vi.mock so the registrar sees the mocked modules.
 import { registerSessionTools } from "../../src/tools/session.js";
 import { addPreDocumentScript } from "../../src/session/browser.js";
+import {
+  attachReactDevTools,
+  detachReactDevTools,
+  REACT_BINDING_NAME,
+  REACT_BRIDGE_SENTINEL_EVENT,
+} from "../../src/framework/react.js";
 import { autoReset, setupAdditionalSession, setupSession } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
@@ -78,6 +89,44 @@ beforeEach(() => {
   delete process.env.CHROME_PATH;
   nextFakeForConnect = makeFakeCdp();
 });
+
+async function attachReadyReact(fake: FakeCdp, session: Session) {
+  const frameId = session.mainFrameId ?? "fake-frame";
+  session.noteMainFrame(frameId, session.mainFrameLoaderId ?? "fake-loader");
+  session.recordExecutionContext(undefined, {
+    id: 1,
+    frameId,
+    isDefault: true,
+  });
+  let reloadCount = 0;
+  fake.onSend("Page.reload", () => {
+    reloadCount += 1;
+    const bridge = session.reactBridge!;
+    session.noteMainFrame(frameId, `react-loader-${reloadCount}`);
+    session.clearExecutionContexts(undefined);
+    session.recordExecutionContext(undefined, {
+      id: 1,
+      frameId,
+      isDefault: true,
+    });
+    for (const [event, payload] of [
+      [REACT_BRIDGE_SENTINEL_EVENT, { generation: bridge.generation }],
+      ["operations", [1, 1, 0]],
+    ] as const) {
+      fake.fireBindingCalled({
+        name: REACT_BINDING_NAME,
+        executionContextId: 1,
+        payload: JSON.stringify({
+          event,
+          payload,
+          generation: bridge.generation,
+          sequence: 1,
+        }),
+      });
+    }
+  });
+  return attachReactDevTools(session, { timeoutMs: 500 });
+}
 
 function makeFakeNodeChild(pid = 4242) {
   const child = new EventEmitter() as EventEmitter & {
@@ -430,6 +479,92 @@ describe("browser pre-document scripts", () => {
     );
     expect(replay?.params).toEqual({ source: "window.__lynceusBootstrap = true;" });
     expect(record.installations.get("IF1")).toMatch(/^pre-document-\d+$/);
+  });
+
+  it("installs an active React binding before replaying its scripts to a late child", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    await attachReadyReact(fake, session);
+    fake.clearSentCalls();
+
+    fake.fireEvent("Target.attachedToTarget", {
+      sessionId: "IF1",
+      targetInfo: {
+        targetId: "iframe-target",
+        type: "iframe",
+        title: "",
+        url: "http://x/frame",
+        attached: true,
+        canAccessOpener: false,
+      },
+      waitingForDebugger: false,
+    });
+    await vi.waitFor(() => {
+      expect(
+        fake.sentCalls.some(
+          (call) =>
+            call.method === "Page.addScriptToEvaluateOnNewDocument" &&
+            call.sessionId === "IF1",
+        ),
+      ).toBe(true);
+    });
+
+    const childCalls = fake.sentCalls.filter(
+      (call) => call.sessionId === "IF1",
+    );
+    const bindingIndex = childCalls.findIndex(
+      (call) => call.method === "Runtime.addBinding",
+    );
+    const firstScriptIndex = childCalls.findIndex(
+      (call) => call.method === "Page.addScriptToEvaluateOnNewDocument",
+    );
+    expect(bindingIndex).toBeGreaterThanOrEqual(0);
+    expect(firstScriptIndex).toBeGreaterThan(bindingIndex);
+    expect(session.reactBridge?.bindingInstallations.has("IF1")).toBe(true);
+  });
+
+  it("rolls back a child binding that returns after React teardown begins", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    await attachReadyReact(fake, session);
+    const bridge = session.reactBridge!;
+    const childBinding = deferred<void>();
+    fake.respond("Runtime.addBinding", (_params, sessionId) =>
+      sessionId === "IF1" ? childBinding.promise : undefined,
+    );
+    fake.clearSentCalls();
+
+    fake.fireEvent("Target.attachedToTarget", {
+      sessionId: "IF1",
+      targetInfo: {
+        targetId: "iframe-target",
+        type: "iframe",
+        title: "",
+        url: "http://x/frame",
+        attached: true,
+        canAccessOpener: false,
+      },
+      waitingForDebugger: false,
+    });
+    await vi.waitFor(() => {
+      expect(bridge.pendingBindingInstallations.has("IF1")).toBe(true);
+    });
+
+    const detachPromise = detachReactDevTools(session);
+    expect(bridge.status).toBe("detaching");
+    childBinding.resolve();
+    await detachPromise;
+
+    expect(fake.sentCalls).toContainEqual({
+      method: "Runtime.removeBinding",
+      params: { name: REACT_BINDING_NAME },
+      sessionId: "IF1",
+    });
+    expect(bridge.pendingBindingInstallations.size).toBe(0);
+    expect(bridge.bindingInstallations.size).toBe(0);
+    expect(session.reactBridge).toBeNull();
   });
 
   it("shares an in-flight child installation across registration and attach replay", async () => {
@@ -1181,6 +1316,51 @@ describe("select_target", () => {
     });
     expect(record.installations.get(ROOT_SESSION_KEY)).toBe("replacement-root-script");
     expect(current.session.preDocumentScripts.get(record.id)).toBe(record);
+  });
+
+  it("fully detaches an active React bridge before swapping target sockets", async () => {
+    const current = setupSession();
+    current.session.currentTargetId = "page1";
+    await attachReadyReact(current.fake, current.session);
+
+    const lifecycle: string[] = [];
+    for (const method of [
+      "Runtime.evaluate",
+      "Page.removeScriptToEvaluateOnNewDocument",
+      "Runtime.removeBinding",
+    ]) {
+      current.fake.onSend(method, () => lifecycle.push(method));
+    }
+    const originalClose = current.fake.close.bind(current.fake);
+    current.fake.close = async () => {
+      lifecycle.push("close");
+      await originalClose();
+    };
+
+    const replacement = makeFakeCdp();
+    nextFakeForConnect = replacement;
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+
+    const result = parseOkEnvelope<{ id: string; status: string }>(
+      await selectTarget.handler({
+        id: "page2",
+        session: current.sessionId,
+      }),
+    );
+
+    expect(result).toMatchObject({ id: "page2", status: "switched" });
+    expect(lifecycle).toEqual([
+      "Runtime.evaluate",
+      "Page.removeScriptToEvaluateOnNewDocument",
+      "Page.removeScriptToEvaluateOnNewDocument",
+      "Runtime.removeBinding",
+      "close",
+    ]);
+    expect(current.session.reactBridge).toBeNull();
+    expect(current.session.preDocumentScripts.size).toBe(0);
   });
 
   it("failed reconnect frees the registry slot: a fresh attach recovers, never deadlocks (round-1 P1)", async () => {

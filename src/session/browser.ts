@@ -154,11 +154,28 @@ async function installPreDocumentScript(
       // The target may have detached or select_target may have invalidated
       // this Page agent while the command was in flight. Only the currently
       // reserved operation may publish its returned identifier.
-      if (
+      const canPublish =
         record.pendingInstallations.get(key) === installation &&
-        (sessionId === undefined || s.sessionHandlers.has(sessionId))
-      ) {
+        s.preDocumentScripts.get(record.id) === record &&
+        (sessionId === undefined || s.sessionHandlers.has(sessionId));
+      if (canPublish) {
         record.installations.set(key, result.identifier);
+      } else {
+        // A detach/removal can win while the CDP registration is in flight.
+        // The returned identifier was never visible to the cleanup snapshot,
+        // so the operation that minted it must remove it itself.
+        try {
+          await client.Page.removeScriptToEvaluateOnNewDocument(
+            { identifier: result.identifier },
+            sessionId,
+          );
+        } catch (e) {
+          log.warn("failed to roll back stale pre-document script", {
+            scriptId: record.id,
+            sessionId: sessionId ?? null,
+            error: String(e),
+          });
+        }
       }
     });
     record.pendingInstallations.set(key, installation);
@@ -203,7 +220,7 @@ async function installActiveReactBinding(
   bestEffort: boolean,
 ): Promise<void> {
   const bridge = s.reactBridge;
-  if (!bridge) return;
+  if (!bridge || bridge.status === "detaching") return;
   const key = sessionId ?? ROOT_SESSION_KEY;
   if (bridge.bindingInstallations.has(key)) return;
 
@@ -212,12 +229,25 @@ async function installActiveReactBinding(
   if (!installation) {
     installation = Promise.resolve().then(async () => {
       await client.Runtime.addBinding({ name: bridge.bindingName }, sessionId);
-      if (
+      const canPublish =
         s.reactBridge === bridge &&
+        bridge.status !== "detaching" &&
         bridge.pendingBindingInstallations.get(key) === installation &&
-        (sessionId === undefined || s.sessionHandlers.has(sessionId))
-      ) {
+        (sessionId === undefined || s.sessionHandlers.has(sessionId));
+      if (canPublish) {
         bridge.bindingInstallations.add(key);
+      } else {
+        // Teardown may have started after addBinding was sent. This late
+        // registration cannot be discovered by a completed cleanup sweep, so
+        // remove it before the pending operation settles.
+        try {
+          await client.Runtime.removeBinding({ name: bridge.bindingName }, sessionId);
+        } catch (e) {
+          log.warn("failed to roll back stale React bridge binding", {
+            sessionId: sessionId ?? null,
+            error: String(e),
+          });
+        }
       }
     });
     bridge.pendingBindingInstallations.set(key, installation);
@@ -651,17 +681,11 @@ export async function switchTarget(s: Session, targetId: string): Promise<{ targ
   const attached = s.attached;
   const ownedProcess = s.ownedProcess;
   // Framework bridge registrations belong to this concrete page target.
-  // The public select_target handler performs full detach first; keep this
-  // state-only guard for direct callers and reconnect failure paths so React
-  // definitions cannot replay silently onto a different page.
+  // select_target normally performs this detach before entering switchTarget;
+  // direct callers and reconnect paths get the same full lifecycle barrier.
   if (s.reactBridge) {
-    if (s.reactBridge.bootstrapScriptId) {
-      s.preDocumentScripts.delete(s.reactBridge.bootstrapScriptId);
-    }
-    if (s.reactBridge.backendScriptId) {
-      s.preDocumentScripts.delete(s.reactBridge.backendScriptId);
-    }
-    s.clearReactBridge();
+    if (s.reactBridge.cleanup) await s.reactBridge.cleanup();
+    else s.clearReactBridge();
   }
   try {
     await s.client.close().catch(() => {});
