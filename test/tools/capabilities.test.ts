@@ -16,6 +16,7 @@ import { registerDomTools } from "../../src/tools/dom.js";
 import { registerNetworkTools } from "../../src/tools/network.js";
 import { registerFormTools } from "../../src/tools/forms.js";
 import { registerStorageTools } from "../../src/tools/storage.js";
+import { registerReactTools } from "../../src/tools/react.js";
 
 autoReset();
 
@@ -24,6 +25,7 @@ const domTools = captureTools(registerDomTools);
 const networkTools = captureTools(registerNetworkTools);
 const formTools = captureTools(registerFormTools);
 const storageTools = captureTools(registerStorageTools);
+const reactTools = captureTools(registerReactTools);
 
 type Case = {
   tool: string;
@@ -64,6 +66,10 @@ const cases: Case[] = [
   { tool: "load_storage_state", handler: storageTools.get("load_storage_state")!, args: { path: "/nonexistent-lynceus-test-dir/x.json" } },
   { tool: "get_cookies", handler: storageTools.get("get_cookies")!, args: {} },
   { tool: "set_cookies", handler: storageTools.get("set_cookies")!, args: { cookies: [] } },
+  // react.ts — a short timeout keeps the browser-kind sanity case bounded;
+  // this matrix checks the capability gate, not bridge readiness semantics.
+  { tool: "attach_react_devtools", handler: reactTools.get("attach_react_devtools")!, args: { timeout_ms: 100 } },
+  { tool: "detach_react_devtools", handler: reactTools.get("detach_react_devtools")!, args: {} },
 ];
 
 describe("capability gating — Node session rejects browser-only tools", () => {

@@ -6,19 +6,21 @@ Owns the debug-target registry and every target's mutable runtime state. A singl
 lynceus process can keep one browser session and one Node Inspector session live at
 the same time; each record has its own CDP client, pause tracker, breakpoints, source
 maps, console/network buffers, tracked pre-document scripts (browser only), and
-(for launched Node children) stdout/stderr buffer.
+(for launched Node children) stdout/stderr buffer. An opt-in React DevTools bridge
+also keeps its lifecycle, document generation, and raw structural events on the
+addressed browser session.
 
 ## Files
 
 | File | Main exports | Role |
 |---|---|---|
-| `state.ts` | `registry`, `Session`, `SessionKind`, `SessionRecord`, `PreDocumentScriptSpec`, `PreDocumentScriptRecord`, `requireSession()`, `requirePaused()`, `requireCapable()`, `registerHandler()`, `ROOT_SESSION_KEY` | `SessionRegistry` plus the per-target `SessionState`. The registry mints `browser_N` / `node_N`, enforces capacity and unique labels, resolves addresses, owns startup rollback and close fan-out, and allocates cross-session event sequence numbers. |
+| `state.ts` | `registry`, `Session`, `SessionKind`, `SessionRecord`, `PreDocumentScriptSpec`, `PreDocumentScriptRecord`, `ReactBridgeState`, `requireSession()`, `requirePaused()`, `requireReactBridge()`, `requireCapable()`, `registerHandler()`, `unregisterHandler()`, `ROOT_SESSION_KEY` | `SessionRegistry` plus the per-target `SessionState`. The registry mints `browser_N` / `node_N`, enforces capacity and unique labels, resolves addresses, owns startup rollback and close fan-out, and allocates cross-session event sequence numbers. React bridge state and execution-context/frame provenance remain per target. |
 | `capabilities.ts` | `TOOL_KIND_SUPPORT` | Per-tool kind allowlist consulted by `requireCapable()`. Shared Runtime/Debugger tools work on both kinds; browser-only and Node-only tools fail with `unsupported_target`. |
-| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()`, `addPreDocumentScript()` | Browser lifecycle. `Target.setAutoAttach({ flatten: true })` brings workers and iframes onto the same CRI client with their own CDP `sessionId`; tracked `Page.addScriptToEvaluateOnNewDocument` definitions replay onto new Page agents. |
+| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()`, `addPreDocumentScript()`, `removePreDocumentScript()`, React binding helpers | Browser lifecycle. `Target.setAutoAttach({ flatten: true })` brings workers and iframes onto the same CRI client with their own CDP `sessionId`; tracked `Page.addScriptToEvaluateOnNewDocument` definitions and active React bindings replay onto new Page agents. Root frame loader IDs drive React's new-document generation. |
 | `node.ts` | `attachNode()`, `launchNode()` | Node Inspector lifecycle. Launch mode owns the child, discovers its port from stderr, and captures stdio; attach mode leaves the external process alone. |
-| `debugger.ts` | `connectDebugger()` | Shared Runtime + Debugger wiring, pause events, console buffering, and source-map discovery for either target kind. |
+| `debugger.ts` | `connectDebugger()` | Shared Runtime + Debugger wiring, pause events, console buffering, source-map discovery, and execution-context provenance for either target kind. |
 | `pause.ts` | `PauseTracker`, `PauseState`, `PauseWaitHandle` | One pause state per debug target. Supports scoped waits, cancellable registry races, resume synchronization, and fast-step pause detection. |
-| `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry`, `NodeOutputEntry` | Three capped per-target buffers. All receive sequence numbers from one registry-global allocator so `get_timeline(session="all")` can merge them. |
+| `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry`, `NodeOutputEntry`, `ReactBridgeEvent` | Four capped per-target buffers. All receive sequence numbers from one registry-global allocator; the public timeline currently merges console/network/Node output, while React `operations` remain internal input for RDT-2's materialized tree. |
 
 ## Registry model
 
@@ -98,6 +100,16 @@ on the same operation.
 from `state.console`, which records `Runtime.consoleAPICalled`; `attach_node` cannot see
 the external process's stdio and therefore leaves the Node-output buffer empty.
 
+`attach_react_devtools` installs the exact-pinned React backend before page code, then
+waits for both a bootstrap sentinel and the first main-frame `operations` event. The
+binding and tracked scripts persist across navigation; a changed main-frame loader ID
+clears raw operations and advances only the document generation, while a BFCache restore
+with the same loader retains it. Detach unsubscribes, removes registrations, clears the
+buffer, and advances the attachment generation so late callbacks cannot cross epochs.
+Attach and detach share one serialized lifecycle: teardown publishes cancellation before
+its first CDP await, waits for already-issued registrations to settle or self-roll back,
+and a concurrent reattach waits behind that cleanup barrier.
+
 ## Pauses and merged event order
 
 Each target owns one `PauseTracker`:
@@ -128,7 +140,8 @@ selection is retained.
   originating CDP child `sessionId` where applicable.
 - Read mutable state from that resolved record: `s.pause`, `s.scripts`,
   `s.breakpoints`, `s.preDocumentScripts`, `s.console`, `s.network`, and
-  `s.nodeOutput`.
+  `s.nodeOutput`. Framework tools additionally use `s.reactBridge`,
+  `s.reactEvents`, and `requireReactBridge(s)`.
 - L2 tests create/activate registry records and inject `test/fake-cdp.ts` into the
   record's `client`; there is no process-global session-state injection slot.
 
@@ -144,6 +157,10 @@ selection is retained.
 - **Auto-attach replay.** New browser child sessions inherit
   `pauseOnExceptions` and every tracked pre-document script. Any new
   per-CDP-session policy needs the same replay audit.
+- **React frame scope.** V1 accepts React bridge messages only from the root
+  agent's default execution context for the current main frame. A same-process
+  iframe still shares the root flat CDP session, so filtering only by
+  `session_id` is insufficient; preserve execution-context provenance.
 - More depth: [dual-target-debugging.md](../../docs/dual-target-debugging.md) for the
   multi-session contract and [test-eval-plan.md](../../docs/test-eval-plan.md)
   §Critical gotchas for pause/source-map races.

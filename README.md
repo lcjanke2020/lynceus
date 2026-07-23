@@ -139,7 +139,7 @@ in [examples/sample-fullstack-app/DEMO.md](examples/sample-fullstack-app/DEMO.md
 
 ## What it gives an agent
 
-Across 54 tools ([full catalog](./src/tools/README.md)):
+Across 56 tools ([full catalog](./src/tools/README.md)):
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Concurrent frontend + backend sessions** — one browser and one Node target may be live together. Launch/attach returns monotonic `browser_N` / `node_N` IDs, `list_sessions` exposes both lanes, and ordinary tools accept `session` for explicit routing. Omission stays convenient with one live target and returns `ambiguous_session` with two.
@@ -223,7 +223,7 @@ The test pyramid has four layers (see [docs/test-eval-plan.md](docs/test-eval-pl
 npm test              # L1 unit + L2 tool-contract (fake CDP) + L4 harness-unit tests — seconds, no browser, no LLM
 npm run typecheck     # both tsconfigs — CI gates on this
 npm run smoke         # stdio protocol smoke, no browser — CI gates on this
-npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 20 specs
+npm run test:e2e      # L3: real headless Chromium + real Node Inspector, 21 specs
 npm run eval:quick    # L4: 1 LLM-agent scenario × 1 trial (needs ANTHROPIC_API_KEY; ~$0.50–2 at the default Opus-4.8-medium)
 npm run eval:quick:fullstack  # L4: fullstack-cart dual-target scenario × 1 trial
 npm run eval          # L4: all 19 scenarios × 3 trials (cost data in evals/README.md; EVAL_BUDGET_USD caps a run, default $100)

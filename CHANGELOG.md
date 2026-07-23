@@ -7,13 +7,18 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
+- **React DevTools backend bridge** (LEO-359; #75–#76) — added opt-in
+  `attach_react_devtools` / `detach_react_devtools` lifecycle tools backed by
+  exact-pinned `react-devtools-core@7.0.1`. Per-session attachment and document
+  generations fence stale, iframe, and old-navigation events; detach, target switch,
+  and session close remove bindings and tracked bootstrap scripts before returning.
 - **Concurrent browser + Node debugging** (LEO-115 / LEO-116 / LEO-365; #62–#72 +
   follow-up) — replaced the process-global singleton slot with a transactional
   `SessionRegistry`. One browser and one Node target can now stay live together;
   launch/attach returns monotonic `browser_N` / `node_N` IDs and optional labels,
   `list_sessions` exposes both lanes, `close_session(session?)` tears down one record,
   and process shutdown awaits `closeAll()` including in-flight Node-child cleanup.
-- **Explicit session routing across the 54-tool surface** — ordinary session-scoped
+- **Explicit session routing across the 56-tool surface** — ordinary session-scoped
   tools accept `session`; omission remains backward-compatible with one live target and
   returns `ambiguous_session` with two. The separate CDP-child `session_id` axis is now
   nullable/optional and documented consistently on all 11 tools that round-trip

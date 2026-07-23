@@ -57,6 +57,10 @@ export const TOOL_KIND_SUPPORT: Partial<Record<string, ReadonlySet<SessionKind>>
   load_storage_state: BROWSER_ONLY,
   get_cookies: BROWSER_ONLY,
   set_cookies: BROWSER_ONLY,
+  // Framework bridge — Page pre-document injection + browser Runtime
+  // execution contexts. Node has no page or React renderer lifecycle.
+  attach_react_devtools: BROWSER_ONLY,
+  detach_react_devtools: BROWSER_ONLY,
   // Node-only output buffer. The browser-session equivalent (Chrome stdio)
   // isn't exposed by lynceus at all, so calling get_node_output against a
   // browser session is a category error, not a "wrong session" mistake.

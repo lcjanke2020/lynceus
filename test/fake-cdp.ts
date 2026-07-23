@@ -100,6 +100,7 @@ export interface FakeCdp extends EventEmitter {
   Runtime: {
     enable(sessionId?: string): Promise<void>;
     addBinding(params: any, sessionId?: string): Promise<void>;
+    removeBinding(params: any, sessionId?: string): Promise<void>;
     evaluate(params: any, sessionId?: string): Promise<any>;
     getProperties(params: any, sessionId?: string): Promise<any>;
   };
@@ -119,6 +120,7 @@ export interface FakeCdp extends EventEmitter {
   Page: {
     enable(sessionId?: string): Promise<void>;
     addScriptToEvaluateOnNewDocument(params: any, sessionId?: string): Promise<any>;
+    removeScriptToEvaluateOnNewDocument(params: any, sessionId?: string): Promise<void>;
     getFrameTree(sessionId?: string): Promise<any>;
     navigate(params: any, sessionId?: string): Promise<any>;
     reload(params: any, sessionId?: string): Promise<any>;
@@ -190,6 +192,7 @@ export function makeFakeCdp(): FakeCdp {
   // method production calls during enableBrowserDomains/connectDebugger.
   responders.set("Runtime.enable", () => undefined);
   responders.set("Runtime.addBinding", () => undefined);
+  responders.set("Runtime.removeBinding", () => undefined);
   // Node --inspect-brk entry-pause trigger. Production attach_node sends
   // this after Debugger.enable; the Node attach L2 tests assert it was called.
   responders.set("Runtime.runIfWaitingForDebugger", () => undefined);
@@ -198,6 +201,7 @@ export function makeFakeCdp(): FakeCdp {
   responders.set("Page.addScriptToEvaluateOnNewDocument", () => ({
     identifier: `pre-document-${++preDocumentScriptSeed}`,
   }));
+  responders.set("Page.removeScriptToEvaluateOnNewDocument", () => undefined);
   responders.set("DOM.enable", () => undefined);
   responders.set("Network.enable", () => undefined);
   responders.set("Target.setAutoAttach", () => undefined);
@@ -221,7 +225,17 @@ export function makeFakeCdp(): FakeCdp {
   }));
   responders.set("Page.getFrameTree", () => ({
     frameTree: {
-      frame: { id: "fake-frame", url: "about:blank", domainAndRegistry: "" },
+      frame: {
+        id: "fake-frame",
+        loaderId: "fake-loader",
+        url: "about:blank",
+        domainAndRegistry: "",
+        securityOrigin: "://",
+        mimeType: "text/html",
+        secureContextType: "Secure",
+        crossOriginIsolatedContextType: "NotIsolated",
+        gatedAPIFeatures: [],
+      },
       childFrames: [],
     },
   }));
@@ -263,8 +277,10 @@ export function makeFakeCdp(): FakeCdp {
   const KNOWN_VOID_METHODS = new Set<string>([
     "Runtime.enable",
     "Runtime.addBinding",
+    "Runtime.removeBinding",
     "Runtime.runIfWaitingForDebugger",
     "Page.enable",
+    "Page.removeScriptToEvaluateOnNewDocument",
     "DOM.enable",
     "Network.enable",
     "Target.setAutoAttach",
@@ -331,6 +347,7 @@ export function makeFakeCdp(): FakeCdp {
     Runtime: {
       enable: (sessionId?: string) => send("Runtime.enable", undefined, sessionId),
       addBinding: (params: any, sessionId?: string) => send("Runtime.addBinding", params, sessionId),
+      removeBinding: (params: any, sessionId?: string) => send("Runtime.removeBinding", params, sessionId),
       evaluate: (params: any, sessionId?: string) => send("Runtime.evaluate", params, sessionId),
       getProperties: (params: any, sessionId?: string) => send("Runtime.getProperties", params, sessionId),
     },
@@ -351,6 +368,8 @@ export function makeFakeCdp(): FakeCdp {
       enable: (sessionId?: string) => send("Page.enable", undefined, sessionId),
       addScriptToEvaluateOnNewDocument: (params: any, sessionId?: string) =>
         send("Page.addScriptToEvaluateOnNewDocument", params, sessionId),
+      removeScriptToEvaluateOnNewDocument: (params: any, sessionId?: string) =>
+        send("Page.removeScriptToEvaluateOnNewDocument", params, sessionId),
       getFrameTree: (sessionId?: string) => send("Page.getFrameTree", undefined, sessionId),
       navigate: (params: any, sessionId?: string) => send("Page.navigate", params, sessionId),
       reload: (params: any, sessionId?: string) => send("Page.reload", params, sessionId),

@@ -19,7 +19,7 @@
 // Cache control: the system prompt block AND the tool list's last entry
 // are marked `cache_control: { type: "ephemeral" }` so the static prefix
 // hits cache on every trial after the first. Measured size on lynceus's
-// current tool surface (54 tools, terse descriptions): the system block
+// current tool surface (56 tools, terse descriptions): the system block
 // is ~280 tokens and the tools array is ~5K tokens. Anthropic's cache
 // breakpoint minimum is ~1024 tokens, so the system-block marker is
 // effectively a no-op for short scenario `systemPromptOverride` values

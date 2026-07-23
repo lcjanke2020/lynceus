@@ -93,6 +93,44 @@ export async function addPreDocumentScript(
   return record;
 }
 
+/**
+ * Remove one logical pre-document script from every Page agent where it was
+ * installed. Detach paths are deliberately best-effort: a child may disappear
+ * between the installations snapshot and the CDP call, but the logical record
+ * must still be dropped so it cannot replay onto a future target.
+ */
+export async function removePreDocumentScript(
+  s: Session,
+  logicalId: string,
+): Promise<boolean> {
+  const record = s.preDocumentScripts.get(logicalId);
+  if (!record) return false;
+  const client = s.client;
+  s.preDocumentScripts.delete(logicalId);
+
+  await Promise.allSettled(record.pendingInstallations.values());
+  record.pendingInstallations.clear();
+  if (client) {
+    for (const [key, identifier] of record.installations) {
+      const sessionId = key === ROOT_SESSION_KEY ? undefined : key;
+      try {
+        await client.Page.removeScriptToEvaluateOnNewDocument(
+          { identifier },
+          sessionId,
+        );
+      } catch (e) {
+        log.warn("failed to remove pre-document script", {
+          scriptId: logicalId,
+          sessionId: sessionId ?? null,
+          error: String(e),
+        });
+      }
+    }
+  }
+  record.installations.clear();
+  return true;
+}
+
 async function installPreDocumentScript(
   s: Session,
   client: import("chrome-remote-interface").Client,
@@ -116,11 +154,28 @@ async function installPreDocumentScript(
       // The target may have detached or select_target may have invalidated
       // this Page agent while the command was in flight. Only the currently
       // reserved operation may publish its returned identifier.
-      if (
+      const canPublish =
         record.pendingInstallations.get(key) === installation &&
-        (sessionId === undefined || s.sessionHandlers.has(sessionId))
-      ) {
+        s.preDocumentScripts.get(record.id) === record &&
+        (sessionId === undefined || s.sessionHandlers.has(sessionId));
+      if (canPublish) {
         record.installations.set(key, result.identifier);
+      } else {
+        // A detach/removal can win while the CDP registration is in flight.
+        // The returned identifier was never visible to the cleanup snapshot,
+        // so the operation that minted it must remove it itself.
+        try {
+          await client.Page.removeScriptToEvaluateOnNewDocument(
+            { identifier: result.identifier },
+            sessionId,
+          );
+        } catch (e) {
+          log.warn("failed to roll back stale pre-document script", {
+            scriptId: record.id,
+            sessionId: sessionId ?? null,
+            error: String(e),
+          });
+        }
       }
     });
     record.pendingInstallations.set(key, installation);
@@ -156,6 +211,100 @@ async function replayPreDocumentScripts(
   for (const record of s.preDocumentScripts.values()) {
     await installPreDocumentScript(s, client, record, sessionId, bestEffort);
   }
+}
+
+async function installActiveReactBinding(
+  s: Session,
+  client: import("chrome-remote-interface").Client,
+  sessionId: string | undefined,
+  bestEffort: boolean,
+): Promise<void> {
+  const bridge = s.reactBridge;
+  if (!bridge || bridge.status === "detaching") return;
+  const key = sessionId ?? ROOT_SESSION_KEY;
+  if (bridge.bindingInstallations.has(key)) return;
+
+  let installation = bridge.pendingBindingInstallations.get(key);
+  const ownsInstallation = installation === undefined;
+  if (!installation) {
+    installation = Promise.resolve().then(async () => {
+      await client.Runtime.addBinding({ name: bridge.bindingName }, sessionId);
+      const canPublish =
+        s.reactBridge === bridge &&
+        bridge.status !== "detaching" &&
+        bridge.pendingBindingInstallations.get(key) === installation &&
+        (sessionId === undefined || s.sessionHandlers.has(sessionId));
+      if (canPublish) {
+        bridge.bindingInstallations.add(key);
+      } else {
+        // Teardown may have started after addBinding was sent. This late
+        // registration cannot be discovered by a completed cleanup sweep, so
+        // remove it before the pending operation settles.
+        try {
+          await client.Runtime.removeBinding({ name: bridge.bindingName }, sessionId);
+        } catch (e) {
+          log.warn("failed to roll back stale React bridge binding", {
+            sessionId: sessionId ?? null,
+            error: String(e),
+          });
+        }
+      }
+    });
+    bridge.pendingBindingInstallations.set(key, installation);
+  }
+
+  try {
+    await installation;
+  } catch (e) {
+    if (!bestEffort) throw e;
+    if (ownsInstallation) {
+      log.warn("failed to install React bridge binding", {
+        sessionId: sessionId ?? null,
+        error: String(e),
+      });
+    }
+  } finally {
+    if (
+      ownsInstallation &&
+      bridge.pendingBindingInstallations.get(key) === installation
+    ) {
+      bridge.pendingBindingInstallations.delete(key);
+    }
+  }
+}
+
+/** Install the active React binding on the root and every known flat child. */
+export async function installReactBridgeBindings(s: Session): Promise<void> {
+  const client = s.client;
+  if (!client || !s.reactBridge) return;
+  await installActiveReactBinding(s, client, undefined, false);
+  for (const key of s.sessionHandlers.keys()) {
+    if (key === ROOT_SESSION_KEY) continue;
+    await installActiveReactBinding(s, client, key, true);
+  }
+}
+
+/** Remove every binding registration owned by the current React bridge. */
+export async function removeReactBridgeBindings(s: Session): Promise<void> {
+  const bridge = s.reactBridge;
+  const client = s.client;
+  if (!bridge) return;
+  await Promise.allSettled(bridge.pendingBindingInstallations.values());
+  bridge.pendingBindingInstallations.clear();
+  if (client) {
+    for (const key of bridge.bindingInstallations) {
+      const sessionId = key === ROOT_SESSION_KEY ? undefined : key;
+      try {
+        await client.Runtime.removeBinding({ name: bridge.bindingName }, sessionId);
+      } catch (e) {
+        log.warn("failed to remove React bridge binding", {
+          sessionId: sessionId ?? null,
+          error: String(e),
+        });
+      }
+    }
+  }
+  bridge.bindingInstallations.clear();
 }
 
 export async function launchChrome(opts: LaunchArgs = {}): Promise<{
@@ -364,6 +513,11 @@ async function onChildAttached(
   log.debug("child target attached", { sessionId, type: params.targetInfo.type, url: params.targetInfo.url });
   try {
     await connectDebugger(s, client, sessionId);
+    // If React DevTools was attached before this child appeared, the binding
+    // must exist before its tracked pre-document scripts replay. V1 ignores
+    // child-frame bridge events, but an injected bootstrap must still fail
+    // closed rather than throwing because its transport global is absent.
+    await installActiveReactBinding(s, client, sessionId, true);
     await enableBrowserDomains(s, client, sessionId);
     // Replay before recursively enabling auto-attach so this child is ready
     // before any nested child enumeration can arrive inline with that call.
@@ -409,6 +563,8 @@ function detachSession(
     record.installations.delete(sessionId);
     record.pendingInstallations.delete(sessionId);
   }
+  s.reactBridge?.bindingInstallations.delete(sessionId);
+  s.reactBridge?.pendingBindingInstallations.delete(sessionId);
 }
 
 // Browser-only domain enable + Network ring-buffer wiring. The Runtime +
@@ -421,6 +577,17 @@ async function enableBrowserDomains(
   sessionId: string | undefined,
 ): Promise<void> {
   const own = (eventSessionId: string | undefined) => eventSessionId === sessionId;
+
+  registerHandler(s, client, sessionId, "Page.frameNavigated", (
+    params: Protocol.Page.FrameNavigatedEvent,
+    eventSessionId?: string,
+  ) => {
+    if (!own(eventSessionId)) return;
+    // Only the root agent's top frame defines the v1 React tree. Same-process
+    // iframe frames carry parentId; OOPIFs arrive on a non-root flat session.
+    if (sessionId !== undefined || params.frame.parentId !== undefined) return;
+    s.noteMainFrame(params.frame.id, params.frame.loaderId);
+  });
 
   // Predicate that matches an entry by (requestId, sessionId). CDP requestIds
   // are scoped per Network agent — two iframes can both emit requestId="123" —
@@ -489,6 +656,16 @@ async function enableBrowserDomains(
 
   const swallow = (p: Promise<unknown>) => p.then(() => {}, () => {});
   await swallow(client.Page.enable(sessionId));
+  if (sessionId === undefined) {
+    try {
+      const { frameTree } = await client.Page.getFrameTree();
+      s.noteMainFrame(frameTree.frame.id, frameTree.frame.loaderId);
+    } catch (e) {
+      log.warn("Page.getFrameTree failed while seeding main-frame identity", {
+        error: String(e),
+      });
+    }
+  }
   await swallow(client.DOM.enable({}, sessionId));
   await swallow(client.Network.enable({}, sessionId));
 }
@@ -503,6 +680,13 @@ export async function switchTarget(s: Session, targetId: string): Promise<{ targ
   const host = s.chromeHost ?? undefined;
   const attached = s.attached;
   const ownedProcess = s.ownedProcess;
+  // Framework bridge registrations belong to this concrete page target.
+  // select_target normally performs this detach before entering switchTarget;
+  // direct callers and reconnect paths get the same full lifecycle barrier.
+  if (s.reactBridge) {
+    if (s.reactBridge.cleanup) await s.reactBridge.cleanup();
+    else s.clearReactBridge();
+  }
   try {
     await s.client.close().catch(() => {});
   } catch {
