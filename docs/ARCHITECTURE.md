@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-23**
 
 How `lynceus` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
@@ -98,6 +98,7 @@ contract.
 | Directory | Files | Responsibility | Component README |
 |---|---|---|---|
 | [`src/`](../src/) | `index.ts`, `server.ts`, `contract.ts`, `locator.ts` | Entry + server wiring + published `lynceus/contract` (LocatorSpec) | — |
+| [`src/framework/`](../src/framework/) | `adapter.ts`, `react.ts` | Stateless framework resolution seam (React-only in v1); mutable bridge/runtime state remains per addressed `SessionState` | [React DevTools design](./react-devtools-design.md) |
 | [`src/session/`](../src/session/) | `state.ts`, `browser.ts`, `node.ts`, `debugger.ts`, `capabilities.ts`, `pause.ts`, `buffers.ts` | `SessionRegistry`, transactional lifecycle, per-record pause/maps/buffers, registry-global sequencing; browser + Node kinds share `connectDebugger` | [README](../src/session/README.md) |
 | [`src/sourcemap/`](../src/sourcemap/) | `store.ts`, `loader.ts`, `normalize.ts` | TS↔JS coordinate translation, script indexing; kind-aware source-map fetch (browser via `Network.loadNetworkResource`, Node via `file://` on loopback only) | [README](../src/sourcemap/README.md) |
 | [`src/tools/`](../src/tools/) | 13 tool files + `_register.ts` + `_session_input.ts` + `_locator_runtime.ts` | 54 MCP tool implementations across `session` / `nav` / `source` / `breakpoints` / `execution` / `inspect` / `console` / `network` / `dom` / `forms` / `storage` / `node-output` / `timeline` | [README](../src/tools/README.md) |

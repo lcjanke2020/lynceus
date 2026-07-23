@@ -2,7 +2,7 @@
 
 > Living design doc for the **LEO-209** spike: embedding `react-devtools-core` behind a `FrameworkAdapter` seam in lynceus (Depth 2). It is built up incrementally across the sub-spikes S0–S6; **S6 (LEO-217) is the synthesis pass** that folds these findings into the final layer design and the reshaped LEO-9X.2–.7 proposals. Companion to [`docs/design-notes.md`](./design-notes.md) (v1, browser-only) and [`docs/node-session-design.md`](./node-session-design.md) (the Node extension).
 >
-> The architecture-level decisions locked in LEO-209 — **Depth 2** (embed `react-devtools-core`), the **`FrameworkAdapter` seam** (proposed location `src/framework/adapter.ts` — **not yet in the tree**; React-only in v1), and the **in-band CDP transport** (`Runtime.addBinding({name:"__lynceusReact__"})` + `Page.addScriptToEvaluateOnNewDocument`) — are **inputs** here, not re-litigated. This doc records what the surveys/spikes discover *about* those decisions.
+> The architecture-level decisions locked in LEO-209 — **Depth 2** (embed `react-devtools-core`), the **`FrameworkAdapter` seam** (`src/framework/adapter.ts`; the stateless React-only resolver landed in RDT-1 PR 1a, with bridge lifecycle deferred to PR 1b), and the **in-band CDP transport** (`Runtime.addBinding({name:"__lynceusReact__"})` + `Page.addScriptToEvaluateOnNewDocument`) — are **inputs** here, not re-litigated. This doc records what the surveys/spikes discover *about* those decisions.
 >
 > **How to read this doc:** §1 (architecture seed), §2 (S2/LEO-213 bridge round-trip), §3 (S3/LEO-214 lifecycle & event model), §4 (S4/LEO-215 cross-version matrix + prod-build detection), §5 (S5/LEO-216 surveys) and §6 (S6/LEO-217 synthesis) have all landed; each section is self-contained. **§6 is the synthesis pass** — it validates/revises the layer design, resolves the outstanding LEO-209 open questions, and reshapes the LEO-9X.2–.7 follow-on proposals. A `—` status below means "not landed yet."
 
@@ -208,8 +208,9 @@ mirrors the backend's own decoder.
 
 **Bottom line: no pivot.** None of the Pivot-1 brittleness thresholds tripped (§3.5).
 The binding survives every navigation type tested; the operations stream is a delta/patch
-stream exactly as §5.1 predicted; the tree-event model is settled (cursor-based). S4
-(LEO-215) can reuse this harness as-is.
+stream exactly as §5.1 predicted; the internal accumulation model is settled. The original
+spike described a cursor-based public read, but LEO-466 later superseded that API choice with
+a current server-materialized snapshot (§6.3). S4 (LEO-215) can reuse this harness as-is.
 
 ## 3.1 Navigation-survival matrix (task a)
 
@@ -262,7 +263,7 @@ refines it: reset per *new-document* nav (loader change), not per history nav.
 is neither silent nor frequent (the binding never actually drops), so manual
 `attach_react_devtools` remains viable. Do not remove the opt-in attach tool.
 
-## 3.2 Tree-event model — delta vs snapshot (task b): **cursor-based, confirmed**
+## 3.2 Tree-event model — delta stream confirmed; public snapshot contract supersedes
 
 `operations` is a **patch stream**, decisively:
 
@@ -274,10 +275,12 @@ is neither silent nor frequent (the binding never actually drops), so manual
 | `reorderTodos()` — reverse list | 1 | 10 ints | `REORDER_CHILDREN` |
 
 Mount is one big batch of `ADD`s; every subsequent **structural** change is a tiny
-incremental patch. This forces `get_react_tree` to be **cursor-based like
-`get_console_logs`** — accumulate operations into store state and serve snapshots from the
-*accumulated* state; there is no "give me the whole tree" pull. Confirms the §5.1
-prior-art expectation empirically.
+incremental patch. This forces the server to accumulate operations into materialized store
+state; there is no backend "give me the whole tree" pull. The spike originally inferred a
+cursor-based public API from that transport shape. **LEO-466 supersedes that public-contract
+inference:** `get_react_tree` returns the current server-materialized snapshot, and agents do
+not consume cursors or reconstruct the tree from deltas. The empirical delta-stream finding
+remains the internal implementation constraint.
 
 **Operations format (v7), mirrored in `operations-decode.mjs`:** header
 `[rendererID, rootID, stringTableSize, …stringTable…]` then opcodes. **Two interleaved
@@ -377,7 +380,8 @@ guarantee holds with headroom.
 - **Layer 2** — `reactBridge` accumulates the structural `operations` stream; reset its
   maps/string-tables on **new-document** navigations via the generation counter; bfcache
   restores need no reset. Buffer is low-pressure (structural events only).
-- **Layer 3** — `get_react_tree` is cursor-based over accumulated state;
+- **Layer 3** — `get_react_tree` returns the current server-materialized snapshot (LEO-466);
+  the server alone applies the accumulated delta stream;
   `inspect_react_component` pulls live and must decode the dehydrated `{data, cleaned}`
   envelope with path hydration; source-dependent tools tolerate `source: null`.
 - **No architecture change; no pivot.** S4 (LEO-215) reuses this harness for the
@@ -581,7 +585,7 @@ document). So:
 *Current contract* — emittable today with no wrapper change:
 
 ```json
-{ "error": "production_build_detected", "message": "React production build (renderer bundleType 0); the DEV edit surface is unavailable (canEdit* false). Rebuild in development mode for prop/hook overrides." }
+{ "error": "production_build_detected", "message": "React production build (renderer bundleType 0); lynceus blocks override writes against production renderers. Rebuild in development mode for prop/hook overrides." }
 ```
 
 *Proposed enrichment (S6 / LEO-363)* — carries the machine-usable signal, but **requires
@@ -598,17 +602,15 @@ extending `ToolError` + `_register.ts`** to thread `recoverable` + `data` throug
 > canary fixture; a prod-detection tool should key on `bundleType`, never parse this string.
 
 **Read vs write — the contract (resolving the earlier ambiguity).** `production_build_detected`
-is a **write-side hard error, not a session-level one.** The override tools
-(`override_react_props` / `override_react_hook_state`, LEO-363) **fail** with it — `canEdit*`
-is false, so the write genuinely cannot succeed. (PR #66 review caveat: that holds for
-**function components**, whose overrides ride the `__DEV__`-injected reconciler hooks; §5.4 shows
-**class-component** props/state/context writes are backend-side mutations that can succeed on a
-production renderer, and S4's `canEdit*` evidence comes from an all-function-component fixture —
-the exact write-gating is §6.5 #9, owned by RDT-5.) The **read** tools (`get_react_tree` /
-`inspect_react_component`) do **not** fail: they return the complete tree and the surviving
-values, ideally tagged once with a `production_build_detected` **warning annotation** so the
-agent knows the edit surface is off and names may be degraded. Non-recoverable *for writes*,
-non-fatal *for reads*.
+is a **write-side hard error, not a session-level one.** By deliberate LEO-466 safety policy,
+the override tools (`override_react_props` / `override_react_hook_state`, LEO-363) **block every
+write against a production renderer**. That includes class-component props/state/context writes
+that the backend could technically perform; the blanket block is lynceus policy, not a React
+limitation. Development writes still honor per-element `canEdit*` capability. The **read** tools
+(`get_react_tree` / `inspect_react_component`) do **not** fail: they return the complete tree and
+the surviving values, ideally tagged once with a `production_build_detected` **warning
+annotation** so the agent knows the edit surface is off and names may be degraded.
+Non-recoverable *for writes*, non-fatal *for reads*.
 
 ## 4.4 Abort / second-pivot check
 
@@ -958,8 +960,8 @@ messaging protocol — no bespoke Wall code. The proven bootstrap recipe (§2.2,
 - **Readiness = sentinel + first `operations` event, not `Page.loadEventFired`** — backend init +
   first commit are async after load (§3.7).
 
-Two L1 additions the spike surfaced: (1) a **`Page.addScriptToEvaluateOnNewDocument` primitive is
-not yet in the tree** — RDT-1 lands it, tracked on `SessionState` and replayed to child sessions the
+Two L1 additions the spike surfaced: (1) a **`Page.addScriptToEvaluateOnNewDocument` primitive** —
+landed in RDT-1 PR 1a, tracked on `SessionState` and replayed to child sessions the
 way `pauseOnExceptions` is (this is the pre-React injection guarantee). (2) **Capture renderer
 metadata at attach** — `bundleType`, `version`, `rendererPackageName` — the load-bearing inputs for
 build-detection (§4.3) and the dormant version guard (§4.6).
@@ -980,9 +982,9 @@ across every nav type tested (§3.1). `RingBuffer<ReactBridgeEvent>` buffers onl
 stretch (conditional, §5.4): `override_react_props` / `override_react_hook_state`. Three payload
 shapes every implementer must honor:
 
-- `get_react_tree` is **cursor-based over the accumulated delta stream** (`operations` is a patch
-  stream, §3.2), serving a snapshot from accumulated state like `get_console_logs` — never a
-  whole-tree pull.
+- `get_react_tree` returns the **current server-materialized snapshot** (LEO-466). `operations`
+  remains an internal patch stream (§3.2), but the server consumes those deltas; agents never
+  receive a cursor or reconstruct the tree themselves.
 - `inspect_react_component` decodes the **dehydrated `{data, cleaned, unserializable}` envelope**
   with path-based lazy hydration (§3.3) — values are pulled on demand, never streamed.
 - Source-dependent tools tolerate **`source: null` on a version-variant minority** and must not
@@ -1007,7 +1009,7 @@ LEO-217 was tasked to close, plus the RSC scoping) plus the three the spikes alr
 | 1 | Pin one `react-devtools-core` bundle vs ship multiple + version-detect | **Pin one — `react-devtools-core@7.0.1`.** A single vendored backend normalizes the Fiber ABI across React 16.8→19 at full fidelity (§4.1); the real coupling is to *this backend*, not the app's React, so multiple bundles buy nothing. Track/bump the backend, not per-React pages. | **S6** ← S4 §4.5 |
 | 2 | `attach_react_devtools` opt-in vs auto-attach default | **Opt-in per session.** S3's Pivot-2 did not trigger: the binding survives every nav type and reattach is automatic + cheap (§3.1), so manual attach stays viable. Keep the opt-in tool; do not auto-attach. | **S6** ← S3 §3.1 |
 | 3 | RSC (React 19+) agent-debuggable surface | **Out of v1 — client components only.** RSC payloads are partially opaque; the read/inspect surface targets client components. File a **separate RSC follow-on** (not one of RDT-1–6). | **S6** |
-| 4 | Subscription deltas vs full-tree snapshots | **Delta/patch stream.** `operations` is a patch stream (§3.2); `get_react_tree` is cursor-based, serving a snapshot from accumulated state. | S3 §3.2 |
+| 4 | Subscription deltas vs full-tree snapshots | **Internal delta stream, public current snapshot.** `operations` is a patch stream (§3.2), which the server consumes into materialized state; `get_react_tree` returns that current snapshot with no agent-facing cursor (LEO-466). | S3 §3.2 + LEO-466 |
 | 5 | Source-map round-trip `componentId` ↔ `file:line:col` | **Feasible via existing machinery.** `mapCdpToOriginal` suffices; the only new piece is a `url → candidates` index (with `sessionId` threaded; URLs are not unique — §2.5), and tools tolerate `source: null` (§2.5, §3.4, §4.2). | S2 §2.5 / S3 §3.4 |
 | 6 | Re-attach on reload — does the binding survive `Page.frameNavigated`? | **Yes, all nav types.** The binding + injected bootstrap survive same-origin, cross-origin, back/forward (bfcache), and hard reload; state resets per new-document nav (§3.1). | S3 §3.1 |
 
@@ -1024,13 +1026,16 @@ The follow-on tickets cite this block:
   vendored backend (`@7.0.1`), not React.**
 - **Bridge lifecycle:** opt-in attach; binding survives every nav; generation reset per
   new-document nav (loader-ID change), not per history nav.
-- **Tree-event model:** `operations` is a delta/patch stream; `get_react_tree` is cursor-based over
-  accumulated state.
+- **Frame scope:** main-frame React trees only in v1 (LEO-466). The generic pre-document transport
+  may inject into child realms, but bridge events from non-main frames are ignored
+  deterministically; multi-frame identity and reverse routing are deferred.
+- **Tree-event model:** `operations` is an internal delta/patch stream; `get_react_tree` returns
+  the current server-materialized snapshot. Agents do not consume cursors or reconstruct trees.
 - **Build detection:** the reliable discriminators are **`bundleType 0` + per-element `canEdit* ===
   false`** (§4.3) — *not* name/source stripping (that is app-minification, not React's `bundleType`).
-  `production_build_detected` is a **write-side hard error** (the override tools genuinely cannot
-  succeed for function components — class-component writes are §6.5 #9, owned by RDT-5) and a
-  **read-side warning annotation** (tree + surviving values still return):
+  `production_build_detected` is a **write-side hard error for every production override** by
+  deliberate LEO-466 safety policy (including technically possible class-component writes), and
+  a **read-side warning annotation** (tree + surviving values still return):
   non-recoverable *for writes*, non-fatal *for reads*. (Exact warning-field shape — a top-level
   flag vs a one-time metadata tag — is deferred to RDT-1/RDT-2.)
 - **Transport:** embed the real backend + `connectWithCustomMessagingProtocol`; no hand-rolled Wall.
@@ -1075,10 +1080,10 @@ Linear itself.)
 | 4 | RDT-2 (LEO-360) | "top-level components rendered via `createRoot` can report `source: null`." | Broaden per §3.4/§4.2: null also covers provider/boundary fibers + structural components on 16–18 (set shrinks on 19). Tolerate null generally, not just `createRoot` tops. |
 | 5 | RDT-2 (LEO-360) | "RSC … explicitly out of v1 per design doc" — but no RSC follow-on ticket exists. | The design doc now makes the call (§6.2 #3); **file a separate RSC follow-on**. |
 | 6 | (unowned) | §4.3's richer `production_build_detected` envelope (`recoverable` + `data`) needs `ToolError` + `_register.ts` changes; today's contract is flat `{error, message}`. | **Recommend RDT-1** (it introduces the first react envelope, so RDT-5 inherits a consistent shape); alternatively RDT-5, or keep flat `{error, message}` for v1 and defer. |
-| 7 | RDT-1 (LEO-359) | Bridge model has no frame/execution-context identity: `Page.addScriptToEvaluateOnNewDocument` runs in **every frame** and `Runtime.bindingCalled` carries the originating execution context, so same-process iframes spin up independent backends with overlapping renderer/element IDs while an unqualified `Runtime.evaluate` reverse-routes to the default realm (PR #66 review). | Decide v1 scope in RDT-1: declare **main-frame-only** explicitly (simplest; every spike fixture was single-frame), or key bridge state by flat `sessionId` + execution context/frame + generation and route reverse messages to that realm. |
+| 7 | RDT-1 (LEO-359) | Bridge model has no frame/execution-context identity: `Page.addScriptToEvaluateOnNewDocument` runs in **every frame** and `Runtime.bindingCalled` carries the originating execution context, so same-process iframes spin up independent backends with overlapping renderer/element IDs while an unqualified `Runtime.evaluate` reverse-routes to the default realm (PR #66 review). | **Decided by LEO-466 (2026-07-23): main-frame React trees only in v1.** Ignore non-main-frame bridge events deterministically; defer multi-frame identity and reverse routing. |
 | 8 | RDT-1 (LEO-359) | `detach_react_devtools` has no lifecycle contract: `Runtime.removeBinding` only stops notifications (the page-global function survives), `Page.removeScriptToEvaluateOnNewDocument` only stops future injections, and a same-document reattach cannot rely on the `ReactDevToolsBackend` setter re-firing (the UMD global is already assigned) (PR #66 review). | RDT-1 specifies detach cleanup (invoke the backend's returned unsubscribe, clear `reactBridge`, bump the generation to fence late events), idempotency, and the same-document reattach path. |
-| 9 | RDT-5 (LEO-363) | §4.3 ("production ⇒ override writes hard-fail") vs §5.4 (class-component props/state/context writes are backend-side mutations that work without the `__DEV__`-injected hooks); S4's `canEdit* === false` evidence is from an all-function-component fixture (PR #66 review). | Gate writes on **per-element capability** (`canEdit*` / element type), not blanket `bundleType`; if prod class-component writes stay disabled anyway, record that as deliberate product policy. Conditional ticket — decide when RDT-5 is greenlit. |
-| 10 | RDT-2 (LEO-360) | "`get_react_tree` is cursor-based" (§3.2/§6.1) vs "serves a snapshot from accumulated state" can read as two different public contracts (PR #66 review). | Internal accumulation is delta-driven either way; RDT-2 pins the **public** tool contract — snapshot-only, cursor/delta reads like `get_console_logs`, or both. |
+| 9 | RDT-5 (LEO-363) | §4.3 ("production ⇒ override writes hard-fail") vs §5.4 (class-component props/state/context writes are backend-side mutations that work without the `__DEV__`-injected hooks); S4's `canEdit* === false` evidence is from an all-function-component fixture (PR #66 review). | **Decided by LEO-466 (2026-07-23): block all production override writes.** This includes technically possible class-component writes and is a deliberate lynceus safety policy, not a React limitation. Development writes still honor per-element capability. |
+| 10 | RDT-2 (LEO-360) | "`get_react_tree` is cursor-based" (§3.2/§6.1) vs "serves a snapshot from accumulated state" can read as two different public contracts (PR #66 review). | **Decided by LEO-466 (2026-07-23): current server-materialized snapshot.** The server consumes React's delta stream internally; agents do not reconstruct trees from cursors/deltas in v1. |
 
 ---
 

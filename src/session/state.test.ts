@@ -6,11 +6,42 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import type CDP from "chrome-remote-interface";
-import { registry, getSession, requireSession, type Session, type SessionKind } from "./state.js";
+import {
+  registry,
+  getSession,
+  requireSession,
+  ROOT_SESSION_KEY,
+  type PreDocumentScriptRecord,
+  type Session,
+  type SessionKind,
+} from "./state.js";
 import { ToolError } from "../util/errors.js";
 
 afterEach(() => {
   registry.resetForTests();
+});
+
+describe("SessionState pre-document scripts — isolation", () => {
+  it("owns an independent registry per session and clears it on reset", () => {
+    const browser = registry.reserve("browser");
+    const node = registry.reserve("node");
+    const script: PreDocumentScriptRecord = {
+      id: "root-script",
+      spec: Object.freeze({ source: "bootstrap();" }),
+      installations: new Map([[ROOT_SESSION_KEY, "root-script"]]),
+      pendingInstallations: new Map(),
+    };
+
+    browser.state.preDocumentScripts.set(script.id, script);
+
+    expect(browser.state.preDocumentScripts).not.toBe(node.state.preDocumentScripts);
+    expect(browser.state.preDocumentScripts.get(script.id)).toBe(script);
+    expect(node.state.preDocumentScripts.size).toBe(0);
+
+    browser.state.reset();
+    expect(browser.state.preDocumentScripts.size).toBe(0);
+    expect(node.state.preDocumentScripts.size).toBe(0);
+  });
 });
 
 describe("SessionRegistry.activate — strict starting → active invariant", () => {

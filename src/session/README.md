@@ -1,19 +1,20 @@
 # src/session/
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-23**
 
 Owns the debug-target registry and every target's mutable runtime state. A single
 lynceus process can keep one browser session and one Node Inspector session live at
 the same time; each record has its own CDP client, pause tracker, breakpoints, source
-maps, console/network buffers, and (for launched Node children) stdout/stderr buffer.
+maps, console/network buffers, tracked pre-document scripts (browser only), and
+(for launched Node children) stdout/stderr buffer.
 
 ## Files
 
 | File | Main exports | Role |
 |---|---|---|
-| `state.ts` | `registry`, `Session`, `SessionKind`, `SessionRecord`, `requireSession()`, `requirePaused()`, `requireCapable()`, `registerHandler()`, `ROOT_SESSION_KEY` | `SessionRegistry` plus the per-target `SessionState`. The registry mints `browser_N` / `node_N`, enforces capacity and unique labels, resolves addresses, owns startup rollback and close fan-out, and allocates cross-session event sequence numbers. |
+| `state.ts` | `registry`, `Session`, `SessionKind`, `SessionRecord`, `PreDocumentScriptSpec`, `PreDocumentScriptRecord`, `requireSession()`, `requirePaused()`, `requireCapable()`, `registerHandler()`, `ROOT_SESSION_KEY` | `SessionRegistry` plus the per-target `SessionState`. The registry mints `browser_N` / `node_N`, enforces capacity and unique labels, resolves addresses, owns startup rollback and close fan-out, and allocates cross-session event sequence numbers. |
 | `capabilities.ts` | `TOOL_KIND_SUPPORT` | Per-tool kind allowlist consulted by `requireCapable()`. Shared Runtime/Debugger tools work on both kinds; browser-only and Node-only tools fail with `unsupported_target`. |
-| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()` | Browser lifecycle. `Target.setAutoAttach({ flatten: true })` brings workers and iframes onto the same CRI client with their own CDP `sessionId`. |
+| `browser.ts` | `launchChrome()`, `attachChrome()`, `switchTarget()`, `addPreDocumentScript()` | Browser lifecycle. `Target.setAutoAttach({ flatten: true })` brings workers and iframes onto the same CRI client with their own CDP `sessionId`; tracked `Page.addScriptToEvaluateOnNewDocument` definitions replay onto new Page agents. |
 | `node.ts` | `attachNode()`, `launchNode()` | Node Inspector lifecycle. Launch mode owns the child, discovers its port from stderr, and captures stdio; attach mode leaves the external process alone. |
 | `debugger.ts` | `connectDebugger()` | Shared Runtime + Debugger wiring, pause events, console buffering, and source-map discovery for either target kind. |
 | `pause.ts` | `PauseTracker`, `PauseState`, `PauseWaitHandle` | One pause state per debug target. Supports scoped waits, cancellable registry races, resume synchronization, and fast-step pause detection. |
@@ -126,7 +127,8 @@ selection is retained.
 - Send CDP calls through `s.client!.send(method, params, sessionId?)`; preserve the
   originating CDP child `sessionId` where applicable.
 - Read mutable state from that resolved record: `s.pause`, `s.scripts`,
-  `s.breakpoints`, `s.console`, `s.network`, and `s.nodeOutput`.
+  `s.breakpoints`, `s.preDocumentScripts`, `s.console`, `s.network`, and
+  `s.nodeOutput`.
 - L2 tests create/activate registry records and inject `test/fake-cdp.ts` into the
   record's `client`; there is no process-global session-state injection slot.
 
@@ -140,7 +142,8 @@ selection is retained.
 - **Flat-session provenance is independent.** Omitted `session_id` always means root;
   it never falls back to the currently paused worker/iframe.
 - **Auto-attach replay.** New browser child sessions inherit
-  `pauseOnExceptions`; any new per-CDP-session policy needs the same replay audit.
+  `pauseOnExceptions` and every tracked pre-document script. Any new
+  per-CDP-session policy needs the same replay audit.
 - More depth: [dual-target-debugging.md](../../docs/dual-target-debugging.md) for the
   multi-session contract and [test-eval-plan.md](../../docs/test-eval-plan.md)
   §Critical gotchas for pause/source-map races.

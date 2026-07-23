@@ -68,6 +68,47 @@ describe("makeFakeCdp — send + responders", () => {
     expect(r.data.startsWith("iVBOR")).toBe(true);
   });
 
+  it("models pre-document script registration with per-call identifiers and flat-session routing", async () => {
+    const fake = makeFakeCdp();
+    const root = await fake.Page.addScriptToEvaluateOnNewDocument({ source: "root();" });
+    const child = await fake.Page.addScriptToEvaluateOnNewDocument({ source: "child();" }, "IF1");
+
+    expect(root.identifier).toMatch(/^pre-document-\d+$/);
+    expect(child.identifier).toMatch(/^pre-document-\d+$/);
+    expect(child.identifier).not.toBe(root.identifier);
+    expect(fake.sentCalls.slice(-2)).toEqual([
+      {
+        method: "Page.addScriptToEvaluateOnNewDocument",
+        params: { source: "root();" },
+        sessionId: undefined,
+      },
+      {
+        method: "Page.addScriptToEvaluateOnNewDocument",
+        params: { source: "child();" },
+        sessionId: "IF1",
+      },
+    ]);
+  });
+
+  it("models Runtime.addBinding on root and child Runtime agents", async () => {
+    const fake = makeFakeCdp();
+    await fake.Runtime.addBinding({ name: "__lynceusReact__" });
+    await fake.Runtime.addBinding({ name: "__lynceusReact__" }, "IF1");
+
+    expect(fake.sentCalls.slice(-2)).toEqual([
+      {
+        method: "Runtime.addBinding",
+        params: { name: "__lynceusReact__" },
+        sessionId: undefined,
+      },
+      {
+        method: "Runtime.addBinding",
+        params: { name: "__lynceusReact__" },
+        sessionId: "IF1",
+      },
+    ]);
+  });
+
   it("sentCalls records every send in order with the right session", async () => {
     const fake = makeFakeCdp();
     // Custom.Thing isn't in KNOWN_VOID_METHODS — register a responder to
@@ -170,6 +211,44 @@ describe("makeFakeCdp — fireEvent (flatten:true two-arg shape)", () => {
     expect(args).toHaveLength(1);
     expect(args[0]).toHaveLength(2); // (params, sessionId=undefined)
     expect(args[0][1]).toBeUndefined();
+  });
+});
+
+describe("makeFakeCdp — Runtime.bindingCalled provenance", () => {
+  it("preserves binding name, payload, execution context, and flat session", () => {
+    const fake = makeFakeCdp();
+    let captured: { params: any; sessionId?: string } | null = null;
+    fake.on("Runtime.bindingCalled", (params: any, sessionId?: string) => {
+      captured = { params, sessionId };
+    });
+
+    fake.fireBindingCalled({
+      name: "__lynceusReact__",
+      payload: '{"event":"operations"}',
+      executionContextId: 42,
+      sessionId: "IF1",
+    });
+
+    expect(captured).toEqual({
+      params: {
+        name: "__lynceusReact__",
+        payload: '{"event":"operations"}',
+        executionContextId: 42,
+      },
+      sessionId: "IF1",
+    });
+  });
+
+  it("uses root provenance and a deterministic execution-context default when omitted", () => {
+    const fake = makeFakeCdp();
+    const calls: any[][] = [];
+    fake.on("Runtime.bindingCalled", (...args: any[]) => calls.push(args));
+
+    fake.fireBindingCalled({ name: "bridge", payload: "ready" });
+
+    expect(calls).toEqual([
+      [{ name: "bridge", payload: "ready", executionContextId: 1 }, undefined],
+    ]);
   });
 });
 
