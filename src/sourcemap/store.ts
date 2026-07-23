@@ -35,6 +35,11 @@ const keyFor = (scriptId: string, sessionId: string | undefined) =>
 // Indexes scripts the browser has parsed and their (optional) source maps.
 export class ScriptStore {
   private byKey = new Map<string, ScriptInfo>();
+  // React DevTools reports source locations by generated script URL, not
+  // scriptId. URLs are not unique across flat CDP agents (or even repeated
+  // parses in one agent), so the index deliberately maps to a set of compound
+  // ScriptStore keys rather than selecting one candidate eagerly.
+  private byUrl = new Map<string, Set<string>>();
 
   // HMR / soft-reload note: when a script is re-parsed under the same
   // (sessionId, scriptId), Object.assign(existing, info) copies the new
@@ -52,10 +57,12 @@ export class ScriptStore {
     const key = keyFor(info.scriptId, info.sessionId);
     const existing = this.byKey.get(key);
     if (existing) {
+      if (existing.url !== info.url) this.removeUrlKey(existing.url, key);
       Object.assign(existing, info);
     } else {
       this.byKey.set(key, { ...info });
     }
+    this.addUrlKey(info.url, key);
   }
 
   get(scriptId: string, sessionId?: string): ScriptInfo | undefined {
@@ -66,13 +73,28 @@ export class ScriptStore {
     return Array.from(this.byKey.values());
   }
 
+  findByUrl(url: string): ScriptInfo[] {
+    const keys = this.byUrl.get(url);
+    if (!keys) return [];
+    const matches: ScriptInfo[] = [];
+    for (const key of keys) {
+      const script = this.byKey.get(key);
+      if (script) matches.push(script);
+    }
+    return matches;
+  }
+
   remove(scriptId: string, sessionId?: string) {
-    this.byKey.delete(keyFor(scriptId, sessionId));
+    const key = keyFor(scriptId, sessionId);
+    const script = this.byKey.get(key);
+    if (script) this.removeUrlKey(script.url, key);
+    this.byKey.delete(key);
   }
 
   clear() {
     for (const s of this.byKey.values()) s.consumer?.destroy();
     this.byKey.clear();
+    this.byUrl.clear();
   }
 
   // Find scripts whose source map references the given TS file.
@@ -132,6 +154,19 @@ export class ScriptStore {
       if (s.sourceMapURL && !s.consumer && !s.loadError) return true;
     }
     return false;
+  }
+
+  private addUrlKey(url: string, key: string): void {
+    const keys = this.byUrl.get(url) ?? new Set<string>();
+    keys.add(key);
+    this.byUrl.set(url, keys);
+  }
+
+  private removeUrlKey(url: string, key: string): void {
+    const keys = this.byUrl.get(url);
+    if (!keys) return;
+    keys.delete(key);
+    if (keys.size === 0) this.byUrl.delete(url);
   }
 }
 

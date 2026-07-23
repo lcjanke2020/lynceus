@@ -7,6 +7,13 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
+- **Read-only React component inspection** (LEO-360) — added
+  `get_react_tree`, `find_react_component`, and `inspect_react_component` on top of the
+  opt-in bridge. React DevTools v7 operations are decoded into an atomic,
+  generation-scoped server-side tree; live inspection returns normalized dehydration
+  metadata and best-effort TypeScript source positions. Reads are bounded, preserve
+  renderer identity, warn without failing on production builds, and remain isolated to
+  the addressed browser session.
 - **React DevTools backend bridge** (LEO-359; #75–#76) — added opt-in
   `attach_react_devtools` / `detach_react_devtools` lifecycle tools backed by
   exact-pinned `react-devtools-core@7.0.1`. Per-session attachment and document
@@ -18,7 +25,7 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
   launch/attach returns monotonic `browser_N` / `node_N` IDs and optional labels,
   `list_sessions` exposes both lanes, `close_session(session?)` tears down one record,
   and process shutdown awaits `closeAll()` including in-flight Node-child cleanup.
-- **Explicit session routing across the 56-tool surface** — ordinary session-scoped
+- **Explicit session routing across the 59-tool surface** — ordinary session-scoped
   tools accept `session`; omission remains backward-compatible with one live target and
   returns `ambiguous_session` with two. The separate CDP-child `session_id` axis is now
   nullable/optional and documented consistently on all 11 tools that round-trip

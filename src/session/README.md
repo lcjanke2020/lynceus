@@ -7,8 +7,8 @@ lynceus process can keep one browser session and one Node Inspector session live
 the same time; each record has its own CDP client, pause tracker, breakpoints, source
 maps, console/network buffers, tracked pre-document scripts (browser only), and
 (for launched Node children) stdout/stderr buffer. An opt-in React DevTools bridge
-also keeps its lifecycle, document generation, and raw structural events on the
-addressed browser session.
+also keeps its lifecycle, generation-scoped materialized component tree, renderer
+metadata, and live-inspection request coordinator on the addressed browser session.
 
 ## Files
 
@@ -20,7 +20,7 @@ addressed browser session.
 | `node.ts` | `attachNode()`, `launchNode()` | Node Inspector lifecycle. Launch mode owns the child, discovers its port from stderr, and captures stdio; attach mode leaves the external process alone. |
 | `debugger.ts` | `connectDebugger()` | Shared Runtime + Debugger wiring, pause events, console buffering, source-map discovery, and execution-context provenance for either target kind. |
 | `pause.ts` | `PauseTracker`, `PauseState`, `PauseWaitHandle` | One pause state per debug target. Supports scoped waits, cancellable registry races, resume synchronization, and fast-step pause detection. |
-| `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry`, `NodeOutputEntry`, `ReactBridgeEvent` | Four capped per-target buffers. All receive sequence numbers from one registry-global allocator; the public timeline currently merges console/network/Node output, while React `operations` remain internal input for RDT-2's materialized tree. |
+| `buffers.ts` | `RingBuffer<T>`, `ConsoleEntry`, `NetworkEntry`, `NodeOutputEntry`, `ReactBridgeEvent` | Four capped per-target buffers. All receive sequence numbers from one registry-global allocator; the public timeline currently merges console/network/Node output, while React `operations` remain an internal diagnostic buffer after synchronous decoding into the materialized tree. |
 
 ## Registry model
 
@@ -102,10 +102,15 @@ the external process's stdio and therefore leaves the Node-output buffer empty.
 
 `attach_react_devtools` installs the exact-pinned React backend before page code, then
 waits for both a bootstrap sentinel and the first main-frame `operations` event. The
-binding and tracked scripts persist across navigation; a changed main-frame loader ID
-clears raw operations and advances only the document generation, while a BFCache restore
-with the same loader retains it. Detach unsubscribes, removes registrations, clears the
-buffer, and advances the attachment generation so late callbacks cannot cross epochs.
+binding and tracked scripts persist across navigation. Each accepted operations payload
+is fully decoded and validated before it is atomically applied to the session's current
+component tree. A changed main-frame loader ID clears that tree, renderer metadata,
+inspection caches/pending requests, and raw operations, then advances only the document
+generation; a BFCache restore with the same loader retains all of them. Detach
+unsubscribes, removes registrations, clears bridge-owned state, rejects pending
+inspections, and advances the attachment generation so late callbacks cannot cross
+epochs. Component IDs are therefore stable only within the returned bridge/document
+generation; callers should refresh the tree after navigation.
 Attach and detach share one serialized lifecycle: teardown publishes cancellation before
 its first CDP await, waits for already-issued registrations to settle or self-roll back,
 and a concurrent reattach waits behind that cleanup barrier.
@@ -141,7 +146,9 @@ selection is retained.
 - Read mutable state from that resolved record: `s.pause`, `s.scripts`,
   `s.breakpoints`, `s.preDocumentScripts`, `s.console`, `s.network`, and
   `s.nodeOutput`. Framework tools additionally use `s.reactBridge`,
-  `s.reactEvents`, and `requireReactBridge(s)`.
+  `s.reactEvents`, and `requireReactBridge(s)`. React tree/find reads use the
+  server-materialized store; component inspection correlates a request ID through the
+  reverse bridge and may issue a second request to hydrate an optional nested path.
 - L2 tests create/activate registry records and inject `test/fake-cdp.ts` into the
   record's `client`; there is no process-global session-state injection slot.
 

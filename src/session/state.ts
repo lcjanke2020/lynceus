@@ -10,8 +10,11 @@ import {
   type ReactBridgeEvent,
 } from "./buffers.js";
 import { ScriptStore } from "../sourcemap/store.js";
+import type { ReactInspectionCoordinator } from "../framework/react-inspection.js";
+import type { ReactComponentStore } from "../framework/react-store.js";
 import { log } from "../util/log.js";
 import {
+  ToolError,
   alreadySession,
   ambiguousSession,
   duplicateLabel,
@@ -103,6 +106,13 @@ export interface ReactBridgeState {
   // a reload. Async binding events from that old document must not satisfy
   // readiness for the replacement document.
   minimumAcceptedDocumentGeneration: number;
+  // Framework-internal projections. Raw operations remain buffered for
+  // diagnostics, while read tools consume this generation-scoped snapshot.
+  readonly tree: ReactComponentStore;
+  readonly inspections: ReactInspectionCoordinator;
+  mainExecutionContextId?: number;
+  protocolError?: string;
+  unsupportedVersion?: string;
   readonly bindingInstallations: Set<string>;
   readonly pendingBindingInstallations: Map<string, Promise<void>>;
   bootstrapScriptId?: string;
@@ -262,6 +272,13 @@ class SessionState {
     bridge.documentGeneration += 1;
     bridge.sentinelSeen = false;
     bridge.operationsSeen = false;
+    bridge.mainExecutionContextId = undefined;
+    bridge.protocolError = undefined;
+    bridge.unsupportedVersion = undefined;
+    bridge.tree.reset(bridge.documentGeneration);
+    bridge.inspections.reset(
+      "The main document changed while React component inspection was in flight. Retry against the new tree generation.",
+    );
     this.reactEvents.clear();
   }
 
@@ -813,6 +830,14 @@ export function requireReactBridge(s: SessionState): ReactBridgeState {
   ) {
     throw noReactBridge();
   }
+  if (bridge.unsupportedVersion) {
+    throw new ToolError("unsupported_react_version", bridge.unsupportedVersion);
+  }
+  if (bridge.protocolError) {
+    throw new ToolError("react_protocol_error", bridge.protocolError);
+  }
+  const unsupported = bridge.tree.unsupportedVersionMessage();
+  if (unsupported) throw new ToolError("unsupported_react_version", unsupported);
   return bridge;
 }
 

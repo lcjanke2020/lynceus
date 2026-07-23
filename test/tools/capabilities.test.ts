@@ -69,6 +69,9 @@ const cases: Case[] = [
   // react.ts — a short timeout keeps the browser-kind sanity case bounded;
   // this matrix checks the capability gate, not bridge readiness semantics.
   { tool: "attach_react_devtools", handler: reactTools.get("attach_react_devtools")!, args: { timeout_ms: 100 } },
+  { tool: "get_react_tree", handler: reactTools.get("get_react_tree")!, args: {} },
+  { tool: "find_react_component", handler: reactTools.get("find_react_component")!, args: { name: "App" } },
+  { tool: "inspect_react_component", handler: reactTools.get("inspect_react_component")!, args: { component_id: 1 } },
   { tool: "detach_react_devtools", handler: reactTools.get("detach_react_devtools")!, args: {} },
 ];
 

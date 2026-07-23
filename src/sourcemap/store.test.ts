@@ -177,6 +177,36 @@ describe("ScriptStore + bidirectional translation", () => {
     expect(store.get("42", undefined)?.url).toBe("http://localhost/root.js");
   });
 
+  it("indexes every script candidate by URL and maintains the index across updates", () => {
+    const store = new ScriptStore();
+    store.upsert({
+      scriptId: "42", url: "http://localhost/shared.js",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 1, hash: "root",
+    });
+    store.upsert({
+      scriptId: "42", url: "http://localhost/shared.js", sessionId: "SW1",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 2, hash: "worker",
+    });
+    expect(store.findByUrl("http://localhost/shared.js")).toHaveLength(2);
+
+    store.upsert({
+      scriptId: "42", url: "http://localhost/renamed.js", sessionId: "SW1",
+      startLine: 0, startColumn: 0, endLine: 100, endColumn: 0,
+      executionContextId: 2, hash: "worker-2",
+    });
+    expect(store.findByUrl("http://localhost/shared.js").map((script) => script.hash)).toEqual([
+      "root",
+    ]);
+    expect(store.findByUrl("http://localhost/renamed.js")[0]?.hash).toBe("worker-2");
+
+    store.remove("42", "SW1");
+    expect(store.findByUrl("http://localhost/renamed.js")).toEqual([]);
+    store.clear();
+    expect(store.findByUrl("http://localhost/shared.js")).toEqual([]);
+  });
+
   it("findByOriginalSource returns multiple candidates when several scripts map to the same TS file", () => {
     // Real-world: a TS file imported by multiple chunks (vendor.js + app.js)
     // produces two scripts whose source maps both reference src/util.ts.

@@ -1,6 +1,6 @@
 # src/sourcemap/
 
-**Last updated: 2026-05-22**
+**Last updated: 2026-07-23**
 
 Bridges TypeScript source coordinates (what the agent sends) and JavaScript script coordinates (what CDP speaks). Source maps are loaded lazily on every `Debugger.scriptParsed`.
 
@@ -8,7 +8,7 @@ Bridges TypeScript source coordinates (what the agent sends) and JavaScript scri
 
 | File | Exports | Role |
 |---|---|---|
-| `store.ts` | `ScriptStore`, `ScriptInfo`, `GeneratedLocation`, `mapCdpToOriginal()`, `mapOriginalToGenerated()`, `cdpToPublic()`, `publicToCdp()` | In-memory index of parsed scripts and their `SourceMapConsumer`s. Compound key: `sessionId + scriptId` (CDP `scriptId`s are per-Debugger-agent and collide across child sessions). |
+| `store.ts` | `ScriptStore`, `ScriptInfo`, `GeneratedLocation`, `mapCdpToOriginal()`, `mapOriginalToGenerated()`, `cdpToPublic()`, `publicToCdp()` | In-memory index of parsed scripts and their `SourceMapConsumer`s. Compound key: `sessionId + scriptId` (CDP `scriptId`s are per-Debugger-agent and collide across child sessions). A secondary exact-URL index returns every candidate so React component source tuples can be disambiguated without dropping execution-context or flat-session provenance. |
 | `loader.ts` | `buildScriptParsedHandler()`, `decodeDataUri()` | Pure factory returning a `Debugger.scriptParsed` handler — caller wires it via `registerHandler()`. Populates the store and fetches the source map. Fetch tier dispatches on `Session.kind`: **browser** sessions go through `Network.loadNetworkResource` (inheriting page auth / cookies / dev-server middleware) with a `fetch()` fallback for plain localhost; **node** sessions read `file://` URLs from disk via `fs.readFile(fileURLToPath(url))` (Node Inspector has no `Network` domain). Handles RFC 2397 multi-parameter `data:` URIs (webpack inline-source-map). |
 | `normalize.ts` | `normalizeSourcePath()`, `pathMatches()` | Folds the messy URLs bundlers emit (`webpack:///`, `webpack-internal:///./`, `file:///`, `rollup://`, `vite-fs://`, …) to stable keys. `pathMatches` is suffix-tolerant so an agent's `src/foo.ts` matches a script whose map says `webpack:///./src/foo.ts`. |
 | `original-source.ts` | `readOriginalSource()` | Retrieves the **original TS** text for a `file` fragment — the counterpart to `get_script_source` (compiled JS). Prefers the map's embedded `sourcesContent` (via `SourceMapConsumer.sourceContentFor`), then falls back to reading the `.ts` off disk for a **loopback** session (`tsc --sourceMap` emits `sources` but no `sourcesContent`). Reuses `store.pickSourceKey` + `loader.isLoopbackHost` so key selection and the file:// security gate match the rest of the module. Backs the `get_source` tool. |
@@ -32,7 +32,12 @@ sequenceDiagram
     SS-->>T: [GeneratedLocation(scriptUrl, sessionId?, jsLine, jsCol), …]
 ```
 
-`mapCdpToOriginal` is the reverse path — used by every tool that returns a CDP frame (call stack, pause summary, console event with mapped line).
+`mapCdpToOriginal` is the reverse path — used by every tool that returns a CDP frame
+(call stack, pause summary, console event with mapped line) and by React component
+inspection after its runtime URL has been resolved to one unambiguous script candidate.
+React v1 bridge traffic originates in the root Page agent, so source lookup filters that
+agent before using execution-context and script-range disambiguation; numeric execution
+context IDs may collide across flat CDP agents.
 
 ## Line/column numbering
 
@@ -45,6 +50,9 @@ Three coordinate systems, three offsets — get this wrong and breakpoints land 
 | Public tool API (what agents see) | **1-based** | **0-based** |
 
 Helpers `cdpToPublic()` / `publicToCdp()` are the only blessed places to convert.
+React DevTools is one boundary-specific exception: its source tuple reports both line
+and column as 1-based, so `react-source.ts` decrements both before constructing the CDP
+location passed to `mapCdpToOriginal()`.
 
 ## Gotchas
 
