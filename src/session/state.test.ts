@@ -29,6 +29,7 @@ describe("SessionState pre-document scripts — isolation", () => {
       id: "root-script",
       spec: Object.freeze({ source: "bootstrap();" }),
       installations: new Map([[ROOT_SESSION_KEY, "root-script"]]),
+      pendingInstallations: new Map(),
     };
 
     browser.state.preDocumentScripts.set(script.id, script);

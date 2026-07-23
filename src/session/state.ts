@@ -56,9 +56,13 @@ export interface PreDocumentScriptRecord {
   // Stable logical id for the lifetime of this SessionState. The initial
   // root registration's CDP identifier is used as the id; root reconnects
   // may replace only the installation entry, never this logical key.
-  id: string;
-  spec: Readonly<PreDocumentScriptSpec>;
+  readonly id: string;
+  readonly spec: Readonly<PreDocumentScriptSpec>;
   readonly installations: Map<string, string>;
+  // Concurrent replay paths share the same promise for a given Page agent.
+  // Keeping this separate from completed identifiers preserves the map's
+  // string-only contract while making the pre-await reservation explicit.
+  readonly pendingInstallations: Map<string, Promise<void>>;
 }
 
 export type HandlerEntry = { event: string; handler: (...args: any[]) => void };

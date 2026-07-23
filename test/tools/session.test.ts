@@ -356,6 +356,14 @@ describe("attach_chrome", () => {
 });
 
 describe("browser pre-document scripts", () => {
+  function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    const promise = new Promise<T>((fulfill) => {
+      resolve = fulfill;
+    });
+    return { promise, resolve };
+  }
+
   async function attachBrowser() {
     cdpListMock.mockResolvedValue([
       { id: "page1", type: "page", url: "http://x/", title: "" },
@@ -373,6 +381,11 @@ describe("browser pre-document scripts", () => {
     const record = await addPreDocumentScript(session, input);
     input.source = "mutated-after-registration";
 
+    expect(Object.isFrozen(record)).toBe(true);
+    expect(Object.isFrozen(record.spec)).toBe(true);
+    expect(() => {
+      (record as unknown as { spec: { source: string } }).spec = { source: "reassigned" };
+    }).toThrow(TypeError);
     expect(record.id).toMatch(/^pre-document-\d+$/);
     expect(record.spec).toEqual({
       source: "window.__preDocument = true;",
@@ -417,6 +430,160 @@ describe("browser pre-document scripts", () => {
     );
     expect(replay?.params).toEqual({ source: "window.__lynceusBootstrap = true;" });
     expect(record.installations.get("IF1")).toMatch(/^pre-document-\d+$/);
+  });
+
+  it("shares an in-flight child installation across registration and attach replay", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    const rootInstall = deferred<{ identifier: string }>();
+    const childInstall = deferred<{ identifier: string }>();
+    const childDebugger = deferred<{ debuggerId: string }>();
+
+    fake.respond("Page.addScriptToEvaluateOnNewDocument", (_params, sessionId) =>
+      sessionId === "IF1" ? childInstall.promise : rootInstall.promise,
+    );
+    fake.respond("Debugger.enable", (_params, sessionId) =>
+      sessionId === "IF1" ? childDebugger.promise : { debuggerId: "root-debugger" },
+    );
+    fake.clearSentCalls();
+
+    const registration = addPreDocumentScript(session, {
+      source: "window.__singleBootstrap = true;",
+    });
+    await vi.waitFor(() => {
+      expect(
+        fake.sentCalls.filter(
+          (call) =>
+            call.method === "Page.addScriptToEvaluateOnNewDocument" &&
+            call.sessionId === undefined,
+        ),
+      ).toHaveLength(1);
+    });
+
+    fake.fireEvent("Target.attachedToTarget", {
+      sessionId: "IF1",
+      targetInfo: {
+        targetId: "iframe-target",
+        type: "iframe",
+        title: "",
+        url: "http://x/frame",
+        attached: true,
+        canAccessOpener: false,
+      },
+      waitingForDebugger: false,
+    });
+    await vi.waitFor(() => {
+      expect(session.sessionHandlers.has("IF1")).toBe(true);
+      expect(fake.sentCalls).toContainEqual({
+        method: "Debugger.enable",
+        params: {},
+        sessionId: "IF1",
+      });
+    });
+
+    rootInstall.resolve({ identifier: "root-script" });
+    await vi.waitFor(() => {
+      expect(
+        fake.sentCalls.filter(
+          (call) =>
+            call.method === "Page.addScriptToEvaluateOnNewDocument" && call.sessionId === "IF1",
+        ),
+      ).toHaveLength(1);
+    });
+
+    // Let onChildAttached reach its independent replay path while the first
+    // child registration is still pending. It must await that operation,
+    // not issue a second CDP registration.
+    childDebugger.resolve({ debuggerId: "child-debugger" });
+    await vi.waitFor(() => {
+      expect(fake.sentCalls).toContainEqual({
+        method: "Network.enable",
+        params: {},
+        sessionId: "IF1",
+      });
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(
+      fake.sentCalls.filter(
+        (call) =>
+          call.method === "Page.addScriptToEvaluateOnNewDocument" && call.sessionId === "IF1",
+      ),
+    ).toHaveLength(1);
+
+    childInstall.resolve({ identifier: "child-script" });
+    const record = await registration;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(record.installations.get("IF1")).toBe("child-script");
+    expect(record.pendingInstallations.size).toBe(0);
+  });
+
+  it("drops a completed installation when a child detaches", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    const record = await addPreDocumentScript(session, {
+      source: "window.__detachedBootstrap = true;",
+    });
+
+    fake.fireEvent("Target.attachedToTarget", {
+      sessionId: "IF1",
+      targetInfo: {
+        targetId: "iframe-target",
+        type: "iframe",
+        title: "",
+        url: "http://x/frame",
+        attached: true,
+        canAccessOpener: false,
+      },
+      waitingForDebugger: false,
+    });
+    await vi.waitFor(() => expect(record.installations.has("IF1")).toBe(true));
+
+    fake.fireEvent("Target.detachedFromTarget", {
+      sessionId: "IF1",
+      targetId: "iframe-target",
+    });
+
+    expect(record.installations.has("IF1")).toBe(false);
+    expect(record.pendingInstallations.has("IF1")).toBe(false);
+    expect(session.sessionHandlers.has("IF1")).toBe(false);
+  });
+
+  it("drops an in-flight reservation on detach and never resurrects its identifier", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    const record = await addPreDocumentScript(session, {
+      source: "window.__inFlightBootstrap = true;",
+    });
+    const childInstall = deferred<{ identifier: string }>();
+    fake.respond("Page.addScriptToEvaluateOnNewDocument", () => childInstall.promise);
+
+    fake.fireEvent("Target.attachedToTarget", {
+      sessionId: "IF1",
+      targetInfo: {
+        targetId: "iframe-target",
+        type: "iframe",
+        title: "",
+        url: "http://x/frame",
+        attached: true,
+        canAccessOpener: false,
+      },
+      waitingForDebugger: false,
+    });
+    await vi.waitFor(() => expect(record.pendingInstallations.has("IF1")).toBe(true));
+
+    fake.fireEvent("Target.detachedFromTarget", {
+      sessionId: "IF1",
+      targetId: "iframe-target",
+    });
+    expect(record.pendingInstallations.has("IF1")).toBe(false);
+    expect(record.installations.has("IF1")).toBe(false);
+
+    childInstall.resolve({ identifier: "detached-child-script" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(record.installations.has("IF1")).toBe(false);
   });
 });
 

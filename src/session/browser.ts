@@ -71,11 +71,14 @@ export async function addPreDocumentScript(
   // future child sessions receive.
   const storedSpec = Object.freeze({ ...spec });
   const root = await client.Page.addScriptToEvaluateOnNewDocument(storedSpec);
-  const record: PreDocumentScriptRecord = {
+  // Freeze the record shell as well as the spec. The Map instances remain
+  // intentionally mutable lifecycle state owned by this SessionState.
+  const record: PreDocumentScriptRecord = Object.freeze({
     id: root.identifier,
     spec: storedSpec,
     installations: new Map([[ROOT_SESSION_KEY, root.identifier]]),
-  };
+    pendingInstallations: new Map(),
+  });
   s.preDocumentScripts.set(record.id, record);
 
   // A script can be registered after auto-attach has already discovered
@@ -99,20 +102,48 @@ async function installPreDocumentScript(
 ): Promise<void> {
   const key = sessionId ?? ROOT_SESSION_KEY;
   if (record.installations.has(key)) return;
+
+  // Reserve before invoking CDP. Promise.resolve().then(...) defers the send
+  // until after the promise is visible, closing both ordinary overlap and
+  // synchronous re-entrancy from fake/inline CDP event hooks. Concurrent
+  // callers await the same work so onChildAttached still holds its ordering
+  // guarantee before recursively enabling auto-attach.
+  let installation = record.pendingInstallations.get(key);
+  const ownsInstallation = installation === undefined;
+  if (installation === undefined) {
+    installation = Promise.resolve().then(async () => {
+      const result = await client.Page.addScriptToEvaluateOnNewDocument(record.spec, sessionId);
+      // The target may have detached or select_target may have invalidated
+      // this Page agent while the command was in flight. Only the currently
+      // reserved operation may publish its returned identifier.
+      if (
+        record.pendingInstallations.get(key) === installation &&
+        (sessionId === undefined || s.sessionHandlers.has(sessionId))
+      ) {
+        record.installations.set(key, result.identifier);
+      }
+    });
+    record.pendingInstallations.set(key, installation);
+  }
+
   try {
-    const result = await client.Page.addScriptToEvaluateOnNewDocument(record.spec, sessionId);
-    // The target may have detached while the command was in flight. Do not
-    // resurrect a stale child installation after detachSession removed it.
-    if (sessionId === undefined || s.sessionHandlers.has(sessionId)) {
-      record.installations.set(key, result.identifier);
-    }
+    await installation;
   } catch (e) {
     if (!bestEffort) throw e;
-    log.warn("failed to replay pre-document script", {
-      scriptId: record.id,
-      sessionId: sessionId ?? null,
-      error: String(e),
-    });
+    // Only the caller that started the shared operation logs its failure.
+    if (ownsInstallation) {
+      log.warn("failed to replay pre-document script", {
+        scriptId: record.id,
+        sessionId: sessionId ?? null,
+        error: String(e),
+      });
+    }
+  } finally {
+    // Compare by identity so detach/switch cleanup or a later retry cannot be
+    // erased when this operation settles.
+    if (ownsInstallation && record.pendingInstallations.get(key) === installation) {
+      record.pendingInstallations.delete(key);
+    }
   }
 }
 
@@ -376,6 +407,7 @@ function detachSession(
   }
   for (const record of s.preDocumentScripts.values()) {
     record.installations.delete(sessionId);
+    record.pendingInstallations.delete(sessionId);
   }
 }
 
@@ -488,6 +520,7 @@ export async function switchTarget(s: Session, targetId: string): Promise<{ targ
   // onChildAttached fills child installations as they are enumerated.
   for (const record of s.preDocumentScripts.values()) {
     record.installations.clear();
+    record.pendingInstallations.clear();
   }
   s.chromePort = port;
   s.chromeHost = host ?? null;
