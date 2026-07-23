@@ -4,7 +4,7 @@
 // into a registry-minted session's `client` (via test/setup.ts#setupSession)
 // and drive the same handler entry points that the production MCP server
 // registers. Quality of the L2 layer hinges on this
-// fake faithfully mirroring three real-Chrome contracts:
+// fake faithfully mirroring four real-Chrome contracts:
 //
 // 1. flatten:true session events — events arrive on the root socket with
 //    `eventSessionId` as a SECOND emit argument. The production guard at
@@ -21,6 +21,9 @@
 //    loadingFinished. The fireNetworkLifecycle() macro chains them in
 //    that order with the right field shapes; without it every per-tool
 //    test re-encodes the lifecycle and tests diverge on field names.
+// 4. Runtime binding provenance — Runtime.bindingCalled includes both the
+//    executionContextId in its payload and the flat sessionId as the second
+//    event argument. React bridge routing must retain both coordinates.
 
 import { EventEmitter } from "node:events";
 import type { Protocol } from "devtools-protocol";
@@ -77,6 +80,13 @@ export interface MakePauseStateOpts {
   data?: object;
 }
 
+export interface FireBindingCalledOpts {
+  name: string;
+  payload: string;
+  executionContextId?: number;
+  sessionId?: string;
+}
+
 export interface FakeCdp extends EventEmitter {
   // Surface that mirrors `chrome-remote-interface`'s Client. Tests cast
   // `as unknown as CDP.Client` when assigning to a session's client.
@@ -89,6 +99,7 @@ export interface FakeCdp extends EventEmitter {
   // invokes (some methods take only sessionId; others take params first).
   Runtime: {
     enable(sessionId?: string): Promise<void>;
+    addBinding(params: any, sessionId?: string): Promise<void>;
     evaluate(params: any, sessionId?: string): Promise<any>;
     getProperties(params: any, sessionId?: string): Promise<any>;
   };
@@ -107,6 +118,7 @@ export interface FakeCdp extends EventEmitter {
   };
   Page: {
     enable(sessionId?: string): Promise<void>;
+    addScriptToEvaluateOnNewDocument(params: any, sessionId?: string): Promise<any>;
     getFrameTree(sessionId?: string): Promise<any>;
     navigate(params: any, sessionId?: string): Promise<any>;
     reload(params: any, sessionId?: string): Promise<any>;
@@ -145,6 +157,8 @@ export interface FakeCdp extends EventEmitter {
   onSend(method: string, hook: SendHook): void;
   /** Emit an event with the flatten:true two-arg shape. */
   fireEvent(event: string, params: any, sessionId?: string): void;
+  /** Emit Runtime.bindingCalled with execution-context + flat-session provenance. */
+  fireBindingCalled(opts: FireBindingCalledOpts): void;
   /** Seed a Debugger.scriptParsed event into the registered listener. */
   seedScript(opts: SeedScriptOpts): void;
   /** Chain Network.requestWillBeSent → responseReceived → loadingFinished/Failed. */
@@ -170,15 +184,20 @@ export function makeFakeCdp(): FakeCdp {
   const hooks = new Map<string, SendHook[]>();
   const sentCalls: SentCall[] = [];
   let pauseStateSeed = 0;
+  let preDocumentScriptSeed = 0;
 
   // Sensible defaults so tests don't have to register a responder for every
   // method production calls during enableBrowserDomains/connectDebugger.
   responders.set("Runtime.enable", () => undefined);
+  responders.set("Runtime.addBinding", () => undefined);
   // Node --inspect-brk entry-pause trigger. Production attach_node sends
   // this after Debugger.enable; the Node attach L2 tests assert it was called.
   responders.set("Runtime.runIfWaitingForDebugger", () => undefined);
   responders.set("Debugger.enable", () => ({ debuggerId: "fake-debugger" }));
   responders.set("Page.enable", () => undefined);
+  responders.set("Page.addScriptToEvaluateOnNewDocument", () => ({
+    identifier: `pre-document-${++preDocumentScriptSeed}`,
+  }));
   responders.set("DOM.enable", () => undefined);
   responders.set("Network.enable", () => undefined);
   responders.set("Target.setAutoAttach", () => undefined);
@@ -243,6 +262,7 @@ export function makeFakeCdp(): FakeCdp {
   // To handle a method not in this set, register a responder via fake.respond().
   const KNOWN_VOID_METHODS = new Set<string>([
     "Runtime.enable",
+    "Runtime.addBinding",
     "Runtime.runIfWaitingForDebugger",
     "Page.enable",
     "DOM.enable",
@@ -310,6 +330,7 @@ export function makeFakeCdp(): FakeCdp {
 
     Runtime: {
       enable: (sessionId?: string) => send("Runtime.enable", undefined, sessionId),
+      addBinding: (params: any, sessionId?: string) => send("Runtime.addBinding", params, sessionId),
       evaluate: (params: any, sessionId?: string) => send("Runtime.evaluate", params, sessionId),
       getProperties: (params: any, sessionId?: string) => send("Runtime.getProperties", params, sessionId),
     },
@@ -328,6 +349,8 @@ export function makeFakeCdp(): FakeCdp {
     },
     Page: {
       enable: (sessionId?: string) => send("Page.enable", undefined, sessionId),
+      addScriptToEvaluateOnNewDocument: (params: any, sessionId?: string) =>
+        send("Page.addScriptToEvaluateOnNewDocument", params, sessionId),
       getFrameTree: (sessionId?: string) => send("Page.getFrameTree", undefined, sessionId),
       navigate: (params: any, sessionId?: string) => send("Page.navigate", params, sessionId),
       reload: (params: any, sessionId?: string) => send("Page.reload", params, sessionId),
@@ -375,6 +398,18 @@ export function makeFakeCdp(): FakeCdp {
       // args so production handlers' eventSessionId === sessionId guard
       // is exercised correctly. For root events, sessionId is undefined.
       emitter.emit(event, params, sessionId);
+    },
+
+    fireBindingCalled(opts: FireBindingCalledOpts) {
+      emitter.emit(
+        "Runtime.bindingCalled",
+        {
+          name: opts.name,
+          payload: opts.payload,
+          executionContextId: opts.executionContextId ?? 1,
+        },
+        opts.sessionId,
+      );
     },
 
     seedScript(opts: SeedScriptOpts) {

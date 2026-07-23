@@ -40,6 +40,27 @@ export interface BreakpointRecord {
   bindings: BreakpointBinding[];
 }
 
+// Generic pre-document injection primitive. Framework adapters own the
+// script contents; SessionState owns the registrations so no framework state
+// leaks across debug targets. Each flat CDP Page agent returns its own
+// identifier for the same logical script, hence the per-session installation
+// map (ROOT_SESSION_KEY denotes the top-level target).
+export interface PreDocumentScriptSpec {
+  source: string;
+  worldName?: string;
+  includeCommandLineAPI?: boolean;
+  runImmediately?: boolean;
+}
+
+export interface PreDocumentScriptRecord {
+  // Stable logical id for the lifetime of this SessionState. The initial
+  // root registration's CDP identifier is used as the id; root reconnects
+  // may replace only the installation entry, never this logical key.
+  id: string;
+  spec: Readonly<PreDocumentScriptSpec>;
+  readonly installations: Map<string, string>;
+}
+
 export type HandlerEntry = { event: string; handler: (...args: any[]) => void };
 
 // User-facing concept: what kind of debugging context the session represents.
@@ -100,6 +121,10 @@ class SessionState {
   // Per-session handler refs so we can removeListener on Target.detachedFromTarget.
   // Key is sessionId or ROOT_SESSION_KEY for the top-level target.
   readonly sessionHandlers = new Map<string, HandlerEntry[]>();
+  // Scripts installed with Page.addScriptToEvaluateOnNewDocument. Definitions
+  // stay per browser SessionState and are replayed by browser.ts when a flat
+  // child attaches or select_target reconnects the root Page agent.
+  readonly preDocumentScripts = new Map<string, PreDocumentScriptRecord>();
   // Last set_pause_on_exceptions state. Replayed to every newly-attached
   // child session in onChildAttached, so workers/iframes honor the setting
   // even when they attach after the user configured it.
@@ -140,6 +165,7 @@ class SessionState {
     this.scripts.clear();
     this.breakpoints.clear();
     this.sessionHandlers.clear();
+    this.preDocumentScripts.clear();
     this.pauseOnExceptions = "none";
     this.bpCounter = 0;
     // Bump LAST so any listener that snapshots `ownedProcessGeneration`

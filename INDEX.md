@@ -1,6 +1,6 @@
 # INDEX.md
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-23**
 
 Where to find everything in this repo.
 
@@ -70,6 +70,7 @@ Source tree:
 | Directory | What's in it | README |
 |---|---|---|
 | `src/session/` | `SessionRegistry` (one browser + one Node record; `browser_N` / `node_N` addressing; global event `seq`), per-record `SessionState`, `browser.ts` / `node.ts` lifecycle, shared `debugger.ts`, capability gates, `PauseTracker`, console/network/Node-output ring buffers, and transactional reserve → activate/abort teardown. | [README](./src/session/README.md) |
+| `src/framework/` | Stateless `FrameworkAdapter` resolution seam plus the React adapter identity. Mutable bridge/runtime state remains on the addressed `SessionState`; backend wiring lands in RDT PR 1b. | [React DevTools design](./docs/react-devtools-design.md) |
 | `src/sourcemap/` | `ScriptStore` (compound key `sessionId+scriptId`), kind-aware `buildScriptParsedHandler` / source-map loader (browser → `Network.loadNetworkResource` with `fetch()` fallback; Node → `fs.readFile(fileURLToPath(url))` gated to loopback inspector hosts), `mapCdpToOriginal` / `mapOriginalToGenerated`, `normalizeSourcePath` / `pathMatches`. | [README](./src/sourcemap/README.md) |
 | `src/tools/` | 54 MCP tools across 13 files: `session` (incl. `launch_chrome` / `attach_chrome` / `launch_node` / `attach_node`), `nav`, `source`, `breakpoints`, `execution`, `inspect`, `console`, `network`, `dom` (incl. structured `locate` / `wait_for` / `get_form_state` LocatorSpec tools), `forms`, `storage`, `node-output` (Node-only `get_node_output`), and `timeline` (cross-session `get_timeline`). Plus `_register.ts`, `_session_input.ts`, and `_locator_runtime.ts` (helpers). | [README](./src/tools/README.md) |
 | `src/util/` | `errors.ts` (`ToolError`, `noSession()`, `notPaused()`, `alreadySession()`, `ambiguousSession()`, `unknownSession()`, `duplicateLabel()`, `unsupportedTarget()`), `format.ts` (`previewRemoteObject`, `truncate`, `describeRemote`, `toolJson`, `toolText`), `log.ts` (structured stderr logging). | — |

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { resolve } from "node:path";
-import { getSession, registry } from "../../src/session/state.js";
+import { getSession, registry, ROOT_SESSION_KEY } from "../../src/session/state.js";
 import { makeFakeCdp, type FakeCdp } from "../fake-cdp.js";
 
 // IMPLEMENTATION NOTE (Opus PR #10 round-2 Nit): this file uses `vi.mock`
@@ -54,6 +54,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 // Imports MUST come after vi.mock so the registrar sees the mocked modules.
 import { registerSessionTools } from "../../src/tools/session.js";
+import { addPreDocumentScript } from "../../src/session/browser.js";
 import { autoReset, setupAdditionalSession, setupSession } from "../setup.js";
 import { captureTools, parseErrorEnvelope, parseOkEnvelope } from "../handler-registry.js";
 
@@ -351,6 +352,71 @@ describe("attach_chrome", () => {
     setupSession();
     const r = await attachChrome.handler({});
     expect(parseErrorEnvelope(r)?.error).toBe("already_session");
+  });
+});
+
+describe("browser pre-document scripts", () => {
+  async function attachBrowser() {
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/", title: "" },
+    ]);
+    return parseOkEnvelope<{ session: string }>(await attachChrome.handler({ port: 9222 }));
+  }
+
+  it("registers on the root Page agent and tracks the immutable definition per SessionState", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    const input = { source: "window.__preDocument = true;", worldName: "lynceus" };
+    fake.clearSentCalls();
+
+    const record = await addPreDocumentScript(session, input);
+    input.source = "mutated-after-registration";
+
+    expect(record.id).toMatch(/^pre-document-\d+$/);
+    expect(record.spec).toEqual({
+      source: "window.__preDocument = true;",
+      worldName: "lynceus",
+    });
+    expect(record.installations.get(ROOT_SESSION_KEY)).toBe(record.id);
+    expect(session.preDocumentScripts.get(record.id)).toBe(record);
+    expect(fake.sentCalls).toContainEqual({
+      method: "Page.addScriptToEvaluateOnNewDocument",
+      params: { source: "window.__preDocument = true;", worldName: "lynceus" },
+      sessionId: undefined,
+    });
+  });
+
+  it("replays every tracked definition to a child that attaches later", async () => {
+    const fake = nextFakeForConnect!;
+    const attached = await attachBrowser();
+    const session = getSession(attached.session)!;
+    const record = await addPreDocumentScript(session, {
+      source: "window.__lynceusBootstrap = true;",
+    });
+    fake.clearSentCalls();
+
+    fake.fireEvent("Target.attachedToTarget", {
+      sessionId: "IF1",
+      targetInfo: {
+        targetId: "iframe-target",
+        type: "iframe",
+        title: "",
+        url: "http://x/frame",
+        attached: true,
+        canAccessOpener: false,
+      },
+      waitingForDebugger: false,
+    });
+    // onChildAttached is intentionally fire-and-forget from the CDP event
+    // handler; drain its awaited fake-domain calls before asserting replay.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const replay = fake.sentCalls.find(
+      (call) => call.method === "Page.addScriptToEvaluateOnNewDocument" && call.sessionId === "IF1",
+    );
+    expect(replay?.params).toEqual({ source: "window.__lynceusBootstrap = true;" });
+    expect(record.installations.get("IF1")).toMatch(/^pre-document-\d+$/);
   });
 });
 
@@ -918,6 +984,36 @@ describe("select_target", () => {
     expect(getSession(browser.sessionId)?.currentTargetId).toBe("page2");
     expect(getSession(node.sessionId)?.client).toBe(nodeClient);
     expect(registry.list()).toHaveLength(2);
+  });
+
+  it("replays tracked pre-document scripts onto the replacement root target", async () => {
+    const current = setupSession();
+    current.session.currentTargetId = "page1";
+    const record = await addPreDocumentScript(current.session, {
+      source: "window.__persistentBootstrap = true;",
+    });
+    const replacement = makeFakeCdp();
+    replacement.respond("Page.addScriptToEvaluateOnNewDocument", () => ({
+      identifier: "replacement-root-script",
+    }));
+    nextFakeForConnect = replacement;
+    cdpListMock.mockResolvedValue([
+      { id: "page1", type: "page", url: "http://x/" },
+      { id: "page2", type: "page", url: "http://x/admin" },
+    ]);
+
+    const result = parseOkEnvelope<{ id: string; status: string }>(
+      await selectTarget.handler({ id: "page2", session: current.sessionId }),
+    );
+
+    expect(result).toMatchObject({ id: "page2", status: "switched" });
+    expect(replacement.sentCalls).toContainEqual({
+      method: "Page.addScriptToEvaluateOnNewDocument",
+      params: { source: "window.__persistentBootstrap = true;" },
+      sessionId: undefined,
+    });
+    expect(record.installations.get(ROOT_SESSION_KEY)).toBe("replacement-root-script");
+    expect(current.session.preDocumentScripts.get(record.id)).toBe(record);
   });
 
   it("failed reconnect frees the registry slot: a fresh attach recovers, never deadlocks (round-1 P1)", async () => {

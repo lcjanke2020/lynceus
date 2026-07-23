@@ -2,7 +2,14 @@ import { mkdirSync } from "node:fs";
 import CDP from "chrome-remote-interface";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import type { Protocol } from "devtools-protocol";
-import { registry, registerHandler, type Session } from "./state.js";
+import {
+  registry,
+  registerHandler,
+  ROOT_SESSION_KEY,
+  type PreDocumentScriptRecord,
+  type PreDocumentScriptSpec,
+  type Session,
+} from "./state.js";
 import { connectDebugger } from "./debugger.js";
 import { log } from "../util/log.js";
 import { snapUserDataDir } from "../util/browser-resolve.js";
@@ -43,6 +50,82 @@ export interface AttachArgs {
 }
 
 const DEFAULT_PORT = 9222;
+
+/**
+ * Register a script before future documents execute and retain the logical
+ * definition on the owning browser SessionState. The root Page agent's CDP
+ * identifier becomes the stable logical id; child Page agents mint their own
+ * identifiers, recorded in `installations` for PR 1b's detach lifecycle.
+ */
+export async function addPreDocumentScript(
+  s: Session,
+  spec: PreDocumentScriptSpec,
+): Promise<PreDocumentScriptRecord> {
+  if (s.kind !== "browser") {
+    throw new Error("Pre-document scripts require a browser session");
+  }
+  const client = s.client;
+  if (!client) throw new Error("Cannot add a pre-document script without an active CDP client");
+
+  // Clone + freeze the definition so caller-side mutation cannot change what
+  // future child sessions receive.
+  const storedSpec = Object.freeze({ ...spec });
+  const root = await client.Page.addScriptToEvaluateOnNewDocument(storedSpec);
+  const record: PreDocumentScriptRecord = {
+    id: root.identifier,
+    spec: storedSpec,
+    installations: new Map([[ROOT_SESSION_KEY, root.identifier]]),
+  };
+  s.preDocumentScripts.set(record.id, record);
+
+  // A script can be registered after auto-attach has already discovered
+  // OOPIFs. Apply it to every currently tracked child as well; targets whose
+  // Page domain does not support this command (for example workers) are
+  // intentionally best-effort and will receive future generic Runtime
+  // primitives through their own adapter path instead.
+  for (const key of s.sessionHandlers.keys()) {
+    if (key === ROOT_SESSION_KEY) continue;
+    await installPreDocumentScript(s, client, record, key, true);
+  }
+  return record;
+}
+
+async function installPreDocumentScript(
+  s: Session,
+  client: import("chrome-remote-interface").Client,
+  record: PreDocumentScriptRecord,
+  sessionId: string | undefined,
+  bestEffort: boolean,
+): Promise<void> {
+  const key = sessionId ?? ROOT_SESSION_KEY;
+  if (record.installations.has(key)) return;
+  try {
+    const result = await client.Page.addScriptToEvaluateOnNewDocument(record.spec, sessionId);
+    // The target may have detached while the command was in flight. Do not
+    // resurrect a stale child installation after detachSession removed it.
+    if (sessionId === undefined || s.sessionHandlers.has(sessionId)) {
+      record.installations.set(key, result.identifier);
+    }
+  } catch (e) {
+    if (!bestEffort) throw e;
+    log.warn("failed to replay pre-document script", {
+      scriptId: record.id,
+      sessionId: sessionId ?? null,
+      error: String(e),
+    });
+  }
+}
+
+async function replayPreDocumentScripts(
+  s: Session,
+  client: import("chrome-remote-interface").Client,
+  sessionId: string | undefined,
+  bestEffort: boolean,
+): Promise<void> {
+  for (const record of s.preDocumentScripts.values()) {
+    await installPreDocumentScript(s, client, record, sessionId, bestEffort);
+  }
+}
 
 export async function launchChrome(opts: LaunchArgs = {}): Promise<{
   session: string;
@@ -205,6 +288,10 @@ async function connectToTarget(s: Session, port: number, targetId: string, host?
   try {
     await connectDebugger(s, client, undefined);
     await enableBrowserDomains(s, client, undefined);
+    // Usually empty on first connect. select_target preserves logical script
+    // definitions, clears their old installation ids, and reaches this path
+    // to establish them on the replacement root before auto-attach begins.
+    await replayPreDocumentScripts(s, client, undefined, false);
   } catch (e) {
     // Required Runtime/Debugger enable failed: tear down so a follow-up
     // launch/attach isn't blocked by already_session against a broken
@@ -247,6 +334,9 @@ async function onChildAttached(
   try {
     await connectDebugger(s, client, sessionId);
     await enableBrowserDomains(s, client, sessionId);
+    // Replay before recursively enabling auto-attach so this child is ready
+    // before any nested child enumeration can arrive inline with that call.
+    await replayPreDocumentScripts(s, client, sessionId, true);
     await client.Target.setAutoAttach(
       { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
       sessionId,
@@ -283,6 +373,9 @@ function detachSession(
   // Drop scripts owned by this session so stale scriptIds don't survive.
   for (const sc of s.scripts.all()) {
     if (sc.sessionId === sessionId) s.scripts.remove(sc.scriptId, sc.sessionId);
+  }
+  for (const record of s.preDocumentScripts.values()) {
+    record.installations.delete(sessionId);
   }
 }
 
@@ -389,6 +482,13 @@ export async function switchTarget(s: Session, targetId: string): Promise<{ targ
   s.scripts.clear();
   s.breakpoints.clear();
   s.sessionHandlers.clear();
+  // Keep the logical definitions across select_target, just as
+  // pauseOnExceptions survives; only their old per-CDP-session identifiers
+  // are invalid after the socket closes. connectToTarget replays the root and
+  // onChildAttached fills child installations as they are enumerated.
+  for (const record of s.preDocumentScripts.values()) {
+    record.installations.clear();
+  }
   s.chromePort = port;
   s.chromeHost = host ?? null;
   s.attached = attached;
