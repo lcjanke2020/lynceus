@@ -1,12 +1,14 @@
 # React DevTools integration — design & spike findings (LEO-209)
 
-> **Implementation status (2026-07-23).** RDT-1 / LEO-359 is implemented by the
+> **Implementation status (2026-07-24).** RDT-1 / LEO-359 is implemented by the
 > bridge lifecycle in `src/framework/react.ts`; RDT-2 / LEO-360 is implemented by the
 > v7 decoder/materialized store (`react-store.ts`), live inspection correlator
 > (`react-inspection.ts`), source resolver (`react-source.ts`), and the
-> `get_react_tree` / `find_react_component` / `inspect_react_component` tools. The
-> implementation follows the reconciled current-snapshot contract in §6.5 #10 while
-> preserving this document's empirical spike record.
+> `get_react_tree` / `find_react_component` / `inspect_react_component` tools; and
+> RDT-3 / LEO-361 is implemented by the two payload-grounded React scenarios and managed
+> development-browser target described in §5.3. The implementation follows the
+> reconciled current-snapshot contract in §6.5 #10 while preserving this document's
+> empirical spike record.
 
 > Living design doc for the **LEO-209** spike: embedding `react-devtools-core` behind a `FrameworkAdapter` seam in lynceus (Depth 2). It is built up incrementally across the sub-spikes S0–S6; **S6 (LEO-217) is the synthesis pass** that folds these findings into the final layer design and the reshaped LEO-9X.2–.7 proposals. Companion to [`docs/design-notes.md`](./design-notes.md) (v1, browser-only) and [`docs/node-session-design.md`](./node-session-design.md) (the Node extension).
 >
@@ -352,7 +354,7 @@ named node with its internals as `subHooks`: `StaleCounter` →
 `State(0)`, `DocumentTitle{ State("clicks: 0"), Effect }`, `Effect × 3`. Deep context is
 readable: `ThemeBadge`'s two `useContext` hooks return the live values
 `{theme:"light"}` and `{settings:{fontScale:1}}` — data **knowable only via the bridge**,
-not from source. This concretely grounds the L4 `react-provider-context` scenario
+not from source. This concretely grounds the L4 `react-context-provider` scenario
 (LEO-361): the provider sits several levels above the consumer; only the bridge recovers
 the resolved value. The deliberate stale-closure bug is likewise reproduced
 (`liveCount=6` while the buggy interval's `staleObserved=0`) as the source-solvable control.
@@ -769,9 +771,9 @@ The runtime-only cluster is what **justifies the React bridge existing at all**,
 
 → Feeds the Layer-3 tool list and the L4 oracle. Bug rows map 1:1 onto the reshaped LEO-9X.3 (read-only inspection MVP), .5 (profiler), .6 (overrides).
 
-## 5.3 L4 eval scenario sketches — two scenarios (sketch only)
+## 5.3 L4 eval scenarios — two scenarios (implemented by LEO-361)
 
-House L4 style (see [`evals/README.md`](../evals/README.md), [`docs/test-eval-plan.md`](./test-eval-plan.md)): each scenario is a `Scenario` object (`name`, `variantDir`, `prompt`, `oracle`, `oracleMinimumToolCalls`) with a **pure-function dual-axis oracle** — no LLM judge:
+House L4 style (see [`evals/README.md`](../evals/README.md), [`docs/test-eval-plan.md`](./test-eval-plan.md)): each scenario is a `Scenario` object (`name`, `target`, `prompt`, `oracle`, `oracleMinimumToolCalls`) with a **pure-function dual-axis oracle** — no LLM judge:
 
 - **CORRECTNESS ∈ {0,1}** — does `finalAnswer` name the bug (pattern match)?
 - **MECHANIC ∈ {0,1}** — did the agent exercise the workflow the scenario tests (here: *use the React bridge*, not `get_script_source`)?
@@ -787,11 +789,17 @@ The two scenarios are chosen to break that ambiguity:
 
 One scenario can't do both jobs. Together they let the MECHANIC axis actually discriminate.
 
-> Implementation is **LEO-361 (RDT-3)** — its title ("stale-closure + provider-context, dual-axis oracle") matches these two exactly. This is sketch-only.
+> **Implemented by LEO-361 (RDT-3).** The production scenario definitions live in
+> `evals/scenarios/react-stale-closure.ts` and
+> `evals/scenarios/react-context-provider.ts`; their React 18 development routes live
+> under `examples/sample-fullstack-app/`. The sketches below retain the design rationale,
+> while the resolved oracle decisions after them describe the shipped contract.
 
 ### Scenario A — `react-stale-closure` (source-solvable control)
 
-- **Variant:** `evals/sample-app-variants/react-stale-closure/` — a minimal React **dev-build** page with an auto-incrementing counter.
+- **Target:** the `?rdt_scenario=stale-closure` React **development-build** route in
+  `examples/sample-fullstack-app/`, managed by the eval runner's development-browser
+  target.
 - **Bug:** the counter never advances past 1:
   ```jsx
   // Counter.tsx
@@ -823,9 +831,12 @@ One scenario can't do both jobs. Together they let the MECHANIC axis actually di
   ```
 - **Expected signal:** a source-reader can answer correctly with mechanic=0 (the `[]` is right there) → A is the **lazy-solver probe**. The mechanic now keys on data the bridge *actually returns* (current hook state), so a mechanic=1 means the agent genuinely used the bridge to confirm the runtime symptom. The harness has both `xfailCorrectness` **and** `xfailMechanic` tags (the latter added 2026-07-08 and applied defensively to `adversarial-out-of-order` — see `evals/README.md` — for exactly this statically-readable shape); whether A ships with a defensive `xfailMechanic` is an LEO-361 call (open question below). A's value is the mechanic signal itself.
 
-### Scenario B — `react-provider-context` (bridge-mandatory)
+### Scenario B — `react-context-provider` (bridge-mandatory)
 
-- **Variant:** `evals/sample-app-variants/react-provider-context/` — a themed widget that renders with the wrong theme even though the top-level `ThemeProvider` is `"light"`.
+- **Target:** the `?rdt_scenario=context-provider` React **development-build** route in
+  `examples/sample-fullstack-app/`, managed by the same development-browser target. The
+  widget renders with the wrong theme even though the top-level `ThemeProvider` is
+  `"light"`.
 - **Bug (constructed so source-reading is genuinely insufficient):** two Providers of the *same* `ThemeContext` at different depths, and the buggy widget is passed as `children` into an intermediate component that renders it **inside** the inner (wrong-value) Provider. Each Provider's value is computed at runtime (from props/state). Reading the widget's file shows only `useContext(ThemeContext)`; reading the top-level file shows `value="light"`. The fault — the **nearest** Provider and its runtime value — is discoverable only by walking the assembled runtime tree.
   ```jsx
   // App.tsx        <ThemeProvider value="light"><Page/></ThemeProvider>
@@ -850,19 +861,34 @@ One scenario can't do both jobs. Together they let the MECHANIC axis actually di
       /(inner|nearest|nested|page)\s+provider/.test(fa) &&
       /wrong (theme|value|context)|receives|overrides?|overriding/.test(fa)
         ? 1 : 0;
-    return { correctness, mechanic, efficiency: 0, recovery: 0, notes: `react-provider-context c=${correctness} m=${mechanic}` };
+    return { correctness, mechanic, efficiency: 0, recovery: 0, notes: `react-context-provider c=${correctness} m=${mechanic}` };
   }
   // oracleMinimumToolCalls ≈ 7
   ```
 - **Expected signal:** source-reading a single file cannot say which Provider wins or what value it holds → correctness on B **requires** the bridge, so correctness and mechanic co-move. B doubles as the per-suite "is the React bridge working end-to-end" smoke (the way `compute-step` is for the debugger).
 
-### Open oracle questions for LEO-361 (the sketches above are intent, not final oracles)
+### Resolved oracle decisions from LEO-361
 
-- **Assert bridge-sourced *payload*, not just tool invocation (hard requirement).** Both mechanic checks currently pass on `inspected && !isError`. A model could call `inspect_react_component` on the wrong element (or get a benign result) and still score mechanic=1. LEO-361 should require the returned payload to carry the *expected runtime value* — the frozen `count` for A, the resolved `theme`/context value on the widget for B — so the mechanic proves a real bridge read.
-- **Tighten the correctness regexes — they are deliberately loose sketches.** Scenario A's `\[\]` branch matches any brackets in the answer; Scenario B's original bare-`dark` branch matched a common word without identifying the *nearest* Provider (tightened above to require the inner/nearest Provider be named). Both need real pattern hardening (and negative tests) in LEO-361.
-- **Anti-`evaluate` guard.** Mirror the driving scenarios' `mutatedViaEvaluate` guard: forbid solving via raw `evaluate` reaching into `__REACT_DEVTOOLS_GLOBAL_HOOK__` directly — the dedicated React tools are what's under test.
-- **Decide a defensive `xfailMechanic` for Scenario A.** A is statically readable by design, the same shape that earned `adversarial-out-of-order` its defensive `xfailMechanic` (evals/README.md, 2026-07-08). Decide per model tier whether A carries the tag; a steady `XPASS!` on strong models is the intended bonus signal.
-- **Make Scenario B's bug runtime-only by construction (PR #66 review).** The sketch derives the inner Provider's value from props/state; if that state is deterministic from checked-in source, an agent can trace all files and answer with mechanic=0 — defeating bridge-mandatory. Seed the wrong value through genuinely runtime-only state (fetched, randomized, or driven by a harness action) and have the oracle assert the bridge-returned payload carries it.
+- **Mechanic is payload-grounded, not invocation-grounded.** Scenario A requires a
+  successful `StaleCounter` inspection carrying `State === 1`; Scenario B requires a
+  successful `SettingsWidget` inspection carrying a non-light theme plus a valid
+  `rdt-inner-*` provider ID. Wrong-component, error-envelope, and value-free calls fail.
+- **Correctness patterns are scenario-specific and negatively tested.** A requires the
+  stale captured-count plus dependency/functional-updater cause; B requires
+  `RuntimeThemeBoundary` and an exact theme/provider-ID pair observed in any successful
+  inspection, including a valid post-reload re-inspection.
+- **Raw React-internals access through `evaluate` is rejected.** The guard covers the
+  DevTools/lynceus globals, dispatch symbols, canonical React DOM expandos
+  (`__reactFiber$*`, `__reactProps$*`, `__reactContainer$*`), and fiber state/props/context
+  fields. Read-only DOM evaluation remains allowed.
+- **Scenario A carries defensive `xfailMechanic`.** Source-only correctness is an
+  intentional control outcome; a genuine bridge confirmation is the desired `XPASS!`.
+- **Scenario B is runtime-only by construction and deliberately un-xfailed.** Its nearest
+  provider value is created lazily per load with a randomized theme and high-entropy
+  `rdt-inner-${crypto.randomUUID()}` ID that is never rendered or copied to a page global.
+  A hard miss is therefore the bridge regression signal, not an expected failure. The
+  first Opus-4.8 medium smoke passed both axes; further trials characterize variance and
+  cost rather than changing this posture.
 
 ## 5.4 Overrides-via-bridge feasibility (LEO-9X.6 / LEO-363)
 
@@ -909,7 +935,7 @@ These are inputs for the synthesis pass; they are **not** the reshaped design.
 - **Layer 3 (tools)** — bug taxonomy (§5.2) maps onto the tool list; the source-solvable vs runtime-only split is the argument for each tool's existence.
 - **Open question "deltas vs snapshots"** — `operations` events *are* a delta/patch stream; the tree is reconstructed from patches. `get_react_tree` should serve a **snapshot from accumulated state** (like `skylarbarrera`), not replay (§5.1).
 - **Open question "re-attach on reload"** — under CDP, **navigation is the lifecycle event**; maps/string-tables must reset per navigation/renderer-remount. Owned by **S3 (LEO-214)**; §5.1 supplies the constraint.
-- **L4 (LEO-361)** — two scenarios (`react-stale-closure` + `react-provider-context`) are required for the MECHANIC axis to discriminate; oracle sketches + open oracle questions (assert bridge-sourced payload, tighten regexes, anti-`evaluate` guard) in §5.3. Note Scenario A's mechanic reads *current* hook state, not lexical closure (§5.3).
+- **L4 (LEO-361)** — two implemented scenarios (`react-stale-closure` + `react-context-provider`) are required for the MECHANIC axis to discriminate; their payload-grounded oracle decisions and anti-`evaluate` guard are recorded in §5.3. Note Scenario A's mechanic reads *current* hook state, not lexical closure (§5.3).
 - **Overrides (LEO-363)** — feasible over the same bridge; keep conditional on UX, not transport (§5.4).
 
 ---

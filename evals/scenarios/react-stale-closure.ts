@@ -11,7 +11,7 @@ import {
   REACT_INSPECTION_SYSTEM,
   accessedReactInternalsViaEvaluate,
   hasSuccessfulReactAttach,
-  inspectedReactComponent,
+  inspectedReactComponents,
   inspectionHasStateValue,
   locatedReactComponent,
   type ReactPair,
@@ -23,8 +23,10 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   const calls = toolPairs(trace) as ReactPair[];
   const attached = hasSuccessfulReactAttach(calls);
   const located = locatedReactComponent(calls, "StaleCounter");
-  const inspection = inspectedReactComponent(calls, "StaleCounter");
-  const readFrozenState = inspectionHasStateValue(inspection, 1);
+  const inspections = inspectedReactComponents(calls, "StaleCounter");
+  const readFrozenState = inspections.some((inspection) =>
+    inspectionHasStateValue(inspection, 1),
+  );
   const noRawReactBypass = !accessedReactInternalsViaEvaluate(calls);
   const mechanic: 0 | 1 =
     attached && located && readFrozenState && noRawReactBypass ? 1 : 0;
@@ -53,7 +55,7 @@ function oracle(trace: TraceEntry[], finalAnswer: string): OracleResult {
   if (!attached) why.push("mechanic: attach_react_devtools did not succeed");
   if (!located)
     why.push("mechanic: tree/find result did not contain StaleCounter");
-  if (!inspection)
+  if (inspections.length === 0)
     why.push("mechanic: StaleCounter was not successfully inspected");
   else if (!readFrozenState)
     why.push("mechanic: StaleCounter inspection did not return State=1");

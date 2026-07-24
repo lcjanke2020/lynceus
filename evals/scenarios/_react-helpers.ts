@@ -41,6 +41,11 @@ export interface RuntimeContextObservation {
   providerId: string;
 }
 
+const RAW_REACT_BRIDGE_TOKEN =
+  /__REACT_DEVTOOLS_GLOBAL_HOOK__|__lynceusReact|ReactDevToolsBackend|inspectElement/i;
+const RAW_REACT_FIBER_TOKEN =
+  /__react(?:Fiber|Props|Container)\$|memoized(?:State|Props|Value)|_debugHookTypes/i;
+
 export function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -74,11 +79,11 @@ export function locatedReactComponent(
   });
 }
 
-export function inspectedReactComponent(
+export function inspectedReactComponents(
   calls: ReactPair[],
   displayName: string,
-): ReactPair | undefined {
-  return calls.find(
+): ReactPair[] {
+  return calls.filter(
     (call) =>
       call.tool === "inspect_react_component" &&
       !call.isError &&
@@ -137,8 +142,8 @@ export function accessedReactInternalsViaEvaluate(calls: ReactPair[]): boolean {
     } catch {
       input = String(call.input);
     }
-    return /__REACT_DEVTOOLS_GLOBAL_HOOK__|__lynceusReact|ReactDevToolsBackend|inspectElement|\.memoizedState|\._debugHookTypes/i.test(
-      input,
+    return (
+      RAW_REACT_BRIDGE_TOKEN.test(input) || RAW_REACT_FIBER_TOKEN.test(input)
     );
   });
 }

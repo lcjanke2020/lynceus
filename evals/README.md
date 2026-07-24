@@ -89,6 +89,13 @@ prompt requires attach → tree/find → inspect before source diagnosis and for
 | `react-stale-closure` | A successful `StaleCounter` inspection whose hooks payload contains `State === 1` | `StaleCounter.tsx` plus the stale captured `count` and empty/missing dependency (or functional-updater) cause | Source-solvable control: `xfailMechanic` is defensive, so a static shortcut is `XFAIL` while genuine bridge use is the intended `XPASS!`. |
 | `react-context-provider` | A successful `SettingsWidget` inspection containing the runtime `{theme, providerId}` with a high-entropy `rdt-inner-*` ID | `RuntimeThemeBoundary`/nearest provider plus the exact inspected theme and provider ID | Bridge-mandatory smoke: the ID is created lazily per page and is neither rendered nor stored on a page global, so source alone cannot produce a passing answer. |
 
+`react-context-provider` intentionally carries no expected-failure tag on either axis.
+Unlike the source-solvable control, its per-load high-entropy provider ID makes a
+correct answer without successful bridge evidence impossible by construction, so a hard
+failure is the regression signal this smoke is meant to preserve. The first Opus-4.8
+medium smoke passed both axes; additional trials are still needed to characterize cost
+and temperature-1 variance, not to weaken that gate.
+
 The two axes remain independent. **MECHANIC is payload-grounded**: merely invoking a
 React tool, receiving an error, locating/inspecting the wrong component, or reading
 source does not pass. **CORRECT** grades the scenario-specific diagnosis and exact live

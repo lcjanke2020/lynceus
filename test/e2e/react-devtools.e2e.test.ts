@@ -473,6 +473,14 @@ describe("React DevTools bridge (e2e)", () => {
       (hook: any) => hook.name === "ThemeContext",
     );
     expect(settingsInspection.display_name).toBe("SettingsWidget");
+    expect(
+      contextHook,
+      "SettingsWidget inspection should include the ThemeContext hook",
+    ).toBeDefined();
+    expect(
+      contextHook?.value,
+      "ThemeContext hook should carry an object value",
+    ).toEqual(expect.any(Object));
     expect(["midnight", "sepia", "aurora"]).toContain(
       contextHook.value.theme,
     );

@@ -43,7 +43,7 @@ Other scenarios use their own copies under `evals/sample-app-variants/<name>/`. 
 | `network-bug` | A fetch that fails silently. |
 | `worker-bug` | A bug that only manifests in the Web Worker. |
 
-All 18 L4 scenarios are now registered (14 browser — 8 debugger + 6 driving/session-portability from issue #12 — plus 4 Node scenarios on `sample-node-app`). `compute-step` is the canonical demo (root [README](../../README.md) + `npm run eval:quick` target); the rest run via `npm run eval`. See [evals/README.md](../../evals/README.md) for the full scenario table.
+All 21 L4 scenarios are now registered: 16 browser (8 debugger, 6 driving/session-portability from issue #12, and 2 React inspection scenarios on `sample-fullstack-app`), 4 Node scenarios on `sample-node-app`, and 1 dual browser + Node scenario. `compute-step` is the canonical demo (root [README](../../README.md) + `npm run eval:quick` target); the rest run via `npm run eval`. See [evals/README.md](../../evals/README.md) for the full scenario table.
 
 ## Running standalone
 

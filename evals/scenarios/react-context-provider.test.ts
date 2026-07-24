@@ -4,6 +4,7 @@ import { pair } from "./_test-helpers.js";
 import { reactContextProvider } from "./react-context-provider.js";
 
 const PROVIDER_ID = "rdt-inner-123e4567-e89b-12d3-a456-426614174000";
+const RELOADED_PROVIDER_ID = "rdt-inner-123e4567-e89b-12d3-a456-426614174001";
 const GOOD_ANSWER = `RuntimeThemeBoundary's nearest ThemeContext.Provider supplies theme sepia with providerId ${PROVIDER_ID}, overriding the top-level light value.`;
 
 function successfulTrace(): TraceEntry[] {
@@ -67,7 +68,44 @@ describe("react-context-provider oracle", () => {
     );
     expect(out.mechanic).toBe(1);
     expect(out.correctness).toBe(0);
-    expect(out.notes).toMatch(/runtime providerId/);
+    expect(out.notes).toMatch(/runtime theme\/providerId pair/);
+  });
+
+  it("accepts a value from any successful inspection after a reload", () => {
+    const trace = [
+      ...successfulTrace(),
+      ...pair(
+        "inspect-after-reload",
+        "inspect_react_component",
+        { component_id: 9, renderer_id: 1 },
+        {
+          display_name: "SettingsWidget",
+          hooks: {
+            data: [
+              {
+                name: "ThemeContext",
+                value: {
+                  theme: "aurora",
+                  providerId: RELOADED_PROVIDER_ID,
+                },
+              },
+            ],
+          },
+        },
+      ),
+    ];
+    const answer = `RuntimeThemeBoundary's nearest provider supplies aurora with providerId ${RELOADED_PROVIDER_ID}.`;
+
+    expect(reactContextProvider.oracle(trace, answer)).toMatchObject({
+      correctness: 1,
+      mechanic: 1,
+    });
+    expect(
+      reactContextProvider.oracle(
+        trace,
+        `RuntimeThemeBoundary's nearest provider supplies sepia with providerId ${RELOADED_PROVIDER_ID}.`,
+      ),
+    ).toMatchObject({ correctness: 0, mechanic: 1 });
   });
 
   it("does not pass from a hard-coded theme word without bridge-sourced identity", () => {
@@ -140,6 +178,55 @@ describe("react-context-provider oracle", () => {
     expect(out.mechanic).toBe(0);
     expect(out.correctness).toBe(0);
     expect(out.notes).toMatch(/raw evaluate/);
+  });
+
+  it.each([
+    [
+      "fiber expando and memoized props",
+      'Object.keys(document.querySelector("#settings-widget")).find((key) => key.startsWith("__reactFiber$")); node.memoizedProps.value.providerId',
+    ],
+    [
+      "props expando",
+      'Object.keys(document.body).find((key) => key.startsWith("__reactProps$"))',
+    ],
+    [
+      "container expando",
+      'Object.keys(document.querySelector("#root")).find((key) => key.startsWith("__reactContainer$"))',
+    ],
+    [
+      "context memoized value",
+      'node.dependencies.firstContext["memoizedValue"].providerId',
+    ],
+  ])("rejects a raw DOM-to-fiber bypass via %s", (_name, expression) => {
+    const trace = [
+      ...successfulTrace(),
+      ...pair("bypass", "evaluate", { expression }, { value: PROVIDER_ID }),
+    ];
+
+    expect(reactContextProvider.oracle(trace, GOOD_ANSWER)).toMatchObject({
+      correctness: 0,
+      mechanic: 0,
+    });
+  });
+
+  it("allows ordinary read-only DOM evaluation", () => {
+    const trace = [
+      ...successfulTrace(),
+      ...pair(
+        "dom-read",
+        "evaluate",
+        {
+          expression:
+            'document.querySelector("#settings-widget")?.getAttribute("data-theme")',
+        },
+        { value: "sepia" },
+      ),
+    ];
+
+    expect(reactContextProvider.oracle(trace, GOOD_ANSWER)).toMatchObject({
+      correctness: 1,
+      mechanic: 1,
+    });
   });
 
   it("requires the provider component as well as the exact runtime values", () => {
