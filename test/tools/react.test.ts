@@ -135,18 +135,50 @@ function fullInspection(requestID: number): Record<string, unknown> {
         data: {
           label: "alpha",
           settings: { inspectable: true, type: "object", preview_short: "{…}" },
+          callback: { type: "function", name: "onInspect" },
         },
-        cleaned: [["props", "settings"]],
+        cleaned: [["settings"]],
+        unserializable: [["callback"]],
+      },
+      state: {
+        data: { details: { inspectable: true, type: "object", preview_short: "{…}" } },
+        cleaned: [["details"]],
         unserializable: [],
       },
-      state: { data: null, cleaned: [], unserializable: [] },
       hooks: {
-        data: [{ id: 0, name: "State", value: 2, subHooks: [] }],
-        cleaned: [],
+        data: [
+          {
+            id: 0,
+            name: "State",
+            value: 2,
+            subHooks: [
+              {
+                name: "Nested",
+                value: { inspectable: true, type: "object", preview_short: "{…}" },
+              },
+            ],
+          },
+        ],
+        cleaned: [[0, "subHooks", 0, "value"]],
         unserializable: [],
       },
-      context: { data: { theme: "dark" }, cleaned: [], unserializable: [] },
-      suspendedBy: { data: [], cleaned: [], unserializable: [] },
+      context: {
+        data: {
+          theme: "dark",
+          details: { inspectable: true, type: "object", preview_short: "{…}" },
+        },
+        cleaned: [["details"]],
+        unserializable: [],
+      },
+      suspendedBy: {
+        data: [
+          {
+            reason: { inspectable: true, type: "object", preview_short: "{…}" },
+          },
+        ],
+        cleaned: [[0, "reason"]],
+        unserializable: [],
+      },
       source: ["InspectorWidget", "http://localhost/assets/app.js", 10, 20],
       rendererPackageName: "react-dom",
       rendererVersion: "18.3.1",
@@ -671,15 +703,21 @@ describe("React DevTools tools — materialized reads", () => {
     expect(parseErrorEnvelope(await getTree.handler({ session: sessionId }))).toBeNull();
   });
 
-  it("rejects a dormant pre-Fiber guard and malformed operations without serving stale state", async () => {
+  it("rejects the dormant lower-version guard and malformed operations without serving stale state", async () => {
     const { fake, session, sessionId } = setupSession();
     await attachReady(fake, session, sessionId);
     seedMaterializedTree(fake, session);
 
-    fireBridgeEvent(fake, session, "operations", [1, 1, 0, 99]);
-    expect(parseErrorEnvelope(await getTree.handler({ session: sessionId }))).toMatchObject({
+    const malformedPayload = [1, 1, 0, 99];
+    fireBridgeEvent(fake, session, "operations", malformedPayload);
+    const protocolError = parseErrorEnvelope(
+      await getTree.handler({ session: sessionId }),
+    );
+    expect(protocolError).toMatchObject({
       error: "react_protocol_error",
     });
+    expect(protocolError?.message).toContain("Detach and reattach React DevTools");
+    expect(session.reactEvents.query().at(-1)?.payload).toEqual(malformedPayload);
     expect(session.reactBridge?.tree.size()).toBe(5);
 
     session.noteMainFrame("main-frame", "new-document");
@@ -694,9 +732,9 @@ describe("React DevTools tools — materialized reads", () => {
     fireBridgeEvent(fake, session, REACT_RENDERER_METADATA_EVENT, {
       rendererId: 1,
       bundleType: 1,
-      version: "15.6.2",
+      version: "16.7.0",
       rendererPackageName: "react-dom",
-      supportsFiber: false,
+      supportsFiber: true,
     });
     expect(parseErrorEnvelope(await getTree.handler({ session: sessionId }))).toMatchObject({
       error: "unsupported_react_version",
@@ -765,9 +803,20 @@ describe("React DevTools tools — live component inspection", () => {
       props: {
         data: { label: "alpha" },
         cleaned_paths: [["props", "settings"]],
+        unserializable_paths: [["props", "callback"]],
       },
-      hooks: { data: [{ name: "State", value: 2 }] },
-      context: { data: { theme: "dark" } },
+      state: { cleaned_paths: [["state", "details"]] },
+      hooks: {
+        data: [{ name: "State", value: 2 }],
+        cleaned_paths: [["hooks", 0, "subHooks", 0, "value"]],
+      },
+      context: {
+        data: { theme: "dark" },
+        cleaned_paths: [["context", "details"]],
+      },
+      suspended_by: {
+        cleaned_paths: [["suspendedBy", 0, "reason"]],
+      },
       hydrated_path: {
         path: ["props", "settings"],
         value: { data: { fontScale: 1 }, cleaned_paths: [] },

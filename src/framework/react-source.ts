@@ -54,21 +54,30 @@ export async function resolveReactSource(
     };
   }
 
-  await waitForConsumer(
-    store,
-    () =>
-      store
-        .findByUrl(tuple.url)
-        .some(
-          (candidate) =>
-            (candidate.sessionId ?? null) === sessionId &&
-            candidate.consumer !== undefined,
-        ),
-    Date.now() + MAP_LOAD_WAIT_MS,
-  );
-  const candidates = store
-    .findByUrl(tuple.url)
-    .filter((candidate) => (candidate.sessionId ?? null) === sessionId);
+  const findCandidates = () =>
+    store
+      .findByUrl(tuple.url)
+      .filter((candidate) => (candidate.sessionId ?? null) === sessionId);
+  const hasPendingCandidate = () =>
+    findCandidates().some(
+      (candidate) =>
+        candidate.sourceMapURL && !candidate.consumer && !candidate.loadError,
+    );
+
+  // waitForConsumer's generic pending check is store-wide. Only enter it
+  // when this URL/session has a map in flight, and make its predicate finish
+  // as soon as those candidates settle so unrelated scripts cannot impose
+  // the shared 500 ms map-load budget on React inspection.
+  if (hasPendingCandidate()) {
+    await waitForConsumer(
+      store,
+      () =>
+        findCandidates().some((candidate) => candidate.consumer !== undefined) ||
+        !hasPendingCandidate(),
+      Date.now() + MAP_LOAD_WAIT_MS,
+    );
+  }
+  const candidates = findCandidates();
   if (candidates.length === 0) {
     return {
       source: null,

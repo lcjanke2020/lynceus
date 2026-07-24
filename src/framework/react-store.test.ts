@@ -105,7 +105,14 @@ describe("ReactComponentStore", () => {
       maxChildren: 10,
       maxNodes: 100,
     });
-    expect(() => store.apply([1, 1, 0, 3, 2, 1, 999], 7)).toThrow(ReactOperationsError);
+    // The ADD mutates the cloned tree before the invalid REORDER throws. This
+    // distinguishes apply-then-swap atomicity from direct in-place mutation.
+    expect(() =>
+      store.apply(
+        [1, 1, 0, 1, 5, 5, 2, 0, 0, 0, 0, 3, 2, 1, 999],
+        7,
+      ),
+    ).toThrow(ReactOperationsError);
     expect(store.snapshot({ maxDepth: 10, maxChildren: 10, maxNodes: 100 })).toEqual(
       beforeMalformed,
     );
@@ -202,10 +209,19 @@ describe("ReactComponentStore", () => {
     store.updateRendererMetadata({
       rendererId: 1,
       bundleType: 1,
-      version: "15.6.2",
+      version: "16.7.0",
       rendererPackageName: "react-dom",
-      supportsFiber: false,
+      supportsFiber: true,
     });
-    expect(store.unsupportedVersionMessage()).toContain("does not expose");
+    expect(store.unsupportedVersionMessage()).toContain("supports React 16.8–19");
+
+    store.updateRendererMetadata({
+      rendererId: 1,
+      bundleType: 1,
+      version: "16.8.0",
+      rendererPackageName: "react-dom",
+      supportsFiber: true,
+    });
+    expect(store.unsupportedVersionMessage()).toBeNull();
   });
 });

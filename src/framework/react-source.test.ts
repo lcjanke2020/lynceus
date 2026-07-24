@@ -1,5 +1,5 @@
 import { SourceMapGenerator } from "@jridgewell/source-map";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ScriptStore } from "../sourcemap/store.js";
 import { resolveReactSource } from "./react-source.js";
 
@@ -128,5 +128,58 @@ describe("resolveReactSource", () => {
     );
     expect(ambiguous.source).toBeNull();
     expect(ambiguous.source_note).toContain("ambiguous");
+  });
+
+  it("does not wait on unrelated pending source maps", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ScriptStore();
+      store.upsert({
+        scriptId: "unrelated",
+        url: "http://localhost/assets/unrelated.js",
+        sourceMapURL: "unrelated.js.map",
+        startLine: 0,
+        startColumn: 0,
+        endLine: 100,
+        endColumn: 0,
+        executionContextId: 1,
+        hash: "unrelated",
+      });
+      store.upsert({
+        scriptId: "target-without-map",
+        url: "http://localhost/assets/plain.js",
+        startLine: 0,
+        startColumn: 0,
+        endLine: 100,
+        endColumn: 0,
+        executionContextId: 1,
+        hash: "plain",
+      });
+
+      const missing = resolveReactSource(
+        store,
+        ["Missing", "http://localhost/assets/missing.js", 1, 1],
+        1,
+      );
+      const plain = resolveReactSource(
+        store,
+        ["Plain", "http://localhost/assets/plain.js", 1, 1],
+        1,
+      );
+
+      // A store-wide pending-map gate would schedule a 25 ms poll for both
+      // lookups and eventually consume the full 500 ms budget.
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(missing).resolves.toMatchObject({
+        source: null,
+        source_note: expect.stringContaining("no parsed script"),
+      });
+      await expect(plain).resolves.toMatchObject({
+        source: null,
+        source_note: expect.stringContaining("no original TypeScript mapping"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -348,17 +348,19 @@ function handleReactBindingCalled(
       "The attached renderer does not expose a React Fiber interface compatible with react-devtools-core@7.0.1. React read inspection supports React 16.8–19.",
     );
   } else if (message.event === "operations") {
+    // Buffer first so the exact payload that trips the decoder remains
+    // available for diagnostics even though the materialized tree rejects it.
+    s.reactEvents.push({
+      ts: Date.now(),
+      generation: bridge.documentGeneration,
+      event: message.event,
+      payload: message.payload,
+      executionContextId: params.executionContextId,
+    });
     try {
       bridge.tree.apply(message.payload, bridge.documentGeneration);
       bridge.mainExecutionContextId = params.executionContextId;
       bridge.operationsSeen = true;
-      s.reactEvents.push({
-        ts: Date.now(),
-        generation: bridge.documentGeneration,
-        event: message.event,
-        payload: message.payload,
-        executionContextId: params.executionContextId,
-      });
     } catch (error) {
       markBridgeFailure(
         bridge,
@@ -574,9 +576,13 @@ function markBridgeFailure(
   kind: "protocol" | "unsupported",
   message: string,
 ): void {
-  if (kind === "protocol") bridge.protocolError ??= message;
-  else bridge.unsupportedVersion ??= message;
-  bridge.inspections.reset(message);
+  const failureMessage =
+    kind === "protocol"
+      ? `${message} Detach and reattach React DevTools to resynchronize the component tree.`
+      : message;
+  if (kind === "protocol") bridge.protocolError ??= failureMessage;
+  else bridge.unsupportedVersion ??= failureMessage;
+  bridge.inspections.reset(failureMessage);
   // Resolve rather than reject: this signal may be delivered synchronously
   // during backend evaluation, before performAttach awaits readyPromise.
   // waitForReady turns the recorded failure into the structured ToolError.
@@ -743,11 +749,14 @@ export async function inspectReactComponent(
     display_name: record.displayName,
     type: reactElementTypeName(record.type),
     key: raw.key ?? record.key,
-    props: normalizeDehydratedValue(raw.props),
-    state: normalizeDehydratedValue(raw.state),
-    hooks: normalizeDehydratedValue(raw.hooks),
-    context: normalizeDehydratedValue(raw.context),
-    suspended_by: normalizeDehydratedValue(raw.suspendedBy),
+    // react-devtools-core@7 cleans these categories independently from an
+    // empty path. Prefix their relative metadata so callers can round-trip a
+    // returned cleaned_paths entry directly as the next inspect path.
+    props: normalizeDehydratedValue(raw.props, ["props"]),
+    state: normalizeDehydratedValue(raw.state, ["state"]),
+    hooks: normalizeDehydratedValue(raw.hooks, ["hooks"]),
+    context: normalizeDehydratedValue(raw.context, ["context"]),
+    suspended_by: normalizeDehydratedValue(raw.suspendedBy, ["suspendedBy"]),
     component_errors: Array.isArray(raw.errors) ? raw.errors : [],
     component_warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
     capabilities: {

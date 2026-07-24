@@ -501,9 +501,12 @@ export class ReactComponentStore {
 
   unsupportedVersionMessage(): string | null {
     for (const metadata of this.rendererMetadata()) {
-      const leadingMajor = metadata.version?.match(/^(\d+)/)?.[1];
-      const major = leadingMajor === undefined ? null : Number(leadingMajor);
-      if (metadata.supportsFiber === false || (major !== null && major < 16)) {
+      const leadingVersion = metadata.version?.match(/^(\d+)(?:\.(\d+))?/);
+      const major = leadingVersion?.[1] === undefined ? null : Number(leadingVersion[1]);
+      const minor = leadingVersion?.[2] === undefined ? 0 : Number(leadingVersion[2]);
+      const belowSupportedFloor =
+        major !== null && (major < 16 || (major === 16 && minor < 8));
+      if (metadata.supportsFiber === false || belowSupportedFloor) {
         const name = metadata.rendererPackageName ?? `renderer ${metadata.rendererId}`;
         const version = metadata.version ? ` ${metadata.version}` : "";
         return `${name}${version} does not expose the supported React Fiber interface. React read inspection supports React 16.8–19; upgrade React and reattach.`;

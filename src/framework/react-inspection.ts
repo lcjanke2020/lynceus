@@ -191,7 +191,10 @@ export interface ReactDehydratedValue {
   unserializable_paths: ReactInspectionPath[];
 }
 
-export function normalizeDehydratedValue(value: unknown): ReactDehydratedValue | null {
+export function normalizeDehydratedValue(
+  value: unknown,
+  pathPrefix: ReactInspectionPath = [],
+): ReactDehydratedValue | null {
   if (value === null || value === undefined) return null;
   if (!isRecord(value) || !("data" in value)) {
     throw protocolError("React inspected value is not a dehydrated {data, cleaned, unserializable} envelope");
@@ -200,8 +203,11 @@ export function normalizeDehydratedValue(value: unknown): ReactDehydratedValue |
   const unserializable = normalizePaths(value.unserializable, "unserializable");
   return {
     data: value.data,
-    cleaned_paths: cleaned,
-    unserializable_paths: unserializable,
+    cleaned_paths: cleaned.map((path) => [...pathPrefix, ...path]),
+    unserializable_paths: unserializable.map((path) => [
+      ...pathPrefix,
+      ...path,
+    ]),
   };
 }
 

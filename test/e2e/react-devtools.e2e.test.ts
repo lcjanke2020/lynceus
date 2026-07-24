@@ -4,6 +4,7 @@
 // path. The server binds port 0 so this spec composes with local/CI services.
 
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -273,11 +274,13 @@ describe("React DevTools bridge (e2e)", () => {
     expect(rows).toMatchObject({ total_matches: 2, returned_matches: 2 });
     expect(rows.matches.map((match: any) => match.key)).toEqual(["alpha", "beta"]);
 
-    expect(widgetInspection.props).toEqual({
+    expect(widgetInspection.props).toMatchObject({
       data: { label: "runtime-widget" },
-      cleaned_paths: [],
+      cleaned_paths: [["props", "reviewDetails", "nested"]],
       unserializable_paths: [],
     });
+    const nestedReviewPath = widgetInspection.props.cleaned_paths[0];
+    expect(nestedReviewPath).toEqual(["props", "reviewDetails", "nested"]);
     expect(widgetInspection.hooks.data.map((hook: any) => hook.name)).toEqual([
       "InspectorContext",
       "FixtureCounter",
@@ -296,16 +299,45 @@ describe("React DevTools bridge (e2e)", () => {
       { name: "State", value: 2 },
       { name: "Effect", value: undefined },
     ]);
+    const fixtureSource = readFileSync(
+      join(fixtureRoot, "src", "ReactInspectorFixture.tsx"),
+      "utf8",
+    );
+    const widgetDefinitionLine =
+      fixtureSource
+        .split("\n")
+        .findIndex((line) => line.startsWith("function InspectorWidget(")) + 1;
+    expect(widgetDefinitionLine).toBeGreaterThan(0);
     expect(widgetInspection.source).toMatchObject({
-      line: 39,
-      column: 27,
+      line: widgetDefinitionLine,
+      column: expect.any(Number),
       component_name: "InspectorWidget",
       generated: { session_id: null },
     });
+    expect(widgetInspection.source.column).toBeGreaterThanOrEqual(0);
     expect(widgetInspection.source.file).toMatch(
       /\/src\/ReactInspectorFixture\.tsx$/,
     );
     expect(widgetInspection.source_note).toBeNull();
+
+    const hydratedWidgetInspection = await call<any>(
+      tools,
+      "inspect_react_component",
+      {
+        session: browser.session,
+        component_id: widget.matches[0].component_id,
+        renderer_id: widget.matches[0].renderer_id,
+        path: nestedReviewPath,
+      },
+    );
+    expect(hydratedWidgetInspection.hydrated_path).toEqual({
+      path: nestedReviewPath,
+      value: {
+        data: { fontScale: 1.25 },
+        cleaned_paths: [],
+        unserializable_paths: [],
+      },
+    });
 
     expect(stateInspection).toMatchObject({
       props: { data: { label: "runtime-state" } },

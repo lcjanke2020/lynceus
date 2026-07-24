@@ -34,6 +34,11 @@ function useFixtureCounter(initialCount: number): number {
 
 interface InspectorWidgetProps {
   label: string;
+  reviewDetails: {
+    nested: {
+      fontScale: number;
+    };
+  };
 }
 
 function InspectorWidget({ label }: InspectorWidgetProps) {
@@ -93,7 +98,10 @@ export function ReactInspectorFixture() {
   return (
     <InspectorContext.Provider value={FIXTURE_CONTEXT}>
       <section aria-label="React inspector fixture">
-        <InspectorWidget label="runtime-widget" />
+        <InspectorWidget
+          label="runtime-widget"
+          reviewDetails={{ nested: { fontScale: FIXTURE_CONTEXT.fontScale } }}
+        />
         <InspectorStateBox label="runtime-state" />
         <ul id="rdt-rows">
           {rows.map((row) => (
