@@ -1,10 +1,10 @@
-// Managed development-server subprocess for dual-target L4 scenarios.
+// Managed development-server subprocess for browser-development and dual L4 scenarios.
 //
-// Browser-only scenarios use static-server.ts. The fullstack-cart fixture is
-// deliberately Vite-development-only, so the dual target needs a real child
-// process with readiness detection and process-tree cleanup. Keep this helper
-// generic enough to unit-test with a tiny Node HTTP server; runner.ts supplies
-// Vite's CLI as the default command shape.
+// Most browser-only scenarios use static-server.ts. React inspection and
+// fullstack-cart are deliberately Vite-development-only, so their targets need
+// a real child process with readiness detection and process-tree cleanup. Keep
+// this helper generic enough to unit-test with a tiny Node HTTP server;
+// runner.ts supplies Vite's CLI as the default command shape.
 
 import { spawn, type ChildProcess } from "node:child_process";
 

@@ -29,9 +29,12 @@ import type { Vendor } from "./vendor.js";
  *  `variantDir` and the runner's `resolveTarget()` helper folds them
  *  into `{ kind: "browser", variantDistDir: variantDir }`.
  *
- *  - `browser` — drives a sample-app variant served from `variantDistDir`
- *    over a port-0 static server, launches Chrome, frames the first
- *    user message as `Page under test: ${url}`.
+ *  - `browser` — either drives a built sample-app variant from
+ *    `variantDistDir` over a port-0 static server, or starts a managed Vite
+ *    development server from `webAppDir` at the exact `webUrl`. The latter is
+ *    required for fixtures whose behavior depends on development-only runtime
+ *    metadata (for example React DevTools component names). Both forms launch
+ *    Chrome and frame the first user message as `Page under test: ${url}`.
  *  - `node`    — drives a built JS entrypoint at `script` via
  *    `launch_node`, skips static-server + Chrome resolution, frames the
  *    first user message as `Node script under test: ${script}`.
@@ -42,23 +45,25 @@ import type { Vendor } from "./vendor.js";
  *    the runner derives Vite's bind host/port from it. */
 export type ScenarioTarget =
   | { kind: "browser"; variantDistDir: string }
+  | { kind: "browser"; webAppDir: string; webUrl: string }
   | { kind: "node"; script: string }
   | { kind: "dual"; webAppDir: string; webUrl: string; script: string };
 
 export interface Scenario {
   /** Identifier — matches the filename under evals/scenarios/. */
   name: string;
-  /** Sub-directory under evals/sample-app-variants/ to serve as the page
-   *  under test. The default is the canonical examples/sample-app for
-   *  scenarios that don't need a fork. **Browser scenarios only** — Node
-   *  scenarios omit this and supply `target: { kind: "node", script }`
-   *  instead. Optional now that the harness supports Node targets; the runner's
+  /** Static tree to serve as the page under test. The default is the canonical
+   *  examples/sample-app for scenarios that don't need a fork. **Static browser
+   *  scenarios only** — development-browser, Node, and dual scenarios omit this
+   *  and supply an explicit `target` instead. Optional now that the harness
+   *  supports non-static targets; the runner's
    *  `resolveTarget()` helper throws at startup if a scenario has
    *  neither `variantDir` nor `target`. */
   variantDir?: string;
   /** Explicit target discriminator — when set, takes precedence over the
-   *  legacy `variantDir` fallback. New Node and dual scenarios set this; existing
-   *  browser scenarios leave it unset and rely on `variantDir`. The
+   *  legacy `variantDir` fallback. Node, dual, and development-server browser
+   *  scenarios set this; existing static browser scenarios may leave it unset
+   *  and rely on `variantDir`. The
    *  runner's `resolveTarget(scenario)` helper resolves the effective
    *  target from these two fields. */
   target?: ScenarioTarget;
@@ -92,10 +97,10 @@ export interface Scenario {
    *  (median mechanic=0) or XPASS (median mechanic=1) instead of
    *  FAIL / PASS. Like `xfailCorrectness`, this is display-only — the
    *  mechanic axis never gates the CLI exit code regardless. Used by
-   *  adversarial-out-of-order (LEO-400), where the bug is statically
-   *  readable so the breakpoint→pause flow can't be forced by
-   *  construction: a static-shortcut solve is tolerated (XFAIL), a run
-   *  that drives the debugger is the desired bonus (XPASS). */
+   *  adversarial-out-of-order (LEO-400) and react-stale-closure (LEO-361),
+   *  where a statically readable cause means the runtime mechanic cannot be
+   *  forced by construction: a static-shortcut solve is tolerated (XFAIL), a
+   *  run that exercises the intended runtime surface is the bonus (XPASS). */
   xfailMechanic?: boolean;
 }
 

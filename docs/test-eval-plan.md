@@ -7,11 +7,11 @@ pyramid. The detailed inventories below preserve that rationale and the review r
 where a paragraph says “add” or describes the old singleton, read it as historical
 unless a current-state note supersedes it.
 
-Current state (2026-07-23): lynceus exposes **59 tools across 14 categories** to
+Current state (2026-07-24): lynceus exposes **59 tools across 14 categories** to
 browser and Node targets, with one browser + one Node session able to coexist. L1/L2
 cover pure logic and every tool contract against the typed fake CDP; L3 has 21 real
 Chromium/Inspector specs including a dual-session request flow and the Node eval-runner
-seam; L4 has 19 agent scenarios (14 browser + 4 Node + 1 dual) behind six vendor
+seam; L4 has 21 agent scenarios (16 browser + 4 Node + 1 dual) behind six vendor
 adapters. CI gates unit/type/build/smoke, the Linux/Windows unit matrix, Linux browser
 E2E, and the quick eval.
 
@@ -208,7 +208,7 @@ If the budget feels too rich during initial calibration, drop to 2 trials per sc
 
 **Model deprecation playbook.** When the current harness pin (`claude-opus-4-8` as of 2026-07-20) is deprecated:
 1. Promote the deprecated model to a "last-known-baseline" comparison job — keep it running on its existing thresholds, but `continue-on-error: true`.
-2. Re-baseline every currently registered scenario against the candidate next-gen model: run each scenario 5× (not 3×) to get a tighter estimate, record per-scenario pass-rate. (The original suite had 8 scenarios; the current suite has 19.)
+2. Re-baseline every currently registered scenario against the candidate next-gen model: run each scenario 5× (not 3×) to get a tighter estimate, record per-scenario pass-rate. (The original suite had 8 scenarios; the current suite has 21.)
 3. Update median-gate thresholds in `evals/harness/model.ts` (typically next-gen models tighten gates, but adversarial-out-of-order may regress on more agreeable models — judge per-scenario, not en bloc).
 4. Promote the new model to gating; drop the comparison job after 30 days of stability.
 This avoids the 4 AM "nightly is 410'ing" page when Anthropic deprecates a model.
@@ -302,7 +302,7 @@ Day 1: Windows runner mirrors `unit` only (typecheck + L1/L2). The Windows e2e n
 
 ### Post-implementation (one-time gate, only when test infra first lands)
 
-5. **`npm run eval`** — the original full 8-scenario × 3-trial suite completes within budget; aggregate report shows ≥6/8 scenarios passing median. For the current 19-scenario suite, use the per-scenario thresholds and cost guidance in `evals/README.md`.
+5. **`npm run eval`** — the original full 8-scenario × 3-trial suite completes within budget; aggregate report shows ≥6/8 scenarios passing median. For the current 21-scenario suite, use the per-scenario thresholds and cost guidance in `evals/README.md`.
 6. **CI dry-run** — open a draft PR with a no-op change; `unit`, `e2e-linux-arm64`, `e2e-linux-x64` (chromium + chrome), `eval-quick` all complete green within ~10 min total. Manually trigger `eval-full` via `workflow_dispatch` to confirm the full path runs end-to-end.
 7. **Regression-fail check** — temporarily revert one of the multi-session compound-key fixes (the worker-collision regression noted in `store.test.ts`); confirm `worker-bug.ts` eval AND `worker.e2e.test.ts` AND L2 session-routing tests **all** fail. Restore the fix. *Do this once when the suite first lands; not on every PR.*
 8. **Cost-baseline check** — after the first nightly eval run, inspect the Anthropic dashboard; confirm cached-input rate is high (system prompt + tool list should hit the cache on every trial after the first), and that nightly cost lands within the empirical band (~$5–10 on Sonnet 4.6 baseline; first observed ~$4 on Opus-4.7-medium default — one data point, not yet a steady-state band; see *L4 → Cost gating* note above for why the pre-impl ~$45 estimate is superseded). If significantly higher than the observation, the most likely causes in priority order: (a) parallel scenario execution collapsed cache hits, (b) cache_control placement wrong on the harness's API requests, (c) thinking-effort tier silently bumped above medium.

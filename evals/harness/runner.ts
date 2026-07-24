@@ -97,7 +97,8 @@ export interface RunTrialOpts {
   /** Shared budget — runTrial reads ceilingUsd and updates spentUsd. */
   budget: BudgetTracker;
   /** Target discriminator — browser scenarios pass
-   *  `{ kind: "browser", variantDistDir }`; Node scenarios pass
+   *  `{ kind: "browser", variantDistDir }` for static fixtures or
+   *  `{ kind: "browser", webAppDir, webUrl }` for development fixtures; Node scenarios pass
    *  `{ kind: "node", script }`; dual scenarios pass both a web fixture
    *  and a Node script. Replaced the earlier
    *  `variantDistDir: string` field once the harness gained a Node-target
@@ -139,12 +140,14 @@ export function resolveTarget(scenario: Scenario): ScenarioTarget {
   );
 }
 
-/** Parse the exact page URL used by a dual target.
+/** Parse the exact page URL used by a managed Vite target.
  *
- * `webUrl` is intentionally a page URL, not merely an origin: a scenario may
- * use a path, query, or fragment to select the state the browser should open.
- * The managed-server readiness check probes that page (a non-OK page is not a
- * ready fixture), while Vite's bind coordinates come from hostname + port.
+ * `webUrl` is intentionally a page URL, not merely an origin: a browser-dev or
+ * dual scenario may use a path, query, or fragment to select the state the
+ * browser should open. The managed-server readiness check probes that page (a
+ * non-OK page is not a ready fixture), while Vite's bind coordinates come from
+ * hostname + port. The historical function name is retained because dual was
+ * the first managed-development target.
  */
 export function parseDualWebUrl(value: string): URL {
   let webUrl: URL;
@@ -152,12 +155,12 @@ export function parseDualWebUrl(value: string): URL {
     webUrl = new URL(value);
   } catch {
     throw new Error(
-      `runner: dual target webUrl '${value}' must be an http URL with an explicit port.`,
+      `runner: managed development target webUrl '${value}' must be an http URL with an explicit port.`,
     );
   }
   if (webUrl.protocol !== "http:" || webUrl.port === "") {
     throw new Error(
-      `runner: dual target webUrl '${value}' must be an http URL with an explicit port.`,
+      `runner: managed development target webUrl '${value}' must be an http URL with an explicit port.`,
     );
   }
   return webUrl;
@@ -347,16 +350,17 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
 
   const startMs = Date.now();
 
-  // Branch on the target kind: browser trials spin up a port-0 static
-  // server; dual trials start their development server; both resolve a
-  // Chrome binary. Node-only trials skip all browser setup.
+  // Branch on the target shape: static browser trials spin up a port-0
+  // server; managed browser + dual trials start a Vite development server;
+  // every browser-bearing target resolves a Chrome binary. Node-only trials
+  // skip all browser setup.
   let server: { url: string; close(): Promise<void> } | null = null;
   let variantUrl: string | undefined;
   let extraEnv: Record<string, string> = {};
   let mcp: Awaited<ReturnType<typeof spawnMcpServer>>;
   try {
     if (target.kind !== "node") {
-      if (target.kind === "browser") {
+      if (target.kind === "browser" && "variantDistDir" in target) {
         server = await startStaticServer(target.variantDistDir);
       } else {
         const viteCli = resolve(
@@ -367,11 +371,12 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
           "vite.js",
         );
         if (!existsSync(viteCli)) {
+          const targetLabel = target.kind === "dual" ? "dual" : "development browser";
           throw new Error(
-            `runner: dual target Vite CLI '${viteCli}' does not exist. Run 'npm run sample-fullstack:build' first.`,
+            `runner: ${targetLabel} target Vite CLI '${viteCli}' does not exist. Run 'npm run sample-fullstack:build' (or the fixture's documented install prehook) first.`,
           );
         }
-        if (!existsSync(target.script)) {
+        if (target.kind === "dual" && !existsSync(target.script)) {
           throw new Error(
             `runner: dual target script '${target.script}' does not exist. Run 'npm run sample-fullstack:build' first.`,
           );
@@ -431,6 +436,10 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
       if (target.kind === "dual") {
         process.stderr.write(
           `[eval] dual trial — dev server ready at ${target.webUrl}; backend script=${target.script}\n`,
+        );
+      } else if (!("variantDistDir" in target)) {
+        process.stderr.write(
+          `[eval] browser development trial — dev server ready at ${target.webUrl}\n`,
         );
       }
     } else {
@@ -809,8 +818,8 @@ export async function runTrial(opts: RunTrialOpts): Promise<TrialOutcome> {
     } catch {
       /* ignore */
     }
-    // Browser static servers and dual development servers share this
-    // managed close surface. Node-only trials never started one.
+    // Static and development browser servers plus dual development servers
+    // share this managed close surface. Node-only trials never started one.
     if (server !== null) {
       try {
         await server.close();

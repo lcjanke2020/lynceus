@@ -390,4 +390,94 @@ describe("React DevTools bridge (e2e)", () => {
       truncated: false,
     });
   });
+
+  it("returns the live hook evidence required by the React L4 scenarios", async () => {
+    const browser = await attachToTestChrome(tools, { label: "react-l4-fixtures" });
+    await call(tools, "navigate", {
+      session: browser.session,
+      url: `${fixtureUrl}?rdt_scenario=stale-closure`,
+      wait: "load",
+    });
+    await call<AttachResult>(tools, "attach_react_devtools", {
+      session: browser.session,
+      timeout_ms: 15_000,
+    });
+
+    const staleCounter = await call<any>(tools, "find_react_component", {
+      session: browser.session,
+      name: "StaleCounter",
+      exact: true,
+    });
+    expect(staleCounter).toMatchObject({
+      total_matches: 1,
+      returned_matches: 1,
+    });
+    const staleInspection = await waitFor(
+      async () => {
+        const result = await call<any>(tools, "inspect_react_component", {
+          session: browser.session,
+          component_id: staleCounter.matches[0].component_id,
+          renderer_id: staleCounter.matches[0].renderer_id,
+        });
+        const state = result.hooks.data.find(
+          (hook: any) => hook.name === "State",
+        );
+        return state?.value === 1 ? result : null;
+      },
+      {
+        timeoutMs: 5_000,
+        describe: "StaleCounter State hook frozen at 1",
+      },
+    );
+    expect(staleInspection.display_name).toBe("StaleCounter");
+
+    await call(tools, "navigate", {
+      session: browser.session,
+      url: `${fixtureUrl}?rdt_scenario=context-provider`,
+      wait: "load",
+    });
+    const settingsWidget = await waitFor(
+      async () => {
+        const result = await call<any>(tools, "find_react_component", {
+          session: browser.session,
+          name: "SettingsWidget",
+          exact: true,
+        });
+        return result.total_matches === 1 ? result : null;
+      },
+      {
+        timeoutMs: 10_000,
+        describe: "SettingsWidget after context-scenario navigation",
+      },
+    );
+    const runtimeBoundary = await call<any>(tools, "find_react_component", {
+      session: browser.session,
+      name: "RuntimeThemeBoundary",
+      exact: true,
+    });
+    expect(runtimeBoundary).toMatchObject({
+      total_matches: 1,
+      returned_matches: 1,
+    });
+
+    const settingsInspection = await call<any>(
+      tools,
+      "inspect_react_component",
+      {
+        session: browser.session,
+        component_id: settingsWidget.matches[0].component_id,
+        renderer_id: settingsWidget.matches[0].renderer_id,
+      },
+    );
+    const contextHook = settingsInspection.hooks.data.find(
+      (hook: any) => hook.name === "ThemeContext",
+    );
+    expect(settingsInspection.display_name).toBe("SettingsWidget");
+    expect(["midnight", "sepia", "aurora"]).toContain(
+      contextHook.value.theme,
+    );
+    expect(contextHook.value.providerId).toMatch(
+      /^rdt-inner-[0-9a-f-]{36}$/i,
+    );
+  });
 });

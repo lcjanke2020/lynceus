@@ -1,4 +1,4 @@
-// Unit tests for the runner's browser / Node / dual target seam.
+// Unit tests for the runner's static/development browser / Node / dual target seam.
 //
 // All synthetic — no real MCP spawn, no real LLM, no real Node child.
 // The runner's `runTrial` itself is end-to-end-tested in
@@ -79,6 +79,16 @@ describe("resolveTarget (additive target discriminator)", () => {
       kind: "browser",
       variantDistDir: "evals/sample-app-variants/x/dist",
     });
+  });
+
+  it("returns an explicit managed-development browser target", () => {
+    const target = {
+      kind: "browser" as const,
+      webAppDir: "examples/sample-fullstack-app",
+      webUrl: "http://127.0.0.1:5173/?rdt_scenario=stale-closure",
+    };
+    const s = scenario({ variantDir: undefined, target });
+    expect(resolveTarget(s)).toEqual(target);
   });
 
   it("returns explicit node target when set", () => {
@@ -287,6 +297,30 @@ describe("buildScenarioStartEntry (trace-shape factor-out)", () => {
       kind: "browser",
       variantDistDir: "examples/sample-app/dist",
     });
+  });
+
+  it("records managed-development browser coordinates without changing the browser kind", () => {
+    const target = {
+      kind: "browser" as const,
+      webAppDir: "examples/sample-fullstack-app",
+      webUrl: "http://127.0.0.1:5173/?rdt_scenario=context-provider",
+    };
+    const entry = buildScenarioStartEntry({
+      scenario: scenario({
+        name: "react-context-provider",
+        variantDir: undefined,
+        target,
+      }),
+      trial: 1,
+      adapter: stubAdapter(),
+      target,
+      reasoning: { level: "none" },
+      variantUrl: target.webUrl,
+    });
+
+    expect(entry.variantUrl).toBe(target.webUrl);
+    expect(entry.target).toEqual(target);
+    expect(entry.target.kind).toBe("browser");
   });
 
   it("omits variantUrl on Node trials", () => {

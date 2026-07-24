@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check": "tsc --noEmit",
     "api:build": "tsc -p server/tsconfig.json",
     "preapi": "npm run api:build",
     "api": "node --enable-source-maps server/dist/index.js"
