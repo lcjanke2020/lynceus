@@ -3,14 +3,13 @@
 // Why a flat registry rather than fs.readdirSync(): keeps the bundle
 // resolvable from `npx tsx evals/cli.ts` without filesystem scans, makes
 // the set of supported scenarios obvious in code review, and lets each
-// scenario's variant directory be statically referenced.
+// scenario's fixture coordinates be statically referenced.
 //
-// Variant-build status: all scenarios are runnable once `npm run sample:build`
-// has run. Five use the canonical examples/sample-app/dist (compute-step,
-// adversarial-out-of-order, form-drive, robust-locator, cookie-redaction); the
-// rest reference evals/sample-app-variants/<name>/dist, materialized by
-// scripts/build-variants.mjs. `npm run eval:quick` only runs compute-step so the
-// per-PR gate stays green/cheap.
+// Fixture-build status: static browser scenarios are runnable once `npm run
+// sample:build` has run. Five use examples/sample-app/dist and the remaining
+// static rows use evals/sample-app-variants/<name>/dist. Node, React-development,
+// and dual targets use their dedicated build hooks. `npm run eval:quick` only
+// runs compute-step so the per-PR gate stays green/cheap.
 
 import type { Scenario } from "../harness/types.js";
 import { computeStep } from "./compute-step.js";
@@ -35,6 +34,9 @@ import { nodeConditionalBp } from "./node-conditional-bp.js";
 import { nodeUncaughtThrow } from "./node-uncaught-throw.js";
 // First concurrent browser + Node L4 scenario.
 import { fullstackCart } from "./fullstack-cart.js";
+// React DevTools read-surface scenarios.
+import { reactStaleClosure } from "./react-stale-closure.js";
+import { reactContextProvider } from "./react-context-provider.js";
 
 export const SCENARIOS: Record<string, Scenario> = {
   [computeStep.name]: computeStep,
@@ -59,6 +61,9 @@ export const SCENARIOS: Record<string, Scenario> = {
   [nodeUncaughtThrow.name]: nodeUncaughtThrow,
   // Dual-target L4 scenario.
   [fullstackCart.name]: fullstackCart,
+  // React DevTools read-surface scenarios.
+  [reactStaleClosure.name]: reactStaleClosure,
+  [reactContextProvider.name]: reactContextProvider,
 };
 
 export function lookupScenario(name: string): Scenario {

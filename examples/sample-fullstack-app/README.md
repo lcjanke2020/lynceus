@@ -1,10 +1,10 @@
 # examples/sample-fullstack-app/
 
-**Last updated: 2026-07-23**
+**Last updated: 2026-07-24**
 
 The human-facing full-stack demo app (LEO-464): a dev-build React frontend and an
 Express backend that talk to each other, with one deliberate bug planted server-side.
-One small app, four jobs:
+One small app, five jobs:
 
 1. The **interview demo** of simultaneous frontend + backend debugging — the scripted
    run lives in [DEMO.md](DEMO.md).
@@ -12,19 +12,22 @@ One small app, four jobs:
 3. The **dev-build React fixture** for the React DevTools work (`react-dev-tools-support`
    branch) — production React builds strip component names from the fiber tree, so that
    work needs exactly this app.
-4. The subject of the README demo recording (LEO-453).
+4. The two React inspection L4 scenarios, `react-stale-closure` and
+   `react-context-provider` (LEO-361).
+5. The subject of the README demo recording (LEO-453).
 
 This is not the L3 CI fixture: the deterministic dual-session e2e spec keeps its own
 minimal vanilla page + Node entry. It **is** now the `fullstack-cart` L4 target. The
 eval runner starts/stops this Vite dev server per trial, while the agent launches the
 built backend under Node Inspector; `npm run sample-fullstack:build` installs the
-lockfile-pinned dependencies and emits `server/dist/` with source maps.
+lockfile-pinned dependencies, type-checks the frontend fixture, and emits
+`server/dist/` with source maps.
 
 ## Stack and layout
 
 | Path | What it is |
 |---|---|
-| `src/` | Vite + React 18.3.1 frontend (TypeScript). The normal route renders `App` → `Header`/`CartBadge` + `ProductCard` → `CartButton`; `?rdt_fixture=1` renders the deterministic `ReactInspectorFixture` used by the React read-tool e2e. Dev server only — there is deliberately no production build script. |
+| `src/` | Vite + React 18.3.1 frontend (TypeScript). The normal route renders `App` → `Header`/`CartBadge` + `ProductCard` → `CartButton`; `?rdt_fixture=1` renders the deterministic RDT-2 read-tool fixture; `?rdt_scenario=stale-closure` and `?rdt_scenario=context-provider` render the RDT-3 L4 fixtures. Dev server only — there is deliberately no production build script. |
 | `server/src/` | Express 5 backend (TypeScript, compiled by `tsc` with source maps — same disk-backed-tsc contract as `sample-node-app`). `index.ts` assembles the app; `cart.ts` owns the routes and the in-memory cart. |
 | `DEMO.md` | The rehearsed dual-session interview demo script. |
 
@@ -48,6 +51,18 @@ state/hooks/context, the mapped TypeScript definition site, and the eight-node t
 after **Add row** creates `row-3`. Keep this fixture deterministic and separate from the
 normal demo route.
 
+Open `http://localhost:5173/?rdt_scenario=stale-closure` for the source-solvable
+control. `StaleCounter` advances once and then stays at 1 because its empty-dependency
+effect closes over the initial `count`; React inspection supplies the live symptom and
+source supplies the cause.
+
+Open `http://localhost:5173/?rdt_scenario=context-provider` for the bridge-mandatory
+case. `RuntimeThemeBoundary` places `SettingsWidget` under a nearer provider whose
+value is created lazily per page: one non-light theme plus a high-entropy
+`rdt-inner-*` provider ID. The ID is deliberately absent from rendered HTML and page
+globals. Tests assert its shape and its identity round-trip rather than pinning a
+particular random value.
+
 Knobs (all optional): `PORT` (API port; `PORT=0` picks a free port and prints it to
 stdout as `sample-fullstack-app api listening on http://127.0.0.1:<port>`),
 `VITE_API_URL` (where the frontend sends `/api/cart` calls; default
@@ -60,14 +75,21 @@ From the repository root, the eval-oriented commands are:
 ```sh
 npm run sample-fullstack:build
 EVAL_BUDGET_USD=5 npm run eval:quick:fullstack
+EVAL_BUDGET_USD=5 npm run eval:quick:react
 ```
 
-The quick command is one paid trial with both correctness and mechanic currently
+The full-stack quick command is one paid trial with both correctness and mechanic currently
 xfail-tagged. Its deterministic oracle requires concurrent browser/Node rows from
 `list_sessions`, a bound breakpoint in each target's source coordinates, and a
 Node-scoped pause in `server/src/cart.ts`; see [evals/README.md](../../evals/README.md).
 Port 5173 must be unused before the runner starts Vite, and port 3001 must be free for
 the agent-launched API.
+
+The React quick command runs each React scenario once. Their oracles grade diagnosis
+and React-tool adoption separately and require scenario-relevant values in successful
+`inspect_react_component` results; a tool call alone earns no mechanic credit. Only
+`react-stale-closure` carries a defensive mechanic xfail because its cause remains
+readable from source.
 
 ## The bug — do not fix it
 

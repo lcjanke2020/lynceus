@@ -1,6 +1,6 @@
 # evals/
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-24**
 
 L4 of the test pyramid — runs an LLM agent (Claude, GPT-5.5, Gemini, …) through scripted scenarios that exercise the full MCP tool surface end-to-end against a real browser, a real Node.js Inspector child, or both concurrently. For pyramid context see [../docs/ARCHITECTURE.md §Test pyramid](../docs/ARCHITECTURE.md); for the cost model + caching guarantees see [../docs/test-eval-plan.md §L4](../docs/test-eval-plan.md).
 
@@ -10,7 +10,7 @@ L4 of the test pyramid — runs an LLM agent (Claude, GPT-5.5, Gemini, …) thro
 |---|---|
 | `cli.ts` | Entry point. Parses `--scenarios=…` / `--trials=…` / budget flags. `resolveProviderClient()` picks a `VendorAdapter` from `EVAL_PROVIDER` (unset/`"anthropic"` → runner default; `"openai"` → Chat Completions or Responses by reasoning mode; `"vertex"`, `"deepseek"`, `"moonshot"`, and `"lm-studio"` select their adapters). Resolves browser / Node / dual targets and fails before spend when a required static tree, script, Vite CLI, or fixture build is missing. |
 | `harness/vendor.ts` | The vendor-agnostic seam (#47): `Vendor`, `VendorAdapter`, `NormalizedMessage`, `NormalizedThinkingBlock`, `VendorMessageRequest`, `ThinkingRequest`. The runner consumes only these shapes. |
-| `harness/runner.ts` | Spawns a fresh `dist/index.js` MCP subprocess and owns the scenario fixture lifecycle: port-0 static server for browser targets, no web server for Node-only targets (the agent calls `launch_node`), or a managed Vite dev server for dual targets. Selects a kind-specific SDET prompt, runs the tool-use loop against `adapter.messages(...)`, writes NDJSON traces, and calls the oracle. |
+| `harness/runner.ts` | Spawns a fresh `dist/index.js` MCP subprocess and owns the scenario fixture lifecycle: a port-0 static server or managed Vite dev server for browser targets, no web server for Node-only targets (the agent calls `launch_node`), and a managed Vite dev server for dual targets. Selects a kind-specific SDET prompt, runs the tool-use loop against `adapter.messages(...)`, writes NDJSON traces, and calls the oracle. |
 | `harness/anthropic.ts` | Anthropic adapter — `makeAnthropicAdapter()`, request building (`buildAnthropicRequest`, `effectiveTokenCap`), and the `@internal` helpers (`splitAssistantContent`, `readCacheUsage`) kept exported for regression tests. Owns ephemeral cache markers on system prompt + tool list. |
 | `harness/lm-studio-adapter.ts` | LM Studio (OpenAI-compatible) adapter — `makeLmStudioAdapter()`. Began as the issue #45 investigation artifact; now a thin config wrapper over the shared factory (GH #7), like the DeepSeek/Moonshot ones. `EVAL_LM_STUDIO_BASE_URL`/`_MODEL`/`_API_KEY` required (no default base URL); output cap defaults to 4096 (local parity), overridable via `EVAL_LM_STUDIO_MAX_TOKENS`; `EVAL_LM_STUDIO_REASONING_EFFORT` forwards `reasoning_effort` (gpt-oss-style models otherwise run at LM Studio's low default). |
 | `harness/openai-compat-adapter.ts` | Shared OpenAI-compatible Chat Completions factory — `makeOpenAICompatAdapter()` (GH #8). Backs the DeepSeek + Moonshot + LM Studio adapters; `max_tokens` (NOT `max_completion_tokens`), no Responses API. Parametrized by vendor tag / env-var names / default base URL (omit → base-URL env required) / default output cap, plus per-vendor `extraBody` (DeepSeek's `thinking` reasoning toggle), `cacheTokensFrom` (cache accounting), and the GH #7 env knobs (`maxTokensEnv` output-cap override; `reasoningEffortEnv` → top-level `reasoning_effort`, validated at construction, beats `extraBody`). Default per-request output cap is 32K so reasoning isn't truncated (GH #7). |
@@ -22,12 +22,12 @@ L4 of the test pyramid — runs an LLM agent (Claude, GPT-5.5, Gemini, …) thro
 | `harness/grader.ts` | Per-scenario oracle — emits `correctness ∈ {0,1}`, `mechanic ∈ {0,1}`, efficiency ratio, recovery count. No LLM judge. |
 | `harness/trace.ts` | Trace serialization (NDJSON under `evals/runs/<run-id>/`). `readTraceFile` folds pre-#49 legacy shapes forward via `normalizeLegacyEntry`. |
 | `harness/static-server.ts` | Tiny static server for the scenario's sample-app variant. |
-| `harness/dev-server.ts` | Managed development-server child for dual targets: occupied-URL guard, HTTP readiness polling, bounded diagnostics, and POSIX process-group teardown (Vite + helpers). |
-| `harness/types.ts` | Shared types: `Scenario`, `ScenarioTarget` (`browser { variantDistDir }` \| `node { script }` \| `dual { webAppDir, webUrl, script }`), trace entries, oracle and trial outcomes. `ScenarioStartEntry.target` records the discriminator; browser and dual rows also carry `variantUrl`. |
+| `harness/dev-server.ts` | Managed development-server child for development-browser and dual targets: occupied-URL guard, HTTP readiness polling, bounded diagnostics, and POSIX process-group teardown (Vite + helpers). |
+| `harness/types.ts` | Shared types: `Scenario`, `ScenarioTarget` (`browser { variantDistDir }` \| `browser { webAppDir, webUrl }` \| `node { script }` \| `dual { webAppDir, webUrl, script }`), trace entries, oracle and trial outcomes. `ScenarioStartEntry.target` records the discriminator; browser and dual rows also carry `variantUrl`. |
 | `scenarios/index.ts` | Scenario registry — what `npm run eval` picks up. |
 | `scenarios/<name>.ts` | One file per scenario: prompt, target (browser variant, Node entry, or dual web app + backend entry), oracle. |
 | `scenarios/<name>.test.ts` | L1 unit tests for the scenario's oracle (no LLM, no browser, no Node child). |
-| `sample-app-variants/<name>/` | Per-scenario tweak of `examples/sample-app/` for browser scenarios. Node scenarios share `examples/sample-node-app/`; the dual scenario uses `examples/sample-fullstack-app/`. |
+| `sample-app-variants/<name>/` | Per-scenario tweak of `examples/sample-app/` for static browser scenarios. The development-React and dual scenarios use `examples/sample-fullstack-app/`; Node scenarios share `examples/sample-node-app/`. |
 
 ### Trace files per trial
 
@@ -53,7 +53,7 @@ parseable schema.
 
 ## Scenarios present
 
-All 19 scenarios are registered and runnable — **14 browser + 4 Node + 1 dual**. Of the browser scenarios, eight are **debugger** scenarios — `adversarial-out-of-order`, `compute-step`, `conditional-bp`, `console-error`, `deep-source-map`, `event-binding`, `network-bug`, `worker-bug` — and six are **driving + session-portability** scenarios. The four Node scenarios drive Node Inspector. `fullstack-cart` is the first concurrent browser + Node target. `compute-step`, `node-compute-step`, and `fullstack-cart` have dedicated one-trial scripts: `eval:quick`, `eval:quick:node`, and `eval:quick:fullstack`.
+All 21 scenarios are registered and runnable — **16 browser + 4 Node + 1 dual**. Of the browser scenarios, eight are **debugger** scenarios — `adversarial-out-of-order`, `compute-step`, `conditional-bp`, `console-error`, `deep-source-map`, `event-binding`, `network-bug`, `worker-bug` — six are **driving + session-portability** scenarios, and two exercise **React inspection**. The four Node scenarios drive Node Inspector. `fullstack-cart` is the first concurrent browser + Node target. Dedicated one-trial scripts cover the canonical browser, Node, dual, and React paths: `eval:quick`, `eval:quick:node`, `eval:quick:fullstack`, and `eval:quick:react` (the last runs both React scenarios once).
 
 Stock-app scenarios set `variantDir` to `examples/sample-app/dist`: `compute-step`, `adversarial-out-of-order`, `form-drive`, `robust-locator`, `cookie-redaction`. The others have per-scenario forks under `sample-app-variants/<name>/` that `npm run sample:build` materializes via `scripts/build-variants.mjs` — including two added for issue #12: `prefilled-form` (a preferences form with a pre-filled input, two pre-checked boxes, and a plan radio group — serves `clearing-fill` + `idempotent-toggle`) and `stateful-app` (writes `localStorage["user_pref"]` on load — serves `session-resume`).
 
@@ -75,6 +75,32 @@ Coverage spans all nine issue-#12 tools. (`session-resume` carries `xfailCorrect
 First full run (Opus-4.8 medium, all 14 × 3 trials, 2026-06-08, archived to durable off-repo storage): the model drove all six issue-#12 scenarios correctly. Two surfaced oracle issues (not model misses) that PR #17 review then hardened — `clearing-fill` (a false-negative answer check) and `session-resume` (a cookie-only restore could pass). Per-scenario cost ~$0.18–0.68.
 
 **Cost gating:** `npm run eval:quick` still runs only `compute-step` (the per-PR gate stays fast/cheap). The driving scenarios run nightly via `npm run eval` — they're at temperature 1 (thinking on) so non-deterministic, and `session-resume` is the most expensive (close/relaunch). `cookie-redaction` is the cheapest/most-deterministic and is the natural candidate if a storage-path scenario is later promoted into the per-PR gate.
+
+### React inspection scenarios (2)
+
+Both run the exact-pinned React 18.3.1 **development** fixture in
+[`examples/sample-fullstack-app/`](../examples/sample-fullstack-app/) through the
+managed browser target `{ kind: "browser", webAppDir, webUrl }`. Their shared SDET
+prompt requires attach → tree/find → inspect before source diagnosis and forbids raw
+`evaluate` access to the React hook, bridge globals, or fibers.
+
+| Scenario | Runtime evidence required for MECHANIC | CORRECT requires | Role |
+|---|---|---|---|
+| `react-stale-closure` | A successful `StaleCounter` inspection whose hooks payload contains `State === 1` | `StaleCounter.tsx` plus the stale captured `count` and empty/missing dependency (or functional-updater) cause | Source-solvable control: `xfailMechanic` is defensive, so a static shortcut is `XFAIL` while genuine bridge use is the intended `XPASS!`. |
+| `react-context-provider` | A successful `SettingsWidget` inspection containing the runtime `{theme, providerId}` with a high-entropy `rdt-inner-*` ID | `RuntimeThemeBoundary`/nearest provider plus the exact inspected theme and provider ID | Bridge-mandatory smoke: the ID is created lazily per page and is neither rendered nor stored on a page global, so source alone cannot produce a passing answer. |
+
+`react-context-provider` intentionally carries no expected-failure tag on either axis.
+Unlike the source-solvable control, its per-load high-entropy provider ID makes a
+correct answer without successful bridge evidence impossible by construction, so a hard
+failure is the regression signal this smoke is meant to preserve. The first Opus-4.8
+medium smoke passed both axes; additional trials are still needed to characterize cost
+and temperature-1 variance, not to weaken that gate.
+
+The two axes remain independent. **MECHANIC is payload-grounded**: merely invoking a
+React tool, receiving an error, locating/inspecting the wrong component, or reading
+source does not pass. **CORRECT** grades the scenario-specific diagnosis and exact live
+value. This pairing distinguishes a working bridge that a source-oriented model chose
+not to use from a bridge that failed to return useful state.
 
 ### Node scenarios (4)
 
@@ -126,7 +152,7 @@ sequenceDiagram
     participant Or as grader (oracle)
 
     CLI->>R: run(scenario, trials, adapter?)
-    Note over CLI,R: scenario.target.kind branches:<br/>browser → static server<br/>node → no web fixture<br/>dual → managed Vite server
+    Note over CLI,R: scenario.target branches:<br/>browser static → port-0 server<br/>browser development / dual → managed Vite<br/>node → no web fixture
     R->>T: start fixture when required
     R->>MCP: spawn (stdio)
     loop each trial
@@ -158,7 +184,7 @@ it); the explicit commands are:
 ```sh
 npm run sample:build          # builds examples/sample-app + all evals/sample-app-variants/* (browser scenarios)
 npm run sample-node:build     # builds examples/sample-node-app/dist/*.js (also auto-run by preeval / preeval:quick:node)
-npm run sample-fullstack:build # installs Vite + emits backend maps (also auto-run by preeval / preeval:quick:fullstack)
+npm run sample-fullstack:build # installs Vite, checks the React fixture, emits backend maps (auto-run by preeval / fullstack + React quick hooks)
 ```
 
 Then:
@@ -168,6 +194,7 @@ export ANTHROPIC_API_KEY=…
 npm run eval:quick                           # compute-step × 1 trial (~$0.50–$2 at default Opus-4.8-medium)
 npm run eval:quick:node                      # node-compute-step × 1 trial (Node smoke; auto-builds the Node fixture)
 npm run eval:quick:fullstack                 # fullstack-cart × 1 trial (auto-builds its fixture; starts/stops Vite per trial)
+npm run eval:quick:react                     # both React inspection scenarios × 1 trial (auto-builds their dev fixture)
 npm run eval                                 # all scenarios × 3 trials (~$4 full pass — first observed on Opus-4.7-medium, the prior default; 4.8 shares its rate card)
 npm run eval -- --scenarios=compute-step --trials=1
 npm run eval -- --scenarios=node-compute-step,node-stdio-bug,node-conditional-bp,node-uncaught-throw --trials=1   # Node scenarios
@@ -248,11 +275,13 @@ EVAL_PROVIDER=deepseek EVAL_DEEPSEEK_API_KEY=… EVAL_DEEPSEEK_MODEL=deepseek-v4
 EVAL_PROVIDER=moonshot EVAL_MOONSHOT_API_KEY=… EVAL_MOONSHOT_MODEL=kimi-k2.6 EVAL_BUDGET_USD=5 npm run eval:quick
 ```
 
-If a browser scenario's `variantDir` is missing, the CLI points to
-`sample:build`; a Node scenario with no built `target.script` points to
-`sample-node:build`; a dual scenario whose Vite CLI or backend entry is missing points
-to `sample-fullstack:build`. These checks run before the paid message loop. The dual
-runner also refuses to reuse an address already responding at `target.webUrl`.
+If a static browser scenario's `variantDir` is missing, the CLI points to
+`sample:build`; a development-browser scenario whose Vite CLI is missing points to
+`sample-fullstack:build`; a Node scenario with no built `target.script` points to
+`sample-node:build`; and a dual scenario whose Vite CLI or backend entry is missing
+also points to `sample-fullstack:build`. These checks run before the paid message loop.
+Managed development targets refuse to reuse an address already responding at
+`target.webUrl`.
 
 **Use an npm eval script, not `npx tsx evals/cli.ts`.** The pre-hooks rebuild the MCP
 server and the quick scripts' required fixtures; direct `tsx` skips that work and a
@@ -261,7 +290,7 @@ fresh clone fails on missing outputs.
 ## Cost & caching
 
 - Default model: **`claude-opus-4-8` with adaptive `medium` thinking** (`harness/model.ts`; bumped from Opus 4.7 on 2026-06-07 — see the `model.ts` header for the four-way campaign rationale). Originally switched off Sonnet 4.6 once real-money runs landed ~5× under the original $50–100/run estimate (Sonnet 4.6 came in at ~$5–10/run). Adaptive-style models default to medium-effort thinking when both `EVAL_REASONING_LEVEL` and `EVAL_REASONING_BUDGET` are unset; budget-style models (Sonnet 4.6) still default to thinking-off. Swap via `EVAL_MODEL_OVERRIDE` (supported ids listed in `SUPPORTED_MODELS`); pricing is per-(vendor, model) via `PRICING_CATALOG.<vendor>[<model>]` resolved through `pricingFor` (Anthropic exact match; LM Studio wildcard `"*"` sentinel = $0; unknown pairs throw) so the budget gate and cost estimates stay correct on the swap. When thinking is enabled Anthropic mandates `temperature: 1`, so runs become non-deterministic — use `--trials >= 3` to characterize variance. See `harness/model.ts` for the truth table and `TIER_BUDGET_TOKENS` defaults.
-- Per-run budget cap: **`$100`** (set `EVAL_BUDGET_USD` to override). **First observed Opus-4.7-medium full-suite cost: `~$4`** (measured when the suite was 8 scenarios × 3 trials, single run; the suite is now 19 scenarios — 14 browser + 4 Node + 1 dual). Single data point — call it the first observation, not the steady-state band. The pre-impl table in `docs/test-eval-plan.md` predicted ~$45/night derived; the Sonnet 4.6 nightly came in at ~$5–10 vs ~$8.6 predicted (close), and the Opus-medium first run beat the Opus pre-impl line by another ~10×. Cache hit-rate + tokenizer behavior probably explain the gap. `fullstack-cart` has no stable cost/pass baseline yet; use `EVAL_BUDGET_USD` on its first runs.
+- Per-run budget cap: **`$100`** (set `EVAL_BUDGET_USD` to override). **First observed Opus-4.7-medium full-suite cost: `~$4`** (measured when the suite was 8 scenarios × 3 trials, single run; the suite is now 21 scenarios — 16 browser + 4 Node + 1 dual). Single data point — call it the first observation, not the steady-state band. The pre-impl table in `docs/test-eval-plan.md` predicted ~$45/night derived; the Sonnet 4.6 nightly came in at ~$5–10 vs ~$8.6 predicted (close), and the Opus-medium first run beat the Opus pre-impl line by another ~10×. Cache hit-rate + tokenizer behavior probably explain the gap. `fullstack-cart` and the React scenarios have no stable cost/pass baseline yet; use `EVAL_BUDGET_USD` on their first runs.
 - The system prompt + tool catalog are tagged `cache_control: ephemeral` so the static prefix hits cache on every trial after the first. Measured sizes (per trace notes): ~280 tokens for the system block (`harness/runner.ts:18-22`) and ~5K tokens for the tool catalog (`harness/mcp-client.ts:122-128`) — earlier estimates of ~40K turned out to be high. The system block is *below* Anthropic's ~1024-token cache-breakpoint minimum, so its marker is effectively a no-op (the `runner.ts` comment spells this out); only the tools-array marker actually carries cross-trial reuse — which is enough to dominate the input cost on trial 2+. Verify post-#49 via the `cacheTokens` field on each `t:"usage"` trace entry: the Anthropic adapter writes `cacheTokens.cacheReadInputTokens` and `cacheTokens.cacheCreationInputTokens` (the keys match the SDK's `cache_read_input_tokens` / `cache_creation_input_tokens` verbatim, just dropped to camelCase under the vendor-tagged map).
 
 ## Scoring: SDET framing + dual-axis oracle
@@ -286,7 +315,7 @@ A scenario can mark an axis as **expected to fail** (the harness equivalent of p
 
 Only a correctness `FAIL` flips the CLI exit code — **the MECHANIC column never gates**, it is diagnostic-only, so a bare mechanic `FAIL`/`XFAIL` never fails the run. The `XPASS!` marker means the tagged axis passed: for a `xfailCorrectness` tag that is an operator nudge to consider dropping it (the model unexpectedly solved a scenario designed to be hard); for a **defensive** `xfailMechanic` tag (see the 2026-07-08 note below) a steady `XPASS!` on the strong models is the *intended bonus* signal, not a drop-the-tag nudge. Efficiency and recovery axes always score normally.
 
-Current tags: `adversarial-out-of-order` is tagged on **both** axes because its deliberately degraded prompt and statically readable bug make shortcut behavior part of the experiment; `session-resume` is correctness-xfailed pending a fresh strict-oracle baseline; and the new `fullstack-cart` is provisionally tagged on both axes until repeated trials establish the concurrent flow's baseline.
+Current tags: `adversarial-out-of-order` is tagged on **both** axes because its deliberately degraded prompt and statically readable bug make shortcut behavior part of the experiment; `react-stale-closure` is mechanic-xfailed for the same source-shortcut reason; `session-resume` is correctness-xfailed pending a fresh strict-oracle baseline; and `fullstack-cart` is provisionally tagged on both axes until repeated trials establish the concurrent flow's baseline.
 
 **Per-model expectations (2026-05-17, first arm64-linux full run on Opus-4.7-medium).** The `adversarial-out-of-order` xfail tag was set expecting the correctness axis to fail under the degraded system prompt. In practice Opus-4.7-medium identifies the bug (correctness=1) but bypasses the debugger workflow (mechanic=0) — the "lazy solver" pattern from PR #28 — so the scenario surfaces as `XPASS!` per-run rather than `XFAIL`. We're keeping the `xfailCorrectness` tag in place because (a) the `XPASS!` marker is exactly the operator nudge we wanted, and (b) Opus's inclination to bypass the debugger is hard to suppress with prompt engineering alone — fighting the xfail axis on this one scenario isn't the right lever. The long-term answer is a different scenario class (e.g. Station BP + LLM-judged) where the agent isn't asked "find the bug" at all, so there's no shortcut to take.
 
@@ -336,7 +365,8 @@ PR #12 (DRAFT, branch `agents/eval-model-rotation-proposal`) proposes day-of-wee
 1. Add `scenarios/<name>.ts`: export a `Scenario` (from `harness/types.ts`) with:
    - `name` — matches the filename.
    - Target — one of:
-     - *Browser:* `variantDir` — path to a built static tree. Use `examples/sample-app/dist` to share the stock app, or add a fork under `sample-app-variants/<name>/` and point at `evals/sample-app-variants/<name>/dist`.
+     - *Browser (static):* `variantDir` — path to a built static tree. Use `examples/sample-app/dist` to share the stock app, or add a fork under `sample-app-variants/<name>/` and point at `evals/sample-app-variants/<name>/dist`.
+     - *Browser (development):* `target: { kind: "browser", webAppDir, webUrl }`. The runner owns the fixture-local Vite process and uses the exact URL for readiness and the agent's page coordinate. Use this only when development runtime metadata is load-bearing; `react-stale-closure.ts` is the canonical example.
      - *Node:* an explicit `target: { kind: "node", script: "examples/sample-node-app/dist/<entry>.js" }`. Add a new entry under `examples/sample-node-app/src/` if no existing entry has the bug shape you need; the shared `dist/` rebuilds via `npm run sample-node:build`. Use `node-compute-step.ts` as the canonical Node example.
      - *Dual:* `target: { kind: "dual", webAppDir, webUrl, script }`. The runner starts the Vite CLI under `webAppDir`, passes `webUrl` plus the backend `script` to the agent, and tears the dev server down. `webUrl` is the exact page URL the readiness probe checks and the browser opens; paths, queries, and fragments are allowed, while Vite's bind host/port are derived from that URL. Use `fullstack-cart.ts` as the canonical example and add a dedicated fixture-build script when introducing another app.
    - `prompt` — the natural-language task the agent receives.
@@ -344,7 +374,7 @@ PR #12 (DRAFT, branch `agents/eval-model-rotation-proposal`) proposes day-of-wee
    - `oracleMinimumToolCalls` — efficiency floor (`tool_calls / oracleMinimumToolCalls`, capped at 1).
    - Optional `systemPromptOverride` — strips the default workflow guidance (used by `adversarial-out-of-order` to test recovery from degraded guidance).
    - Use `compute-step.ts` as the canonical example.
-2. If a browser scenario needs a forked sample-app bug, add `sample-app-variants/<name>/` and `npm run sample:build` will pick it up via `scripts/build-variants.mjs`. Node scenarios share `examples/sample-node-app/`; dual scenarios own both a web-app dependency tree and a built Node entry.
+2. If a static browser scenario needs a forked sample-app bug, add `sample-app-variants/<name>/` and `npm run sample:build` will pick it up via `scripts/build-variants.mjs`. Development-browser scenarios need a fixture install/check hook; Node scenarios share `examples/sample-node-app/`; dual scenarios own both a web-app dependency tree and a built Node entry.
 3. Add an L1 unit test in `scenarios/<name>.test.ts` for the oracle (no LLM, no browser, no Node child).
 4. Register in `scenarios/index.ts`.
 5. Run `npm run eval -- --scenarios=<name> --trials=1` and inspect the trace under `evals/runs/<run-id>/`.

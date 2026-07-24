@@ -7,6 +7,13 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
+- **React agent-eval scenarios** (LEO-361) — added the source-solvable
+  `react-stale-closure` control and bridge-mandatory `react-context-provider` case.
+  Their independent correctness/mechanic oracles require scenario-relevant values in
+  successful React inspection payloads, reject raw React-internal `evaluate`
+  shortcuts, and bind the provider answer to a runtime-only high-entropy ID. The L4
+  runner now supports managed Vite development-browser targets alongside static
+  browser, Node, and dual targets; `eval:quick:react` runs both new scenarios once.
 - **Read-only React component inspection** (LEO-360) — added
   `get_react_tree`, `find_react_component`, and `inspect_react_component` on top of the
   opt-in bridge. React DevTools v7 operations are decoded into an atomic,

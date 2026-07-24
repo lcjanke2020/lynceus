@@ -364,10 +364,25 @@ async function main(): Promise<void> {
     // wiring both branch on the same source of truth.
     const target = resolveTarget(scenario);
     if (target.kind === "browser") {
-      if (!existsSync(target.variantDistDir)) {
-        throw new Error(
-          `Scenario '${name}' references variantDir '${target.variantDistDir}' which does not exist. Run 'npm run sample:build' (canonical) or build the scenario's variant first.`,
+      if ("variantDistDir" in target) {
+        if (!existsSync(target.variantDistDir)) {
+          throw new Error(
+            `Scenario '${name}' references variantDir '${target.variantDistDir}' which does not exist. Run 'npm run sample:build' (canonical) or build the scenario's variant first.`,
+          );
+        }
+      } else {
+        const viteCli = join(
+          target.webAppDir,
+          "node_modules",
+          "vite",
+          "bin",
+          "vite.js",
         );
+        if (!existsSync(viteCli)) {
+          throw new Error(
+            `Scenario '${name}' references development browser webAppDir '${target.webAppDir}', but its Vite CLI is missing. Run 'npm run sample-fullstack:build' (or the fixture's documented install prehook) first.`,
+          );
+        }
       }
     } else if (target.kind === "node") {
       if (!existsSync(target.script)) {

@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated: 2026-07-23**
+**Last updated: 2026-07-24**
 
 How `lynceus` is put together. For *why* decisions were made the way they were, see [design-notes.md](./design-notes.md) — especially its "What the implementation discovered" section. For test-pyramid depth + 11 critical gotchas, see [test-eval-plan.md](./test-eval-plan.md).
 
@@ -204,7 +204,7 @@ flowchart BT
     L1["L1 — Unit<br/>src/**/*.test.ts<br/>pure data · ~ms · npm test"]
     L2["L2 — Contract<br/>test/tools/*.test.ts vs test/fake-cdp.ts<br/>59 tools · no real browser · npm test"]
     L3["L3 — E2E<br/>test/e2e/*.test.ts vs real Chromium + real Node --inspect<br/>21 specs (12 browser + 7 Node + 1 dual-session + 1 harness) · seconds · npm run test:e2e"]
-    L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter + Scenario.target seams<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>14 browser + 4 Node + 1 dual scenario<br/>deterministic trace oracles · npm run eval"]
+    L4["L4 — Agent evals<br/>evals/scenarios/* behind VendorAdapter + Scenario.target seams<br/>(Anthropic, OpenAI, Vertex, DeepSeek, Moonshot + LM Studio reference)<br/>16 browser + 4 Node + 1 dual scenario<br/>deterministic dual-axis trace oracles · npm run eval"]
     L1 --> L2 --> L3 --> L4
 ```
 
