@@ -139,7 +139,7 @@ in [examples/sample-fullstack-app/DEMO.md](examples/sample-fullstack-app/DEMO.md
 
 ## What it gives an agent
 
-Across 56 tools ([full catalog](./src/tools/README.md)):
+Across 59 tools ([full catalog](./src/tools/README.md)):
 
 - **Browser and Node launch/attach modes** — `launch_chrome` / `attach_chrome` for a browser target; `launch_node` / `attach_node` for a Node.js process under `--inspect` / `--inspect-brk`. The Runtime + Debugger surface (breakpoints, stepping, scopes, evaluate, console) is shared across both; browser-only tools (`navigate`, DOM, network, …) return `unsupported_target` in Node sessions.
 - **Concurrent frontend + backend sessions** — one browser and one Node target may be live together. Launch/attach returns monotonic `browser_N` / `node_N` IDs, `list_sessions` exposes both lanes, and ordinary tools accept `session` for explicit routing. Omission stays convenient with one live target and returns `ambiguous_session` with two.
@@ -152,6 +152,7 @@ Across 56 tools ([full catalog](./src/tools/README.md)):
 - **Form driving** — `fill`, `check` / `uncheck`, `select_option`, plus `suggest_locator` to get a robust semantic locator for an element.
 - **Session portability** — `export_storage_state` / `load_storage_state` carry a logged-in session (cookies + localStorage) across runs; `get_cookies` / `set_cookies` read and set cookies directly (`get_cookies` redacts likely-auth / HttpOnly values for safe logging).
 - **TS source + source-map diagnostics** — `get_source` (original TypeScript by file, the coordinates `set_breakpoint` uses), `list_scripts`, `resolve_source_position`, `get_script_source` (compiled JS).
+- **React component inspection** — opt in with `attach_react_devtools`, then use `get_react_tree` for a bounded current snapshot, `find_react_component` for deterministic display-name lookup, and `inspect_react_component` for live dehydrated props/state/hooks/context plus best-effort mapped TypeScript source. V1 reads the main-frame tree only; production builds warn but still return available data.
 
 Auto-attaches to iframes and workers via `Target.setAutoAttach({ flatten: true })`.
 

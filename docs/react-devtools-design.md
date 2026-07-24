@@ -1,5 +1,13 @@
 # React DevTools integration — design & spike findings (LEO-209)
 
+> **Implementation status (2026-07-23).** RDT-1 / LEO-359 is implemented by the
+> bridge lifecycle in `src/framework/react.ts`; RDT-2 / LEO-360 is implemented by the
+> v7 decoder/materialized store (`react-store.ts`), live inspection correlator
+> (`react-inspection.ts`), source resolver (`react-source.ts`), and the
+> `get_react_tree` / `find_react_component` / `inspect_react_component` tools. The
+> implementation follows the reconciled current-snapshot contract in §6.5 #10 while
+> preserving this document's empirical spike record.
+
 > Living design doc for the **LEO-209** spike: embedding `react-devtools-core` behind a `FrameworkAdapter` seam in lynceus (Depth 2). It is built up incrementally across the sub-spikes S0–S6; **S6 (LEO-217) is the synthesis pass** that folds these findings into the final layer design and the reshaped LEO-9X.2–.7 proposals. Companion to [`docs/design-notes.md`](./design-notes.md) (v1, browser-only) and [`docs/node-session-design.md`](./node-session-design.md) (the Node extension).
 >
 > The architecture-level decisions locked in LEO-209 — **Depth 2** (embed `react-devtools-core`), the **`FrameworkAdapter` seam** (`src/framework/adapter.ts`; the stateless React-only resolver landed in RDT-1 PR 1a, with bridge lifecycle deferred to PR 1b), and the **in-band CDP transport** (`Runtime.addBinding({name:"__lynceusReact__"})` + `Page.addScriptToEvaluateOnNewDocument`) — are **inputs** here, not re-litigated. This doc records what the surveys/spikes discover *about* those decisions.
@@ -401,6 +409,11 @@ is a flat `Array<number>`:
 ```
 [ rendererID, rootID, stringTableSize, …string table…, …opcodes… ]
 ```
+
+`rootID` is normally the positive commit root. The v7 Fiber renderer uses `-1` for
+renderer-wide batches flushed outside a root commit, notably bulk error/warning
+updates; a decoder must accept that sentinel while still requiring a concrete root
+for root/component ADD and `REMOVE_ROOT`.
 
 **String table** — `stringTableSize` is the number of **ints** the table occupies (not the
 string count); those ints encode consecutive length-prefixed strings, `[len, codePoint ×

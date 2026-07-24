@@ -19,13 +19,29 @@ import {
 import { ToolError } from "../util/errors.js";
 import { log } from "../util/log.js";
 import {
+  isRecord,
+  normalizeDehydratedValue,
+  ReactInspectionCoordinator,
+  type ReactInspectionPath,
+  type ReactInspectionReply,
+} from "./react-inspection.js";
+import { resolveReactSource } from "./react-source.js";
+import {
+  ReactComponentStore,
+  reactElementTypeName,
+  toReactRendererSnapshot,
+  type ReactRendererMetadata,
+} from "./react-store.js";
+import {
   getReactBackendSource,
   REACT_DEVTOOLS_CORE_VERSION,
 } from "./react-backend.js";
 
 export const REACT_BINDING_NAME = "__lynceusReact__" as const;
 export const REACT_BRIDGE_SENTINEL_EVENT = "__lynceus_bridge_attached__";
+export const REACT_RENDERER_METADATA_EVENT = "__lynceus_renderer_metadata__";
 const DEFAULT_ATTACH_TIMEOUT_MS = 10_000;
+const DEFAULT_INSPECTION_TIMEOUT_MS = 5_000;
 
 interface BindingEnvelope {
   event: string;
@@ -95,6 +111,8 @@ export async function attachReactDevTools(
     operationsSeen: false,
     readinessArmed: false,
     minimumAcceptedDocumentGeneration: 0,
+    tree: new ReactComponentStore(0),
+    inspections: new ReactInspectionCoordinator(),
     bindingInstallations: new Set(),
     pendingBindingInstallations: new Map(),
     resolveReady,
@@ -202,6 +220,9 @@ function cleanupReactBridge(s: Session, bridge: ReactBridgeState): Promise<void>
   bridge.status = "detaching";
   bridge.cancelled = true;
   bridge.resolveCancellation();
+  bridge.inspections.reset(
+    "React DevTools was detached while component inspection was in flight.",
+  );
 
   const client = s.client;
   if (client && bridge.eventHandler) {
@@ -307,8 +328,28 @@ function handleReactBindingCalled(
 
   if (message.event === REACT_BRIDGE_SENTINEL_EVENT) {
     bridge.sentinelSeen = true;
+  } else if (message.event === REACT_RENDERER_METADATA_EVENT) {
+    try {
+      const metadata = parseRendererMetadata(message.payload);
+      bridge.tree.updateRendererMetadata(metadata);
+      const unsupported = bridge.tree.unsupportedVersionMessage();
+      if (unsupported) markBridgeFailure(bridge, "unsupported", unsupported);
+    } catch (error) {
+      markBridgeFailure(
+        bridge,
+        "protocol",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  } else if (message.event === "unsupportedRendererVersion") {
+    markBridgeFailure(
+      bridge,
+      "unsupported",
+      "The attached renderer does not expose a React Fiber interface compatible with react-devtools-core@7.0.1. React read inspection supports React 16.8–19.",
+    );
   } else if (message.event === "operations") {
-    bridge.operationsSeen = true;
+    // Buffer first so the exact payload that trips the decoder remains
+    // available for diagnostics even though the materialized tree rejects it.
     s.reactEvents.push({
       ts: Date.now(),
       generation: bridge.documentGeneration,
@@ -316,6 +357,21 @@ function handleReactBindingCalled(
       payload: message.payload,
       executionContextId: params.executionContextId,
     });
+    try {
+      bridge.tree.apply(message.payload, bridge.documentGeneration);
+      bridge.mainExecutionContextId = params.executionContextId;
+      bridge.operationsSeen = true;
+    } catch (error) {
+      markBridgeFailure(
+        bridge,
+        "protocol",
+        `Could not decode React operations: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  } else if (message.event === "inspectedElement") {
+    if (!bridge.inspections.handle(message.payload)) {
+      log.warn("ignored unmatched React inspectedElement reply");
+    }
   }
 
   if (bridge.sentinelSeen && bridge.operationsSeen) bridge.resolveReady();
@@ -379,6 +435,12 @@ async function waitForReady(bridge: ReactBridgeState, timeoutMs: number): Promis
         }, timeoutMs);
       }),
     ]);
+    if (bridge.unsupportedVersion) {
+      throw new ToolError("unsupported_react_version", bridge.unsupportedVersion);
+    }
+    if (bridge.protocolError) {
+      throw new ToolError("react_protocol_error", bridge.protocolError);
+    }
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -399,11 +461,13 @@ export function buildReactBootstrap(generation: number): string {
   const generation = ${generation};
   const bindingName = ${JSON.stringify(REACT_BINDING_NAME)};
   const sentinelEvent = ${JSON.stringify(REACT_BRIDGE_SENTINEL_EVENT)};
+  const rendererMetadataEvent = ${JSON.stringify(REACT_RENDERER_METADATA_EVENT)};
   target.__LYNCEUS_BRIDGE_BOOTSTRAP__ = true;
   let backendListener = null;
   let unsubscribe = null;
   let sequence = 0;
   let backendValue = target.ReactDevToolsBackend;
+  const forwardedRendererMetadata = new Set();
 
   const forward = (event, payload) => {
     const binding = target[bindingName];
@@ -417,6 +481,25 @@ export function buildReactBootstrap(generation: number): string {
     }
     unsubscribe = null;
     backendListener = null;
+  };
+
+  const forwardRenderer = payload => {
+    const rendererID = Array.isArray(payload) ? payload[0] : null;
+    if (!Number.isInteger(rendererID) || forwardedRendererMetadata.has(rendererID)) return;
+    const renderer = target.__REACT_DEVTOOLS_GLOBAL_HOOK__?.renderers?.get?.(rendererID);
+    if (!renderer) return;
+    forwardedRendererMetadata.add(rendererID);
+    forward(rendererMetadataEvent, {
+      rendererId: rendererID,
+      bundleType: typeof renderer.bundleType === "number" ? renderer.bundleType : null,
+      version: typeof renderer.version === "string" ? renderer.version : null,
+      rendererPackageName:
+        typeof renderer.rendererPackageName === "string" ? renderer.rendererPackageName : null,
+      supportsFiber:
+        typeof renderer.getCurrentComponentInfo === "function" ||
+        typeof renderer.findFiberByHostInstance === "function" ||
+        renderer.currentDispatcherRef != null,
+    });
   };
 
   const detach = expectedGeneration => {
@@ -455,7 +538,10 @@ export function buildReactBootstrap(generation: number): string {
       onUnsubscribe(listener) {
         if (backendListener === listener) backendListener = null;
       },
-      onMessage(event, payload) { forward(event, payload); },
+      onMessage(event, payload) {
+        if (event === "operations") forwardRenderer(payload);
+        forward(event, payload);
+      },
     });
     unsubscribe = typeof maybeUnsubscribe === "function" ? maybeUnsubscribe : null;
     target.__LYNCEUS_REACT_ATTACHED__ = generation;
@@ -483,4 +569,235 @@ export function buildReactBootstrap(generation: number): string {
   if (backendValue) connect(backendValue);
 })();
 //# sourceURL=lynceus://react-devtools/bootstrap.js`;
+}
+
+function markBridgeFailure(
+  bridge: ReactBridgeState,
+  kind: "protocol" | "unsupported",
+  message: string,
+): void {
+  const failureMessage =
+    kind === "protocol"
+      ? `${message} Detach and reattach React DevTools to resynchronize the component tree.`
+      : message;
+  if (kind === "protocol") bridge.protocolError ??= failureMessage;
+  else bridge.unsupportedVersion ??= failureMessage;
+  bridge.inspections.reset(failureMessage);
+  // Resolve rather than reject: this signal may be delivered synchronously
+  // during backend evaluation, before performAttach awaits readyPromise.
+  // waitForReady turns the recorded failure into the structured ToolError.
+  bridge.resolveReady();
+}
+
+function parseRendererMetadata(payload: unknown): ReactRendererMetadata {
+  if (!isRecord(payload) || !Number.isSafeInteger(payload.rendererId)) {
+    throw new ToolError("react_protocol_error", "React renderer metadata is malformed.");
+  }
+  const rendererId = payload.rendererId as number;
+  if (rendererId <= 0) {
+    throw new ToolError("react_protocol_error", "React renderer id must be positive.");
+  }
+  const bundleType = payload.bundleType;
+  const version = payload.version;
+  const rendererPackageName = payload.rendererPackageName;
+  const supportsFiber = payload.supportsFiber;
+  if (
+    (bundleType !== null && !Number.isSafeInteger(bundleType)) ||
+    (version !== null && typeof version !== "string") ||
+    (rendererPackageName !== null && typeof rendererPackageName !== "string") ||
+    (supportsFiber !== null && typeof supportsFiber !== "boolean")
+  ) {
+    throw new ToolError("react_protocol_error", "React renderer metadata fields are malformed.");
+  }
+  return {
+    rendererId,
+    bundleType: bundleType as number | null,
+    version: version as string | null,
+    rendererPackageName: rendererPackageName as string | null,
+    supportsFiber: supportsFiber as boolean | null,
+  };
+}
+
+export interface InspectReactComponentOptions {
+  componentId: number;
+  rendererId?: number;
+  path?: ReactInspectionPath;
+  timeoutMs?: number;
+}
+
+export async function inspectReactComponent(
+  s: Session,
+  bridge: ReactBridgeState,
+  options: InspectReactComponentOptions,
+): Promise<Record<string, unknown>> {
+  const renderers = bridge.tree.renderersFor(options.componentId);
+  const rendererId = options.rendererId ?? (renderers.length === 1 ? renderers[0] : undefined);
+  if (rendererId === undefined) {
+    if (renderers.length === 0) {
+      throw new ToolError(
+        "react_component_not_found",
+        `No component with id ${options.componentId} exists in React tree generation ${bridge.documentGeneration}. Call find_react_component or get_react_tree to refresh ids.`,
+      );
+    }
+    throw new ToolError(
+      "ambiguous_react_component",
+      `Component id ${options.componentId} exists in renderers ${renderers.join(", ")}. Pass renderer_id to select one.`,
+    );
+  }
+  const record = bridge.tree.get(options.componentId, rendererId);
+  if (!record) {
+    throw new ToolError(
+      "react_component_not_found",
+      `No component ${rendererId}:${options.componentId} exists in React tree generation ${bridge.documentGeneration}. Call find_react_component or get_react_tree to refresh ids.`,
+    );
+  }
+  const client = s.client;
+  if (!client || bridge.mainExecutionContextId === undefined) {
+    throw new ToolError(
+      "no_react_bridge",
+      "The React bridge has no current main-frame execution context. Reattach React DevTools.",
+    );
+  }
+  const timeoutMs = options.timeoutMs ?? DEFAULT_INSPECTION_TIMEOUT_MS;
+  const request = async (
+    path: ReactInspectionPath | null,
+    forceFullData: boolean,
+  ): Promise<ReactInspectionReply> =>
+    await bridge.inspections.request(
+      {
+        rendererId,
+        componentId: options.componentId,
+        path,
+        forceFullData,
+        timeoutMs,
+      },
+      async (requestId) => {
+        const payload = {
+          forceFullData,
+          id: options.componentId,
+          path,
+          rendererID: rendererId,
+          requestID: requestId,
+        };
+        const result = await client.Runtime.evaluate({
+          expression: `(() => { const dispatch = globalThis.__lynceusReactDispatch__; if (typeof dispatch !== "function") throw new Error("React bridge dispatcher is unavailable"); dispatch("inspectElement", ${JSON.stringify(payload)}); return true; })()\n//# sourceURL=lynceus://react-devtools/inspect.js`,
+          contextId: bridge.mainExecutionContextId,
+          returnByValue: true,
+        });
+        if (result.exceptionDetails) {
+          throw new ToolError(
+            "react_inspection_failed",
+            result.exceptionDetails.exception?.description ??
+              result.exceptionDetails.text ??
+              "React inspectElement dispatch failed in the page.",
+          );
+        }
+      },
+    );
+
+  let baseReply = await request(
+    null,
+    !bridge.inspections.hasCached(rendererId, options.componentId),
+  );
+  const base = unwrapInspectionReply(baseReply, rendererId, options.componentId);
+  let hydratedPath: Record<string, unknown> | null = null;
+  if (options.path) {
+    const hydrationReply = await request(options.path, false);
+    if (hydrationReply.kind === "hydrated-path") {
+      hydratedPath = {
+        path: hydrationReply.path,
+        value: normalizeDehydratedValue(hydrationReply.value),
+      };
+    } else {
+      // A render can race the path request and legitimately produce a fresh
+      // full-data reply. Prefer those newer values; the backend has already
+      // recorded the requested path for the dehydration pass.
+      baseReply = hydrationReply;
+      Object.assign(base, unwrapInspectionReply(baseReply, rendererId, options.componentId));
+    }
+  }
+
+  const raw = base.value;
+  const rendererPackageName =
+    typeof raw.rendererPackageName === "string" ? raw.rendererPackageName : null;
+  const rendererVersion = typeof raw.rendererVersion === "string" ? raw.rendererVersion : null;
+  const existingMetadata = bridge.tree.getRendererMetadata(rendererId);
+  if (rendererPackageName !== null || rendererVersion !== null) {
+    bridge.tree.updateRendererMetadata({
+      rendererId,
+      bundleType: existingMetadata?.bundleType ?? null,
+      rendererPackageName: rendererPackageName ?? existingMetadata?.rendererPackageName ?? null,
+      version: rendererVersion ?? existingMetadata?.version ?? null,
+      supportsFiber: existingMetadata?.supportsFiber ?? null,
+    });
+  }
+  const source = await resolveReactSource(
+    s.scripts,
+    raw.source,
+    bridge.mainExecutionContextId,
+    null,
+  );
+  const rendererMetadata = bridge.tree.getRendererMetadata(rendererId);
+  return {
+    generation: bridge.documentGeneration,
+    bridge_generation: bridge.generation,
+    document_generation: bridge.documentGeneration,
+    response_type: baseReply.kind,
+    component_id: options.componentId,
+    renderer_id: rendererId,
+    root_id: record.rootId,
+    display_name: record.displayName,
+    type: reactElementTypeName(record.type),
+    key: raw.key ?? record.key,
+    // react-devtools-core@7 cleans these categories independently from an
+    // empty path. Prefix their relative metadata so callers can round-trip a
+    // returned cleaned_paths entry directly as the next inspect path.
+    props: normalizeDehydratedValue(raw.props, ["props"]),
+    state: normalizeDehydratedValue(raw.state, ["state"]),
+    hooks: normalizeDehydratedValue(raw.hooks, ["hooks"]),
+    context: normalizeDehydratedValue(raw.context, ["context"]),
+    suspended_by: normalizeDehydratedValue(raw.suspendedBy, ["suspendedBy"]),
+    component_errors: Array.isArray(raw.errors) ? raw.errors : [],
+    component_warnings: Array.isArray(raw.warnings) ? raw.warnings : [],
+    capabilities: {
+      can_edit_hooks: raw.canEditHooks === true,
+      can_edit_function_props: raw.canEditFunctionProps === true,
+      can_toggle_error: raw.canToggleError === true,
+      can_toggle_suspense: raw.canToggleSuspense === true,
+    },
+    is_errored: raw.isErrored === true,
+    is_suspended: typeof raw.isSuspended === "boolean" ? raw.isSuspended : null,
+    has_legacy_context: raw.hasLegacyContext === true,
+    renderer: rendererMetadata ? toReactRendererSnapshot(rendererMetadata) : null,
+    ...source,
+    hydrated_path: hydratedPath,
+    warnings: bridge.tree.readWarnings(),
+  };
+}
+
+function unwrapInspectionReply(
+  reply: ReactInspectionReply,
+  rendererId: number,
+  componentId: number,
+): { value: Record<string, unknown> } {
+  switch (reply.kind) {
+    case "full-data":
+    case "no-change":
+      return { value: reply.value };
+    case "not-found":
+      throw new ToolError(
+        "react_component_not_found",
+        `React renderer ${rendererId} no longer contains component ${componentId}. Refresh the tree and retry with a current id.`,
+      );
+    case "error":
+      throw new ToolError(
+        "react_inspection_failed",
+        `React DevTools could not inspect ${rendererId}:${componentId} (${reply.errorType}): ${reply.message}${reply.stack ? `\n${reply.stack}` : ""}`,
+      );
+    case "hydrated-path":
+      throw new ToolError(
+        "react_protocol_error",
+        "React DevTools returned a hydrated-path response for a full component request.",
+      );
+  }
 }

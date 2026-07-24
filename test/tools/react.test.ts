@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { SourceMapGenerator } from "@jridgewell/source-map";
 import { registerReactTools } from "../../src/tools/react.js";
 import { registry, requireReactBridge } from "../../src/session/state.js";
 import {
   REACT_BINDING_NAME,
   REACT_BRIDGE_SENTINEL_EVENT,
+  REACT_RENDERER_METADATA_EVENT,
 } from "../../src/framework/react.js";
 import { setupAdditionalSession, setupSession, autoReset } from "../setup.js";
 import {
@@ -18,7 +20,28 @@ autoReset();
 
 const tools = captureTools(registerReactTools);
 const attach = tools.get("attach_react_devtools")!;
+const getTree = tools.get("get_react_tree")!;
+const findComponent = tools.get("find_react_component")!;
+const inspectComponent = tools.get("inspect_react_component")!;
 const detach = tools.get("detach_react_devtools")!;
+
+// Canned v7 payload shaped from the real S3 spike capture; operand order is
+// pinned in docs/react-devtools-design.md §3.9. String ids are App,
+// InspectorWidget, Row, a, b. Host nodes are absent by backend design.
+const MATERIALIZED_TREE_OPERATIONS = [
+  1, 1, 28,
+  3, 65, 112, 112,
+  15, 73, 110, 115, 112, 101, 99, 116, 111, 114, 87, 105, 100, 103, 101, 116,
+  3, 82, 111, 119,
+  1, 97,
+  1, 98,
+  1, 1, 11, 0, 0, 1, 1,
+  1, 2, 5, 1, 0, 1, 0, 0,
+  1, 3, 5, 2, 2, 2, 0, 0,
+  1, 4, 5, 2, 2, 3, 4, 0,
+  1, 5, 5, 2, 2, 3, 5, 0,
+  3, 2, 3, 3, 4, 5,
+];
 
 function seedMainDocument(session: Session): void {
   session.noteMainFrame("main-frame", "loader-before-attach");
@@ -35,6 +58,141 @@ function envelope(
   payload: unknown,
 ): string {
   return JSON.stringify({ event, payload, generation, sequence: 1 });
+}
+
+function fireBridgeEvent(
+  fake: FakeCdp,
+  session: Session,
+  event: string,
+  payload: unknown,
+): void {
+  fake.fireBindingCalled({
+    name: REACT_BINDING_NAME,
+    executionContextId: 1,
+    payload: envelope(session.reactBridge!.generation, event, payload),
+  });
+}
+
+function seedMaterializedTree(
+  fake: FakeCdp,
+  session: Session,
+  bundleType = 1,
+  version = "18.3.1",
+): void {
+  fireBridgeEvent(fake, session, REACT_RENDERER_METADATA_EVENT, {
+    rendererId: 1,
+    bundleType,
+    version,
+    rendererPackageName: "react-dom",
+    supportsFiber: true,
+  });
+  fireBridgeEvent(fake, session, "operations", MATERIALIZED_TREE_OPERATIONS);
+}
+
+function inspectRequestFromExpression(expression: string): {
+  id: number;
+  rendererID: number;
+  requestID: number;
+  path: Array<string | number> | null;
+  forceFullData: boolean;
+} | null {
+  const marker = 'dispatch("inspectElement", ';
+  const start = expression.indexOf(marker);
+  if (start < 0) return null;
+  const jsonStart = start + marker.length;
+  const end = expression.indexOf("); return true;", jsonStart);
+  if (end < 0) throw new Error("Malformed inspect expression in test");
+  return JSON.parse(expression.slice(jsonStart, end));
+}
+
+function installInspectionReplies(
+  fake: FakeCdp,
+  session: Session,
+  reply: (
+    request: NonNullable<ReturnType<typeof inspectRequestFromExpression>>,
+    call: number,
+  ) => unknown,
+): void {
+  let call = 0;
+  fake.onSend("Runtime.evaluate", (params) => {
+    const request = inspectRequestFromExpression(params.expression);
+    if (!request) return;
+    call += 1;
+    fireBridgeEvent(fake, session, "inspectedElement", reply(request, call));
+  });
+}
+
+function fullInspection(requestID: number): Record<string, unknown> {
+  return {
+    id: 3,
+    responseID: requestID,
+    type: "full-data",
+    value: {
+      id: 3,
+      type: 5,
+      key: null,
+      props: {
+        data: {
+          label: "alpha",
+          settings: { inspectable: true, type: "object", preview_short: "{…}" },
+          callback: { type: "function", name: "onInspect" },
+        },
+        cleaned: [["settings"]],
+        unserializable: [["callback"]],
+      },
+      state: {
+        data: { details: { inspectable: true, type: "object", preview_short: "{…}" } },
+        cleaned: [["details"]],
+        unserializable: [],
+      },
+      hooks: {
+        data: [
+          {
+            id: 0,
+            name: "State",
+            value: 2,
+            subHooks: [
+              {
+                name: "Nested",
+                value: { inspectable: true, type: "object", preview_short: "{…}" },
+              },
+            ],
+          },
+        ],
+        cleaned: [[0, "subHooks", 0, "value"]],
+        unserializable: [],
+      },
+      context: {
+        data: {
+          theme: "dark",
+          details: { inspectable: true, type: "object", preview_short: "{…}" },
+        },
+        cleaned: [["details"]],
+        unserializable: [],
+      },
+      suspendedBy: {
+        data: [
+          {
+            reason: { inspectable: true, type: "object", preview_short: "{…}" },
+          },
+        ],
+        cleaned: [[0, "reason"]],
+        unserializable: [],
+      },
+      source: ["InspectorWidget", "http://localhost/assets/app.js", 10, 20],
+      rendererPackageName: "react-dom",
+      rendererVersion: "18.3.1",
+      errors: [],
+      warnings: [],
+      canEditHooks: true,
+      canEditFunctionProps: true,
+      canToggleError: false,
+      canToggleSuspense: false,
+      isErrored: false,
+      isSuspended: null,
+      hasLegacyContext: false,
+    },
+  };
 }
 
 function readyOnReload(
@@ -409,6 +567,357 @@ describe("React DevTools tools — attach lifecycle", () => {
   });
 });
 
+describe("React DevTools tools — materialized reads", () => {
+  it("returns no_react_bridge for every read tool before attachment", async () => {
+    const { fake, sessionId } = setupSession();
+    for (const [tool, args] of [
+      [getTree, {}],
+      [findComponent, { name: "App" }],
+      [inspectComponent, { component_id: 1 }],
+    ] as const) {
+      expect(
+        parseErrorEnvelope(await tool.handler({ session: sessionId, ...args }))?.error,
+      ).toBe("no_react_bridge");
+    }
+    expect(fake.sentCalls).toEqual([]);
+  });
+
+  it("returns bounded snapshots and deterministic capped display-name matches", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session);
+
+    const tree = parseOkEnvelope<any>(
+      await getTree.handler({
+        session: sessionId,
+        max_depth: 1,
+        max_children: 10,
+        max_nodes: 100,
+      }),
+    );
+    expect(tree).toMatchObject({
+      generation: 1,
+      total_nodes: 5,
+      returned_nodes: 2,
+      truncated: true,
+      truncation_reasons: ["max_depth"],
+      warnings: [],
+      roots: [
+        {
+          component_id: 1,
+          renderer_id: 1,
+          type: "root",
+          path: "root[1:1]",
+          children: [
+            {
+              component_id: 2,
+              display_name: "App",
+              path: "root[1:1] > App[1:2]",
+              truncated_children: 3,
+            },
+          ],
+        },
+      ],
+    });
+
+    const found = parseOkEnvelope<any>(
+      await findComponent.handler({
+        session: sessionId,
+        name: "row",
+        exact: true,
+        max_results: 1,
+      }),
+    );
+    expect(found).toMatchObject({
+      query: "row",
+      total_matches: 2,
+      returned_matches: 1,
+      truncated: true,
+      matches: [
+        {
+          component_id: 4,
+          renderer_id: 1,
+          display_name: "Row",
+          path: "root[1:1] > App[1:2] > Row[1:4]",
+        },
+      ],
+    });
+  });
+
+  it("retains tree state for bfcache and resets it for a new loader generation", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session);
+    const bridge = requireReactBridge(session);
+    expect(bridge.tree.size()).toBe(5);
+
+    session.noteMainFrame("main-frame", "loader-after-reload");
+    expect(bridge.tree.size()).toBe(5);
+    expect(parseOkEnvelope<any>(await getTree.handler({ session: sessionId })).total_nodes).toBe(5);
+
+    session.noteMainFrame("main-frame", "next-loader");
+    expect(bridge.tree.size()).toBe(0);
+    expect(parseErrorEnvelope(await getTree.handler({ session: sessionId }))?.error).toBe(
+      "no_react_bridge",
+    );
+
+    session.clearExecutionContexts(undefined);
+    session.recordExecutionContext(undefined, {
+      id: 1,
+      frameId: "main-frame",
+      isDefault: true,
+    });
+    fireBridgeEvent(fake, session, REACT_BRIDGE_SENTINEL_EVENT, {});
+    seedMaterializedTree(fake, session);
+    const next = parseOkEnvelope<any>(await getTree.handler({ session: sessionId }));
+    expect(next).toMatchObject({ generation: 2, total_nodes: 5 });
+  });
+
+  it("warns but continues for production and keeps the version guard dormant for 16.8–19", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session, 0, "16.8.0");
+
+    const tree = parseOkEnvelope<any>(await getTree.handler({ session: sessionId }));
+    expect(tree.total_nodes).toBe(5);
+    expect(tree.warnings).toEqual([
+      expect.objectContaining({
+        code: "production_build_detected",
+        renderer_id: 1,
+        renderer_version: "16.8.0",
+      }),
+    ]);
+    expect(
+      parseOkEnvelope<any>(
+        await findComponent.handler({ session: sessionId, name: "App" }),
+      ).warnings[0].code,
+    ).toBe("production_build_detected");
+
+    fireBridgeEvent(fake, session, REACT_RENDERER_METADATA_EVENT, {
+      rendererId: 1,
+      bundleType: 1,
+      version: "19.1.0",
+      rendererPackageName: "react-dom",
+      supportsFiber: true,
+    });
+    expect(parseErrorEnvelope(await getTree.handler({ session: sessionId }))).toBeNull();
+  });
+
+  it("rejects the dormant lower-version guard and malformed operations without serving stale state", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session);
+
+    const malformedPayload = [1, 1, 0, 99];
+    fireBridgeEvent(fake, session, "operations", malformedPayload);
+    const protocolError = parseErrorEnvelope(
+      await getTree.handler({ session: sessionId }),
+    );
+    expect(protocolError).toMatchObject({
+      error: "react_protocol_error",
+    });
+    expect(protocolError?.message).toContain("Detach and reattach React DevTools");
+    expect(session.reactEvents.query().at(-1)?.payload).toEqual(malformedPayload);
+    expect(session.reactBridge?.tree.size()).toBe(5);
+
+    session.noteMainFrame("main-frame", "new-document");
+    session.clearExecutionContexts(undefined);
+    session.recordExecutionContext(undefined, {
+      id: 1,
+      frameId: "main-frame",
+      isDefault: true,
+    });
+    fireBridgeEvent(fake, session, REACT_BRIDGE_SENTINEL_EVENT, {});
+    seedMaterializedTree(fake, session);
+    fireBridgeEvent(fake, session, REACT_RENDERER_METADATA_EVENT, {
+      rendererId: 1,
+      bundleType: 1,
+      version: "16.7.0",
+      rendererPackageName: "react-dom",
+      supportsFiber: true,
+    });
+    expect(parseErrorEnvelope(await getTree.handler({ session: sessionId }))).toMatchObject({
+      error: "unsupported_react_version",
+    });
+  });
+});
+
+describe("React DevTools tools — live component inspection", () => {
+  it("correlates full/no-change replies, hydrates a path, and maps source to TypeScript", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session);
+
+    const map = new SourceMapGenerator({ file: "app.js" });
+    map.addMapping({
+      generated: { line: 10, column: 19 },
+      original: { line: 42, column: 4 },
+      source: "src/InspectorWidget.tsx",
+    });
+    session.scripts.upsert({
+      scriptId: "app-script",
+      url: "http://localhost/assets/app.js",
+      startLine: 0,
+      startColumn: 0,
+      endLine: 100,
+      endColumn: 0,
+      executionContextId: 1,
+      hash: "app",
+    });
+    session.scripts.attachMap("app-script", undefined, map.toString());
+
+    installInspectionReplies(fake, session, (request) => {
+      if (request.path) {
+        return {
+          id: 3,
+          responseID: request.requestID,
+          type: "hydrated-path",
+          path: request.path,
+          value: {
+            data: { fontScale: 1 },
+            cleaned: [],
+            unserializable: [],
+          },
+        };
+      }
+      if (!request.forceFullData) {
+        return { id: 3, responseID: request.requestID, type: "no-change" };
+      }
+      return fullInspection(request.requestID);
+    });
+
+    const inspected = parseOkEnvelope<any>(
+      await inspectComponent.handler({
+        session: sessionId,
+        component_id: 3,
+        renderer_id: 1,
+        path: ["props", "settings"],
+      }),
+    );
+    expect(inspected).toMatchObject({
+      generation: 1,
+      response_type: "full-data",
+      component_id: 3,
+      renderer_id: 1,
+      display_name: "InspectorWidget",
+      props: {
+        data: { label: "alpha" },
+        cleaned_paths: [["props", "settings"]],
+        unserializable_paths: [["props", "callback"]],
+      },
+      state: { cleaned_paths: [["state", "details"]] },
+      hooks: {
+        data: [{ name: "State", value: 2 }],
+        cleaned_paths: [["hooks", 0, "subHooks", 0, "value"]],
+      },
+      context: {
+        data: { theme: "dark" },
+        cleaned_paths: [["context", "details"]],
+      },
+      suspended_by: {
+        cleaned_paths: [["suspendedBy", 0, "reason"]],
+      },
+      hydrated_path: {
+        path: ["props", "settings"],
+        value: { data: { fontScale: 1 }, cleaned_paths: [] },
+      },
+      source: {
+        file: "src/InspectorWidget.tsx",
+        line: 42,
+        column: 4,
+        generated: { script_id: "app-script", session_id: null },
+      },
+      source_note: null,
+      warnings: [],
+    });
+    expect(inspected.props.data.settings).toMatchObject({ inspectable: true });
+
+    const unchanged = parseOkEnvelope<any>(
+      await inspectComponent.handler({
+        session: sessionId,
+        component_id: 3,
+        renderer_id: 1,
+      }),
+    );
+    expect(unchanged.response_type).toBe("no-change");
+    expect(unchanged.props.data.label).toBe("alpha");
+    expect(
+      fake.sentCalls
+        .filter(
+          (call) =>
+            call.method === "Runtime.evaluate" &&
+            call.params.expression.includes('dispatch("inspectElement"'),
+        )
+        .every((call) => call.params.contextId === 1),
+    ).toBe(true);
+  });
+
+  it("handles not-found and backend error responses as structured tool errors", async () => {
+    for (const replyKind of ["not-found", "error"] as const) {
+      const { fake, session, sessionId } = setupSession();
+      await attachReady(fake, session, sessionId);
+      seedMaterializedTree(fake, session);
+      installInspectionReplies(fake, session, (request) =>
+        replyKind === "not-found"
+          ? { id: 3, responseID: request.requestID, type: "not-found" }
+          : {
+              id: 3,
+              responseID: request.requestID,
+              type: "error",
+              errorType: "user",
+              message: "hook inspection exploded",
+            },
+      );
+      const error = parseErrorEnvelope(
+        await inspectComponent.handler({
+          session: sessionId,
+          component_id: 3,
+          renderer_id: 1,
+        }),
+      );
+      expect(error?.error).toBe(
+        replyKind === "not-found"
+          ? "react_component_not_found"
+          : "react_inspection_failed",
+      );
+    }
+  });
+
+  it("returns a normal null-source note for a structural component", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session);
+    installInspectionReplies(fake, session, (request) => {
+      const reply = fullInspection(request.requestID);
+      (reply.value as Record<string, unknown>).source = null;
+      return reply;
+    });
+    const inspected = parseOkEnvelope<any>(
+      await inspectComponent.handler({
+        session: sessionId,
+        component_id: 3,
+        renderer_id: 1,
+      }),
+    );
+    expect(inspected.source).toBeNull();
+    expect(inspected.source_note).toContain("normal");
+  });
+
+  it("rejects stale/ambiguous ids before dispatching inspectElement", async () => {
+    const { fake, session, sessionId } = setupSession();
+    await attachReady(fake, session, sessionId);
+    seedMaterializedTree(fake, session);
+    fake.clearSentCalls();
+
+    expect(
+      parseErrorEnvelope(
+        await inspectComponent.handler({ session: sessionId, component_id: 999 }),
+      )?.error,
+    ).toBe("react_component_not_found");
+    expect(fake.sentCalls).toEqual([]);
+  });
+});
+
 describe("React DevTools tools — detach and addressing", () => {
   it("unsubscribes, removes scripts/binding, clears events, and bumps generation", async () => {
     const { fake, session, sessionId } = setupSession();
@@ -477,12 +986,28 @@ describe("React DevTools tools — detach and addressing", () => {
       await attach.handler({ session: browser.sessionId, timeout_ms: 500 }),
     );
     expect(result.status).toBe("attached");
+
+    seedMaterializedTree(browser.fake, browser.session);
+    expect(parseErrorEnvelope(await getTree.handler({}))?.error).toBe(
+      "ambiguous_session",
+    );
+    expect(
+      parseOkEnvelope<{ total_nodes: number }>(
+        await getTree.handler({ session: browser.sessionId }),
+      ).total_nodes,
+    ).toBe(5);
   });
 
-  it("rejects both tools on a Node session before making a CDP call", async () => {
+  it("rejects all React tools on a Node session before making a CDP call", async () => {
     const { fake, sessionId } = setupSession({ kind: "node" });
-    for (const tool of [attach, detach]) {
-      const response = await tool.handler({ session: sessionId, timeout_ms: 100 });
+    for (const [tool, args] of [
+      [attach, { timeout_ms: 100 }],
+      [getTree, {}],
+      [findComponent, { name: "App" }],
+      [inspectComponent, { component_id: 1 }],
+      [detach, {}],
+    ] as const) {
+      const response = await tool.handler({ session: sessionId, ...args });
       expect(parseErrorEnvelope(response)).toMatchObject({
         error: "unsupported_target",
       });

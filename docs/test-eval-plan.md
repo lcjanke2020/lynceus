@@ -7,7 +7,7 @@ pyramid. The detailed inventories below preserve that rationale and the review r
 where a paragraph says “add” or describes the old singleton, read it as historical
 unless a current-state note supersedes it.
 
-Current state (2026-07-23): lynceus exposes **56 tools across 14 categories** to
+Current state (2026-07-23): lynceus exposes **59 tools across 14 categories** to
 browser and Node targets, with one browser + one Node session able to coexist. L1/L2
 cover pure logic and every tool contract against the typed fake CDP; L3 has 21 real
 Chromium/Inspector specs including a dual-session request flow and the Node eval-runner

@@ -1,6 +1,6 @@
 # examples/sample-fullstack-app/
 
-**Last updated: 2026-07-20**
+**Last updated: 2026-07-23**
 
 The human-facing full-stack demo app (LEO-464): a dev-build React frontend and an
 Express backend that talk to each other, with one deliberate bug planted server-side.
@@ -24,7 +24,7 @@ lockfile-pinned dependencies and emits `server/dist/` with source maps.
 
 | Path | What it is |
 |---|---|
-| `src/` | Vite + React 18.3.1 frontend (TypeScript). Components: `App` → `Header`/`CartBadge` + `ProductCard` → `CartButton`. Dev server only — there is deliberately no production build script. |
+| `src/` | Vite + React 18.3.1 frontend (TypeScript). The normal route renders `App` → `Header`/`CartBadge` + `ProductCard` → `CartButton`; `?rdt_fixture=1` renders the deterministic `ReactInspectorFixture` used by the React read-tool e2e. Dev server only — there is deliberately no production build script. |
 | `server/src/` | Express 5 backend (TypeScript, compiled by `tsc` with source maps — same disk-backed-tsc contract as `sample-node-app`). `index.ts` assembles the app; `cart.ts` owns the routes and the in-memory cart. |
 | `DEMO.md` | The rehearsed dual-session interview demo script. |
 
@@ -40,6 +40,13 @@ npm run dev    # in a second terminal: Vite dev server on http://localhost:5173
 Open http://localhost:5173 — a three-product page with a cart counter in the header.
 Click **Add to cart** and watch the counter stay at 0. That's the bug, and it's supposed
 to be there.
+
+Open `http://localhost:5173/?rdt_fixture=1` for the RDT-2 ground-truth page. It contains
+a context provider, function and class consumers, a custom state/effect hook, and a
+keyed row list. The React e2e asserts the exact initial seven-node tree, live props,
+state/hooks/context, the mapped TypeScript definition site, and the eight-node tree
+after **Add row** creates `row-3`. Keep this fixture deterministic and separate from the
+normal demo route.
 
 Knobs (all optional): `PORT` (API port; `PORT=0` picks a free port and prints it to
 stdout as `sample-fullstack-app api listening on http://127.0.0.1:<port>`),
