@@ -5,6 +5,8 @@ earlier were published to npm as [`cdp-mcp`](https://www.npmjs.com/package/cdp-m
 the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers reference
 [this repo's pull requests](https://github.com/lcjanke2020/lynceus/pulls).
 
+## [Unreleased]
+
 ## 0.5.0 — 2026-09-12
 
 - **Test integrity and release truth** (#80) — the test layer is now type-checked;
