@@ -13,6 +13,13 @@
 // (adaptive-only thinking, no `temperature`) and rate card, so the swap
 // is drop-in. Opus 4.7 and Sonnet 4.6 remain selectable via
 // EVAL_MODEL_OVERRIDE for cheap/legacy ad-hoc runs.
+//
+// **Opus 5 (2026-09-12, LEO-802):** registered as an EVAL_MODEL_OVERRIDE
+// target only — the default stays Opus 4.8 until a full-suite run
+// characterizes 5. Same Claude-5-gen request surface as Sonnet 5
+// (adaptive-only thinking, sampling params removed) and the same rate
+// card as Opus 4.7/4.8, but thinking is ON when `thinking` is omitted,
+// so it joins MODELS_THINKING_ON_WHEN_OMITTED below.
 
 import type { ReasoningConfig } from "./types.js";
 import type { Vendor } from "./vendor.js";
@@ -21,7 +28,13 @@ import type { Vendor } from "./vendor.js";
  *  to PRICING_CATALOG below + this union. Forces "we have pricing for
  *  this" at the type level — prevents "ran Opus, got Sonnet-priced cost
  *  numbers" silent failures. */
-export const SUPPORTED_MODELS = ["claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5"] as const;
+export const SUPPORTED_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-sonnet-5",
+  "claude-opus-5",
+] as const;
 export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
 
 const DEFAULT_MODEL_ID: SupportedModel = "claude-opus-4-8";
@@ -70,6 +83,10 @@ const MODELS_WITHOUT_TEMPERATURE: ReadonlySet<SupportedModel> = new Set<Supporte
   // compiler enforces, so it must be listed explicitly or the harness would
   // send `temperature` and 400.
   "claude-sonnet-5",
+  // Opus 5 (Claude 5 gen) keeps the same request surface: `temperature`/
+  // `top_p`/`top_k` are removed and 400 on any value. Per the Opus 5 model
+  // card (checked 2026-09-12); eval-only registration for LEO-802.
+  "claude-opus-5",
 ]);
 
 /** Whether the active model accepts the `temperature` parameter. Used
@@ -104,6 +121,9 @@ const MODEL_THINKING_STYLE: Record<SupportedModel, ThinkingStyle> = {
   // Sonnet 5 (Claude 5 gen) is adaptive-only like Opus 4.7/4.8 — manual
   // `enabled` + budget_tokens 400; effort low|medium|high|xhigh|max all valid.
   "claude-sonnet-5": "adaptive",
+  // Opus 5 (Claude 5 gen) is adaptive-only — manual `enabled` + budget_tokens
+  // 400; effort low|medium|high|xhigh|max all valid.
+  "claude-opus-5": "adaptive",
 };
 
 export const THINKING_STYLE: ThinkingStyle = MODEL_THINKING_STYLE[MODEL_ID];
@@ -121,6 +141,14 @@ export const THINKING_STYLE: ThinkingStyle = MODEL_THINKING_STYLE[MODEL_ID];
  *  explicitly. */
 const MODELS_THINKING_ON_WHEN_OMITTED: ReadonlySet<SupportedModel> = new Set<SupportedModel>([
   "claude-sonnet-5",
+  // Opus 5 runs adaptive thinking by default when `thinking` is omitted, like
+  // Sonnet 5 and unlike Opus 4.7/4.8. An explicit disable IS accepted — but
+  // only at effort `high` or below (`xhigh`/`max` + disabled returns 400).
+  // The harness never pairs the two: the thinking-off branch of
+  // `buildAnthropicRequest` emits no `output_config`, so the request lands on
+  // the server-side default effort (`high`) and stays inside the supported
+  // window. Per the Opus 5 model card (checked 2026-09-12).
+  "claude-opus-5",
 ]);
 
 /** Whether omitting `thinking` leaves thinking ON for the active model — so a
@@ -374,6 +402,20 @@ export const PRICING_CATALOG: PricingCatalog = {
       inputCacheWrite: 3.75,
       inputCacheRead: 0.3,
       output: 15.0,
+    },
+    // Opus 5 standard rate card — input $5 / output $25 per MTok, identical to
+    // Opus 4.7/4.8; 1M context at standard pricing (no long-context premium),
+    // 5-min ephemeral cache write = 1.25× input ($6.25), cache read = 0.1×
+    // ($0.50). Identical token RATES do not imply identical token USE — record
+    // measured cost per run rather than assuming the 4.8 baseline carries over.
+    // Fast mode ($10/$50) is a separate, opt-in `speed: "fast"` surface the
+    // harness never sends, so it is deliberately not modelled here.
+    // Source: Anthropic pricing + Opus 5 model card (verified 2026-09-12).
+    "claude-opus-5": {
+      input: 5.0,
+      inputCacheWrite: 6.25,
+      inputCacheRead: 0.5,
+      output: 25.0,
     },
   },
   openai: {
