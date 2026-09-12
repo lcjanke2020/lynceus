@@ -598,6 +598,21 @@ describe("PRICING_CATALOG", () => {
     );
   });
 
+  it("Opus 5 ships on the same standard rate card as Opus 4.7/4.8", () => {
+    // Opus 5 standard pricing (input $5 / output $25, cache 1.25×/0.1×) matches
+    // Opus 4.7 and 4.8. Pin equality so a typo in any of the three rows is
+    // caught. Identical RATES are not a cost prediction — Opus 5 may consume a
+    // different number of tokens for the same work (LEO-802 records measured
+    // cost). Fast mode ($10/$50) is a separate opt-in surface the harness never
+    // requests, so it is deliberately absent from the catalog.
+    expect(PRICING_CATALOG.anthropic["claude-opus-5"]).toEqual(
+      PRICING_CATALOG.anthropic["claude-opus-4-8"],
+    );
+    expect(PRICING_CATALOG.anthropic["claude-opus-5"]).toEqual(
+      PRICING_CATALOG.anthropic["claude-opus-4-7"],
+    );
+  });
+
   it("cache-write is 1.25× input and cache-read is 0.1× input per Anthropic's documented multipliers", () => {
     for (const model of SUPPORTED_MODELS) {
       const p = PRICING_CATALOG.anthropic[model]!;
@@ -653,6 +668,43 @@ describe("SUPPORTS_TEMPERATURE", () => {
     const mod = await import("./model.js");
     expect(mod.SUPPORTS_TEMPERATURE).toBe(false);
     expect(mod.THINKING_STYLE).toBe("adaptive");
+  });
+
+  it("is false for Opus 5 (Claude 5 gen — sampling params removed, adaptive-only)", async () => {
+    // Opus 5 shares the Opus 4.7/4.8 + Sonnet 5 request surface: `temperature`/
+    // `top_p`/`top_k` 400, adaptive thinking only (manual `enabled` +
+    // budget_tokens 400). Registered eval-only for LEO-802.
+    vi.resetModules();
+    process.env.EVAL_MODEL_OVERRIDE = "claude-opus-5";
+    const mod = await import("./model.js");
+    expect(mod.SUPPORTS_TEMPERATURE).toBe(false);
+    expect(mod.THINKING_STYLE).toBe("adaptive");
+  });
+});
+
+describe("THINKING_ON_WHEN_OMITTED", () => {
+  const original = process.env.EVAL_MODEL_OVERRIDE;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.EVAL_MODEL_OVERRIDE;
+    else process.env.EVAL_MODEL_OVERRIDE = original;
+    vi.resetModules();
+  });
+
+  // The Claude 5 generation runs adaptive thinking when `thinking` is omitted,
+  // so a reasoning-off run must send an explicit `{ type: "disabled" }`. Opus
+  // 4.7/4.8 and Sonnet 4.6 are the opposite — omission already means off.
+  it.each([
+    ["claude-opus-5", true],
+    ["claude-sonnet-5", true],
+    ["claude-opus-4-8", false],
+    ["claude-opus-4-7", false],
+    ["claude-sonnet-4-6", false],
+  ] as const)("is %s → %s", async (model, expected) => {
+    vi.resetModules();
+    process.env.EVAL_MODEL_OVERRIDE = model;
+    const mod = await import("./model.js");
+    expect(mod.THINKING_ON_WHEN_OMITTED).toBe(expected);
   });
 });
 

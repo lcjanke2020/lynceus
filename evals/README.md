@@ -200,6 +200,15 @@ EVAL_MODEL_OVERRIDE=claude-sonnet-4-6 EVAL_REASONING_LEVEL=high npm run eval    
 # the Opus-4.8 default; see "Sonnet-5 characterization (LEO-402)" below.
 EVAL_MODEL_OVERRIDE=claude-sonnet-5 npm run eval                                # ~$6–9
 
+# Opus 5 (Claude 5 gen — adaptive `medium` thinking by default, sampling params
+# dropped). Same $5/$25 rate card as Opus 4.7/4.8; identical token RATES are not
+# a cost prediction, so record measured cost per run. Registered eval-only for
+# LEO-802 — the pinned default stays Opus 4.8 until a full-suite characterization
+# lands. Unlike Opus 4.7/4.8, omitting `thinking` leaves thinking ON, so a
+# reasoning-off run sends an explicit `{ type: "disabled" }` (the harness does
+# this automatically, and never pairs it with an xhigh/max effort, which 400s).
+EVAL_MODEL_OVERRIDE=claude-opus-5 EVAL_REASONING_LEVEL=medium npm run eval
+
 # Cross-vendor: OpenAI / GPT-5.5 (#50/#58 — reasoning-off → Chat
 # Completions, reasoning-on → Responses, auto-routed).
 EVAL_PROVIDER=openai OPENAI_API_KEY=… EVAL_OPENAI_MODEL=gpt-5.5 EVAL_REASONING_LEVEL=medium npm run eval:quick

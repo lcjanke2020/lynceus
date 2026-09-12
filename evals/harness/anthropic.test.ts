@@ -293,6 +293,68 @@ describe("buildAnthropicRequest — adaptive-style Claude-5-gen (Sonnet 5)", () 
   });
 });
 
+describe("buildAnthropicRequest — adaptive-style Claude-5-gen (Opus 5)", () => {
+  const originalOverride = process.env.EVAL_MODEL_OVERRIDE;
+
+  beforeEach(() => {
+    process.env.EVAL_MODEL_OVERRIDE = "claude-opus-5";
+    vi.resetModules();
+  });
+  afterEach(() => {
+    if (originalOverride === undefined) delete process.env.EVAL_MODEL_OVERRIDE;
+    else process.env.EVAL_MODEL_OVERRIDE = originalOverride;
+  });
+
+  // Opus 5 runs adaptive thinking by DEFAULT when `thinking` is omitted (like
+  // Sonnet 5, unlike Opus 4.7/4.8), so "reasoning off" must be explicit or the
+  // model silently thinks at the server default. The explicit disable must NOT
+  // be paired with an `output_config.effort` of xhigh/max — Opus 5 400s on that
+  // combination — and the thinking-off branch emits no output_config at all,
+  // which this asserts. Regression guard for the LEO-802 wiring.
+  it("thinking off: emits explicit thinking:{type:'disabled'} with NO output_config (xhigh/max + disabled would 400)", async () => {
+    const { buildAnthropicRequest, RESPONSE_HEADROOM_TOKENS } = await import("./anthropic.js");
+    const req = buildAnthropicRequest({
+      system: SYSTEM,
+      messages: MESSAGES,
+      tools: TOOLS,
+    });
+    expect(req.model).toBe("claude-opus-5");
+    expect(req.temperature).toBeUndefined(); // sampling params dropped on Claude 5
+    expect(req.thinking).toEqual({ type: "disabled" });
+    expect(req.outputConfig).toBeUndefined();
+    expect(req.maxTokens).toBe(RESPONSE_HEADROOM_TOKENS);
+  });
+
+  it("thinking on: adaptive payload with display:summarized + effort tier, no temperature", async () => {
+    const { buildAnthropicRequest } = await import("./anthropic.js");
+    const req = buildAnthropicRequest({
+      system: SYSTEM,
+      messages: MESSAGES,
+      tools: TOOLS,
+      thinking: { tier: "medium", budgetTokensOverride: 8192 },
+    });
+    expect(req.temperature).toBeUndefined();
+    // budgetTokensOverride is inert on adaptive models — no budget_tokens is
+    // sent (Opus 5 400s on the manual `enabled` + budget_tokens shape).
+    expect(req.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(req.outputConfig).toEqual({ effort: "medium" });
+  });
+
+  it("thinking on: every effort tier passes through to output_config", async () => {
+    const { buildAnthropicRequest } = await import("./anthropic.js");
+    for (const tier of ["low", "medium", "high", "xhigh", "max"] as const) {
+      const req = buildAnthropicRequest({
+        system: SYSTEM,
+        messages: MESSAGES,
+        tools: TOOLS,
+        thinking: { tier },
+      });
+      expect(req.outputConfig, `tier ${tier}`).toEqual({ effort: tier });
+      expect(req.thinking, `tier ${tier}`).toEqual({ type: "adaptive", display: "summarized" });
+    }
+  });
+});
+
 describe("effectiveTokenCap", () => {
   it("returns baseline when thinking is off", async () => {
     const { effectiveTokenCap } = await import("./anthropic.js");
