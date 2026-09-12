@@ -14,7 +14,7 @@ Designed for agents running in CLIs (Claude Code, GitHub Copilot CLI) that have 
 
 **Status:** alpha. **License:** [MIT](./LICENSE). Releases are published to npm by CI via [OIDC trusted publishing](https://docs.npmjs.com/generating-provenance-statements) — no long-lived npm token exists — with a provenance attestation linking the published tarball to the exact commit and workflow run that built it.
 
-**Last updated: 2026-08-03**
+**Last updated: 2026-09-12**
 
 ## Install
 
@@ -26,8 +26,6 @@ lynceus                           # stdio MCP transport (the default clients exp
 ```
 
 The npm package ships prebuilt `dist/`, so there is no build step for runtime use. If `launch_chrome` cannot find Chrome/Chromium automatically, set `CHROME_PATH` to the browser binary.
-
-> **Published 0.4.0 vs this README:** the multi-session tools documented below (`list_sessions`, `session` routing, `get_timeline`, the full-stack walkthrough) are on `master` and **not yet released** — the published `0.4.0` ships 52 tools without them. Use a source checkout (`npm install && npm run build`) for multi-session work until `0.5.0`.
 
 ## Wire into Claude Code
 
