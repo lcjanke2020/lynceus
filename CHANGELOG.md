@@ -7,6 +7,8 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
 
 ## [Unreleased]
 
+## 0.5.0 — 2026-09-12
+
 - **Test integrity and release truth** (#80) — the test layer is now type-checked;
   `test:coverage` reports production `src/` coverage; eval rollups use strict
   majorities and reject no-data runs; eval workflow names describe their actual
@@ -42,6 +44,11 @@ the package was renamed to `lynceus` in 0.3.0 (see that entry). PR numbers refer
   subpath. Shipped separately to npm as the `cdp-mcp@0.4.0` **wrapper package**
   (2026-07-14, not part of any `lynceus` release), with all older `cdp-mcp` versions
   deprecated.
+- **`cdp-mcp@0.5.0` compatibility wrapper** targets `lynceus ^0.5.0`, bringing
+  concurrent browser + Node debugging to installs using the old package name once
+  the companion wrapper is published.
+- Security documentation clarifies filesystem access, custom Chrome paths, cookie
+  redaction, and Chromium sandbox boundaries (#81).
 - Docs quick-fix pass (#54) — broken eval-doc link removed, npm-global wire-in
   (`claude mcp add lynceus lynceus` / npx form), stale CI job text, last rename residue.
 - Per-run env knobs for the OpenAI-compatible eval adapters (#55) — output-cap override

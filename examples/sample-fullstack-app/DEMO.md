@@ -1,31 +1,31 @@
 # The dual-session cart-bug demo
 
-**Last updated: 2026-08-03** · Target wall time: **≤ 10 minutes** (script budget ~8)
+**Last updated: 2026-09-12** · Target wall time: **≤ 10 minutes** (script budget ~8)
 
 One lynceus server, two debug sessions — a browser and a Node backend — one agent
 breakpointing both sides of the same `fetch`. The story: *"the cart shows 0 items after
 add-to-cart, and the bug is on whichever side you can't grep from the other."*
 
-> **Build requirement:** this script needs the multi-session implementation now on
-> `master` (PRs #63, #67–#72). The published `lynceus@0.4.0` predates session-addressed
-> calls; until the next release, run the server from a current source checkout. See
-> **Fallback** at the bottom when pinned to 0.4.0.
+> **Version requirement:** this script needs `lynceus@0.5.0` or later for concurrent,
+> session-addressed browser and Node debugging. Keep a source checkout for the demo
+> app; the MCP server can run from npm. See **Fallback** at the bottom when pinned
+> to 0.4.0.
 
 ## One-time setup (before the interview, not during)
 
 ```sh
-# 1. lynceus itself, from current master
-cd <repo> && npm install && npm run build
+# 1. build the demo app from the repository checkout
+cd <repo>/examples/sample-fullstack-app && npm install && npm run api:build
 
-# 2. the demo app
-cd examples/sample-fullstack-app && npm install && npm run api:build
+# 2. wire the released MCP server into your client, e.g.
+claude mcp add lynceus -- npx -y lynceus@0.5.0
 
-# 3. wire the branch build into your MCP client, e.g.
-claude mcp add lynceus -- node <repo>/dist/index.js
-
-# 4. leave the frontend dev server running in a spare terminal
+# 3. leave the frontend dev server running in a spare terminal
 npm run dev        # http://localhost:5173
 ```
+
+To use a local server build instead, run `npm ci && npm run build` in `<repo>` and
+use `claude mcp add lynceus -- node <repo>/dist/index.js` for step 2.
 
 Sanity-check the symptom once in a plain browser **with the API up**: run `npm run api`
 in a throwaway terminal, open http://localhost:5173, click **Add to cart**, watch the
@@ -188,7 +188,7 @@ side by side here — different axes, deliberately different names.
 
 ## Fallback (back pocket, works on lynceus 0.4.0)
 
-If the branch build misbehaves on the day: register **two** stdio lynceus instances in
+If the dual-session setup misbehaves on the day: register **two** stdio lynceus instances in
 the MCP client (`lynceus-fe`, `lynceus-be`), one per target — no session params, same
 story, slightly clunkier narration. Zero code required.
 
